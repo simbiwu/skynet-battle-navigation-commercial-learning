@@ -64,10 +64,10 @@ Unity 2022.3 LTS 技术基线
 AI Navigation 使用：
 
 ```text
-com.unity.ai.navigation@1.1
+com.unity.ai.navigation@1.1.5
 ```
 
-具体 1.1.x 补丁版由团结引擎 Package Manager 在创建项目时解析并记录。
+课程操作时由学习者通过 Package Manager 安装，并把解析结果写入 `manifest.json` / lock file；不能自行换成其他补丁版或最新版。
 
 原因：
 

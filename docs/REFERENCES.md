@@ -30,7 +30,7 @@ Windows x64
 课程使用：
 
 ```text
-com.unity.ai.navigation@1.1
+com.unity.ai.navigation@1.1.5
 ```
 
 Unity 2022.3 官方兼容文档：
@@ -52,7 +52,7 @@ Editor / Runtime NavMesh Build
 
 不要在资料中继续假设 Unity 6 / AI Navigation 2.0.9。
 
-创建课程工程后，用团结引擎 Package Manager 确认实际解析到的 1.1.x 补丁版本，并写入项目 `Packages/manifest.json` / lock 文件。课程不依赖 1.1.x 某个补丁版的独有能力。
+由学习者通过团结引擎 Package Manager 安装 1.1.5，并确认项目 `Packages/manifest.json` / lock 文件记录一致；遇到不可解析时先记录并排查，不静默改用其他版本。
 
 Windows 命令行安装参数：
 

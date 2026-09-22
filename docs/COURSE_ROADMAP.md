@@ -1,5 +1,27 @@
 # 三课路线
 
+## 面试主线
+
+三课围绕一个适合主程/高级工程师面试深入追问的纵向案例展开：
+
+```text
+Authoring Source
+-> Versioned Server Asset
+-> Native Runtime
+-> Skynet Ownership / Yield
+-> Deterministic Battle
+-> Client Replay
+```
+
+每课都要形成四类可展示证据：
+
+```text
+代码：边界真实落地，不是只有架构图
+运行：能够 build/run/debug
+测试：正常、边界、损坏和并发路径
+讲解：能说明 WHY、取舍、限制和演进条件
+```
+
 ## Lesson 1：先学清楚地图
 
 目标只有：
@@ -54,6 +76,19 @@ clearance
 Server 加载并查询同一位置，结果一致。
 
 Unity 通过真实 TCP/Protobuf 请求发送 WorldPosition，Skynet 查询同一份 BMAP 后返回 Cell 结果。Protobuf 是运行时消息格式，BMAP 仍是离线导航资产。
+
+### 第一课面试输出
+
+```text
+为什么 Server 不加载 .unity / GameObject / NavMeshAgent；
+为什么 BMAP 不使用 Protobuf 替代；
+WorldPosition 与 GridPos 为什么不能混成长期业务坐标；
+为什么 BMapReader 必须检查 magic/version/size/CRC/endianness；
+为什么 GridMap 加载后 immutable；
+多个 Skynet Service 在不同 OS Thread 查询同一 Native Map 时怎样安全；
+为什么不让一个 MapService 成为所有高频查询的永久代理；
+如何证明 Unity、Native 和 Skynet 查询结果一致。
+```
 
 ### 为什么这一课不讲 AgentProfile / Path
 
@@ -134,6 +169,19 @@ Grid Navigation API
 
 不是 Lesson 2 开头先造抽象。
 
+### 第二课面试输出
+
+```text
+A* 为什么使用 binary heap、generation stamp 和无 per-node allocation；
+8-way 为什么禁止 corner cutting；
+clearance、slope、area cost 和 dynamic occupancy 怎样组合；
+为什么每场 Battle 拥有独立 NavigationContext；
+为什么 simulate(snapshot) 核心阶段不能 skynet.call；
+如何保证相同版本、输入和 seed 得到相同事件；
+为什么不每 Tick 重跑寻路；
+何时才有资格抽取 Navigation Backend Contract。
+```
+
 ---
 
 # Lesson 3：再学习 Polygon NavMesh
@@ -198,6 +246,18 @@ UnitState
 ```
 
 说明第二课抽象有问题。
+
+### 第三课面试输出
+
+```text
+Recast 为什么属于 Offline Build，Detour 为什么属于 Runtime Query；
+NAVSRC 与 DNAV 为什么分别版本化；
+Tile、PolyRef、Corridor、StraightPath 各自解决什么问题；
+dtNavMeshQuery 为什么不能作为跨线程 global mutable context；
+桥上/桥下和 Off-Mesh Link 为什么超出单层 Grid 表达能力；
+如何证明 BattleWorker 不因 Backend 切换而重写；
+怎样用相同条件比较 Grid 与 Detour 的耗时和内存。
+```
 
 ---
 

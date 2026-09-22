@@ -1,8 +1,24 @@
 # Project Context
 
-## 学习目标
+## 学习者与求职目标
 
-学习者已有 C++ + Lua MMO Server 经验。
+学习者已有多年 C++ / Lua / MySQL MMO Server 经验，做过技术经理或主程；目标岗位是 Skynet SLG Server 主程或高级工程师。
+
+因此课程不降低到语言语法和基础网络教学，也不要求学习者转型为 Unity 客户端工程师。Unity 只学到能够理解资产来源、亲自完成关键生产步骤、定位 Client/Server 边界问题和完成联调验收。
+
+面试训练不以“写了多少类”为标准，而以能否用真实代码和测试回答以下问题为标准：
+
+```text
+为什么这样分服务和数据 ownership？
+哪些路径会 yield，yield 前后哪些状态必须稳定？
+Native 数据如何被多个 OS Thread 安全访问？
+资产、协议和战斗版本如何绑定并拒绝不兼容输入？
+哪些结论有单元测试、集成测试、并发测试或 benchmark 证据？
+线上出错时怎样从日志、错误码和版本信息定位？
+当前方案何时适用，何时必须演进？
+```
+
+## 专题学习目标
 
 本项目补齐：
 
@@ -93,9 +109,9 @@ Off-Mesh Traversal
 
 并理解商业导航系统为何不能只看“A* 算法”。
 
-## 最终目标
+## 三课完成后的面试输出
 
-三课后，学习者能 Review：
+三课后，学习者不仅能 Review：
 
 ```text
 Grid-based Battle Navigation
@@ -105,3 +121,17 @@ Navigation Asset Pipeline
 ```
 
 并能解释不同方案的成本和适用边界。
+
+还应能完成一次 20～30 分钟的项目陈述：
+
+```text
+1. 业务问题与约束
+2. Unity -> Server 的资产生产链
+3. BMAP / NAVSRC / DNAV 的版本与校验
+4. Native Core / Lua Binding / Skynet Service 的 ownership
+5. Battle simulate no-yield 与确定性事件
+6. Grid 到 Detour 的演进理由
+7. 测试、性能条件、已知限制与下一步
+```
+
+回答时必须区分“已经通过工程证明的行为”和“未来可以做的设计”，不能用架构名词替代证据。

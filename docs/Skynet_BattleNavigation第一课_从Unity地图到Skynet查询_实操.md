@@ -75,6 +75,35 @@ Unity 专有名词首次用于操作前会解释“是什么、为什么需要�
 
 课程中的版本管理统一使用 VS Code 内置 Source Control 和 Git。此前主要使用 SVN 的学习者，先完成 [VS Code Git 实操：给长期使用 SVN 的开发者](VS_CODE_GIT_FOR_SVN.md)，尤其要理解 `Stage -> Commit -> Push` 与 SVN Commit 的区别。
 
+### 第一课的面试目标
+
+这不是一堂“会点 Unity 菜单”的课。Unity 操作只是让你亲手建立上游事实；第一课真正要形成的是一条能经受主程面试追问的 Server 资产与查询链。
+
+完成后你需要能用代码、运行日志和测试回答：
+
+```text
+1. 为什么 Server 不能读取 .unity Scene？
+2. 为什么运行消息用 Protobuf，而 BMAP 不用 Protobuf 替代？
+3. WorldPosition 和 GridPos 分别属于什么边界？
+4. 负世界坐标怎样稳定映射到 GridPos？
+5. BMapReader 为什么要显式检查长度、字节序、版本和 CRC？
+6. GridMap 为什么加载后 immutable？
+7. 多个 Skynet Service 在不同 OS Thread 查询同一地图时，安全条件是什么？
+8. 为什么不能让一个 MapService 永久代理全部高频查询？
+9. Lua C Binding 为什么应当薄，不保存业务状态？
+10. 怎样证明 Unity、C++ Native 和 Skynet 查询的是同一份地图语义？
+```
+
+本课每个阶段保留三类证据：
+
+```text
+行为证据：实际输出、日志或 Overlay
+失败证据：损坏输入、错误版本、越界或 malformed packet
+设计证据：可以说明 WHY、替代方案和适用限制
+```
+
+面试回答不要停在“用了 CRC”“用了 immutable”这种名词层面。应继续说明威胁是什么、检查发生在哪里、失败如何返回、测试怎样覆盖。
+
 ## 1. 本课要完成的行为与四个终端
 
 最终在 Unity 的 `Server Query` 窗口依次查询四个点：
@@ -4355,7 +4384,62 @@ run
 3. 给 Envelope 增加调试字段，验证旧 Server 忽略未知字段；再修改字段号，观察测试失败。
 4. 在 Linux 本机、Debug 构建、固定地图规模下执行 10000 次本地 `GridMap::QueryWorld`，记录总耗时、平均耗时、p50/p95/p99 和内存变化；再执行 1000 次 TCP 查询，分开记录网络/Protobuf 开销，并写明机器、编译类型、地图规模。
 
-## 36. 下一课的自然入口
+## 36. 第一课面试复盘
+
+### 36.1 五分钟项目讲解
+
+不用照读代码，按以下顺序讲：
+
+```text
+问题：Unity 3D 地图不能直接给 Skynet Server 使用。
+约束：Server 权威、单层 2.5D、版本可追踪、多 Service 并发读。
+生产：Scene/NavMesh -> Sampling/Validator -> BMAP/manifest。
+运行：BMapReader -> immutable GridMap -> MapRegistry -> Lua Binding -> Skynet Query。
+协议：BMAP 是离线资产；Protobuf 是 Unity/Server 运行消息。
+证据：Golden coordinate、CRC corruption、malformed frame、concurrent query。
+限制：不表达桥上下层；当前没有寻路和动态单位。
+演进：第二课需求出现 A->B 时才增加 A* 和每场战斗上下文。
+```
+
+### 36.2 面试官可能继续追问
+
+#### 为什么不让 Skynet Lua 直接解析 BMAP？
+
+回答需要覆盖：固定二进制格式校验、查询热路径、共享 immutable 数据、Lua State 隔离，以及 C Binding 仍必须返回显式错误。不要只回答“C++ 更快”。
+
+#### 多 Service 共享一个地图是否一定线程安全？
+
+不是。只有地图加载完成后不再修改、对象生命周期覆盖所有查询、查询临时状态不放在共享 global mutable 数据中，才成立。Lesson 2 的 A* scratch 和动态占位必须独立。
+
+#### 为什么不用一个 MapService 接受所有查询？
+
+低频管理和加载可以由服务协调；高频查询如果全部 `skynet.call` 到单点，会增加序列化、消息调度、yield 和瓶颈风险。immutable Native Map 允许 Worker 本地查询，但要明确模块实例、进程和线程模型。
+
+#### CRC 能不能防恶意篡改？
+
+不能。CRC 用于检测传输、构建和文件损坏，不提供密码学真实性。若部署威胁模型需要防篡改，应增加签名或可信发布链，不能夸大 CRC 能力。
+
+#### 为什么业务保存 WorldPosition，不保存 GridPos？
+
+GridPos 与当前地图实现、origin 和 cell size 绑定；WorldPosition 是更稳定的业务坐标。第三课切换 Polygon NavMesh 时，上层位置合同不应被迫迁移。
+
+#### 为什么 Protobuf 不直接存整张地图？
+
+BMAP 面向大块定长数据、校验和直接索引；Protobuf 面向兼容演进的消息。二者访问模式、失败路径和版本治理不同，不能因为都能序列化就混成一种格式。
+
+### 36.3 回答质量自检
+
+```text
+[ ] 先说当前业务行为，再说技术方案
+[ ] 能画出离线资产链和运行消息链
+[ ] 能指出至少一个失败路径和对应测试
+[ ] 能说明线程安全成立的前提，不说“只读天然安全”就结束
+[ ] 性能数字带机器、Build 类型、地图规模和并发条件
+[ ] 主动说明 2.5D 限制，不包装成万能方案
+[ ] 不提前声称已经实现 Lesson 2/3 功能
+```
+
+## 37. 下一课的自然入口
 
 第一课结束时系统能回答：给定 battle_version 对应的 map_id/map_version 和 WorldPosition，Server 能验证静态地图并返回该位置的静态网格事实。
 
