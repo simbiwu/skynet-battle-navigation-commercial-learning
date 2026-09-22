@@ -1,0 +1,26 @@
+* text=auto
+
+*.md text eol=lf
+*.txt text eol=lf
+*.cs text eol=lf
+*.cpp text eol=lf
+*.h text eol=lf
+*.hpp text eol=lf
+*.lua text eol=lf
+*.sh text eol=lf
+*.proto text eol=lf
+*.json text eol=lf
+*.cmake text eol=lf
+CMakeLists.txt text eol=lf
+
+# Unity serializes these assets as text in this project.
+*.meta text eol=lf
+*.unity text eol=lf
+*.asset text eol=lf
+
+# Navigation assets and native libraries are binary when they appear later.
+*.bmap binary
+*.dnav binary
+*.pb binary
+*.dll binary
+*.so binary

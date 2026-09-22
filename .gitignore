@@ -1,0 +1,26 @@
+# Editor / OS
+.vs/
+.vscode/*.log
+.idea/
+.DS_Store
+Thumbs.db
+
+# Local tool output
+*.log
+.downloads/
+
+# Native / CMake output
+build/
+cmake-build-*/
+*.o
+*.obj
+*.so
+*.dll
+*.pdb
+
+# Runtime output
+logs/
+tmp/
+core
+core.*
+
