@@ -1,0 +1,49 @@
+// 职责：定义 Unity 与 Skynet 之间 QueryCell 请求、响应和 Envelope 合同。
+// 边界：跨进程 Runtime Message Contract；生成 C# 类型并由 Lua descriptor 动态加载。
+// 输入/输出：WorldPosition(mm) 查询 -> Cell 静态信息或明确 ResultCode。
+// 不负责：不表达路径、动态占位或战斗状态。
+syntax = "proto3";
+
+package battle.navigation.v1;
+
+message Envelope {
+  uint32 protocol_version = 1; // 线协议兼容边界版本。
+  uint32 command = 2;          // body 的业务消息类型；QueryCell 固定为 1001。
+  uint64 request_id = 3;       // 请求/响应关联 ID；服务端原样返回。
+  bytes body = 4;              // command 对应消息的 Protobuf bytes。
+}
+
+message WorldPosition {
+  sint64 x_mm = 1; // 世界 X，毫米；负数合法，ZigZag 编码负值。
+  sint64 y_mm = 2; // 世界高度 Y，毫米；ZigZag 编码。
+  sint64 z_mm = 3; // 世界 Z，毫米；负数合法，ZigZag 编码负值。
+}
+
+message QueryCellRequest {
+  uint32 map_id = 1;         // BMAP Header 中的业务地图 ID；必须大于 0。
+  uint32 map_version = 2;    // 客户端期望查询的地图资产版本。
+  WorldPosition position = 3; // 待查询的正式业务世界坐标。
+}
+
+message QueryCellResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    MAP_NOT_FOUND = 2;
+    MAP_VERSION_MISMATCH = 3;
+    OUT_OF_BOUNDS = 4;
+    NOT_WALKABLE = 5;
+    BAD_REQUEST = 6;
+    INTERNAL_ERROR = 7;
+  }
+
+  ResultCode result = 1;     // 稳定机器结果码；客户端不得按 message 分支。
+  string message = 2;       // 面向日志和调试的诊断文字。
+  uint32 map_id = 3;        // 实际接受查询的地图 ID。
+  uint32 map_version = 4;   // 实际接受查询的地图资产版本。
+  int32 grid_x = 5;         // 调试结果：地图内 X 列下标。
+  int32 grid_z = 6;         // 调试结果：地图内 Z 行下标。
+  int32 cell_height_mm = 7; // Cell 地表世界 Y，毫米。
+  uint32 area = 8;          // 稳定 BattleArea 编码。
+  uint32 clearance = 9;     // 到静态障碍/边界的距离，单位 Cell。
+}

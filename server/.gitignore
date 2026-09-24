@@ -1,0 +1,12 @@
+/build/
+/logs/
+/tmp/
+/third_party/skynet/
+/third_party/lua-protobuf/
+/third_party/lua-protobuf-runtime/
+/protocol/generated/
+*.orig
+*.so
+*.o
+core
+core.*

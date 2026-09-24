@@ -1,5 +1,16 @@
 # Skynet Battle Navigation 三课主线实操
 
+## 仓库布局
+
+```text
+unity/BattleNavigation/   Unity Authoring 与客户端工程
+server/                   WSL/Linux Server 工程
+docs/                     实操文档与工程合同
+codex/                    后续课程规格与接手入口
+```
+
+Unity 和 Server 属于同一个 Git 仓库，但保持独立构建边界。Unity 不编译 Server Native 代码，Server 也不读取 `.unity` Scene；两端通过版本化的 BMAP 资产和 Protobuf 协议协作。
+
 这是一个全新的独立课程，不属于 `Skynet-slg-learning` 主工程。
 
 参考：
@@ -214,7 +225,7 @@ Server：
 
 ```text
 WSL:
-~/workspace/skynet-battle-navigation-server
+~/workspace/skynet-battle-navigation-commercial-learning/server
 ```
 
 ## Codex 第一条指令

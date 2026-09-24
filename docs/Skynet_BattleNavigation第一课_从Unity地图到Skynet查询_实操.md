@@ -211,7 +211,7 @@ Unity 工程：
 G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
 
 Server 工程：
-~/workspace/skynet-battle-navigation-server
+~/workspace/skynet-battle-navigation-commercial-learning/server
 ```
 
 为什么 Server 不放 `/mnt/g`：Skynet、CMake 和大量小文件编译在 WSL Linux 文件系统中更稳定，也避免 Windows/WSL 文件权限和文件监听差异。Unity 工程放 G 盘，因为 Editor、Library 和导入缓存体积大，C 盘空间有限。
@@ -524,10 +524,7 @@ G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
 WSL Build 终端：
 
 ```bash
-mkdir -p ~/workspace/skynet-battle-navigation-server
-cd ~/workspace/skynet-battle-navigation-server
-git init
-git branch -M main
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 
 mkdir -p \
   config \
@@ -543,7 +540,7 @@ mkdir -p \
   tests/skynet
 ```
 
-新建 `~/workspace/skynet-battle-navigation-server/.gitignore`：
+完整替换 `~/workspace/skynet-battle-navigation-commercial-learning/server/.gitignore`：
 
 ```gitignore
 /build/
@@ -4286,14 +4283,14 @@ Window -> General -> Test Runner -> EditMode -> Run All
 
 ```text
 Unity 输出：<unity-project>/BuildArtifacts/Navigation/battle_1001.bmap
-Server 输入：~/workspace/skynet-battle-navigation-server/maps/battle_1001.bmap
+Server 输入：~/workspace/skynet-battle-navigation-commercial-learning/server/maps/battle_1001.bmap
 Review 旁路：battle_1001.manifest.json
 ```
 
 操作类型：执行命令，不新建源码文件。先在 Unity Console 确认有 `BMAP_EXPORT_OK`，再在 WSL 中复制导出产物：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 unity_output=/mnt/g/simbi/dev/skynet-battle-navigation-commercial-learning/unity/BattleNavigation/BuildArtifacts/Navigation
 
 test -s "$unity_output/battle_1001.bmap"
@@ -5297,7 +5294,7 @@ add_test(NAME grid_map_test COMMAND grid_map_test)
 第一次构建：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 cmake -S native/grid_map -B build/grid_map -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/grid_map -j"$(nproc)"
 ctest --test-dir build/grid_map --output-on-failure
@@ -5333,7 +5330,7 @@ GRID_MAP_TEST_OK
 
 操作：在 Server 工程中新建协议文件，并粘贴下面的完整内容。
 
-新建文件：`~/workspace/skynet-battle-navigation-server/protocol/navigation_query.proto`
+新建文件：`~/workspace/skynet-battle-navigation-commercial-learning/server/protocol/navigation_query.proto`
 
 ```proto
 // 职责：定义 Unity 与 Skynet 之间 QueryCell 请求、响应和 Envelope 合同。
@@ -5713,7 +5710,7 @@ LUA_CPATH="$RUNTIME/?.so;;" \
 赋予执行权限并初始化：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 chmod +x scripts/linux/bootstrap_protocol_tools.sh \
          scripts/linux/build_lua_protobuf.sh \
          scripts/linux/check_server_descriptor.sh
@@ -5813,7 +5810,7 @@ print("PROTO_DESCRIPTOR_OK")
 运行：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 ./protocol/build_server_descriptor.sh
 ./scripts/linux/check_server_descriptor.sh
 ```
@@ -6713,7 +6710,7 @@ exec "$ROOT/third_party/skynet/skynet" "$ROOT/service/main.lua"
 启动前检查：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 test -f maps/battle_1001.bmap
 test -f protocol/generated/server/navigation_query.pb
 test -f native/lua_battle_nav/build/battle_nav_lua.so
@@ -7189,7 +7186,7 @@ public sealed class LengthFrameTests
 ### 31.2 Server 构建与资产导入
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 protocol/build_server_descriptor.sh
 lua protocol/check_descriptor.lua protocol/generated/server/navigation_query.pb
 cmake -S native/grid_map -B build/grid_map -DCMAKE_BUILD_TYPE=Debug
@@ -7209,7 +7206,7 @@ sha256sum maps/battle_1001.bmap
 ### 31.3 启动和联调
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 scripts/linux/run_server.sh
 ```
 
@@ -7249,7 +7246,7 @@ grid_z = floor((10501 - 10000) / 500) = 1
 LuaPanda 断点放在 `service/nav/query_worker.lua` 的 `M.query`，观察 request 和 response。C++ 调试：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-server
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 gdb --args third_party/skynet/skynet service/main.lua
 ```
 
