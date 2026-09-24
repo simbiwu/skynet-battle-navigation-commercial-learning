@@ -1,6 +1,6 @@
 # Target Architecture
 
-> 这份文档描述第三课结束后的最终架构。它不是 Lesson 1 的文件创建清单。Lesson 1 不要照着最终架构一次实现所有抽象。
+> 状态说明：这份文档原本描述 Recast/Detour 完成后的架构，现在对应可选 Lesson 4，不代表三课主线完成条件。前三课当前目标以 `docs/COURSE_ROADMAP.md` 和 `codex/LESSON_03_SPEC.md` 为准。Lesson 1 不要照着本文一次实现所有抽象。
 
 > Client Editor 使用团结引擎 1.10.0（Unity 2022.3 LTS 技术基线）。图中涉及 Unity API 的概念均按团结兼容 API 实现。
 

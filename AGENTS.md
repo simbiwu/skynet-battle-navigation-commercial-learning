@@ -1,4 +1,4 @@
-# AGENTS.md - Skynet Battle Navigation 三课专题
+# AGENTS.md - Skynet Battle Navigation 三课主线与可选高级课
 
 ## P0
 
@@ -38,7 +38,7 @@ https://github.com/simbiwu/Skynet-slg-learning
 
 # 最重要的教学规则：架构预留 ≠ 提前教学
 
-课程要为 Lesson 3 Polygon NavMesh 保留升级空间，但不能因此提前让学习者理解当前行为尚未需要的抽象。
+三课主线先完成可交互的 Server 权威战斗闭环。Polygon NavMesh 是 Lesson 4 可选高级专题，不能因此提前让学习者理解当前行为尚未需要的抽象。
 
 概念首次正式出现时间固定：
 
@@ -58,9 +58,19 @@ Lesson 2:
   DynamicOccupancy
   Grid A*
   BattleWorker
-  Lesson 2 后段再整理 Navigation Backend Interface
+  Server AI
+  Unity Replay
 
 Lesson 3:
+  PlayerCommand
+  SkillDefinition / SkillRuntime
+  Projectile
+  AirNavigationMap
+  NoFly
+  固定离地高度
+  Battle Snapshot / Event Sync
+
+Lesson 4 optional:
   INavigationBackend 双实现
   GridNavigationBackend
   DetourNavigationBackend
@@ -70,7 +80,7 @@ Lesson 3:
 Lesson 1 文档里可以用一句话说明：
 
 ```text
-“第三课会增加另一种导航实现，因此 Lua 业务不把 GridPos 当长期持久业务坐标。”
+“后续可能增加另一种导航实现，因此 Lua 业务不把 GridPos 当长期持久业务坐标。”
 ```
 
 但不能因此提前创建：
@@ -144,11 +154,51 @@ A*
 DynamicOccupancy
 ```
 
-课程后段，在这些概念已经有真实用途以后，再把 Grid 导航能力收敛成可替换 Backend API。
+课程后段，在这些概念已经有真实用途以后，只收敛当前 BattleWorker 需要的稳定 Grid 导航调用面。双 Backend 抽象留到可选 Lesson 4 首次接入 Detour 时再引入。
 
 不要在 Lesson 2 开头先讲抽象类，再讲 A*。
 
 ## Lesson 3
+
+目标是形成一个可运行的 Server 权威战斗验证场景：
+
+```text
+Player（人工输入，Server 权威执行）
+GroundEnemy（Server AI）
+FlyingEnemy（Server AI）
+```
+
+必须能够在 Unity 中完整观察：
+
+```text
+三者移动
+地面与空中目标选择
+技能施放
+弹丸飞行
+伤害、HP 与死亡
+Server 状态和事件同步
+```
+
+空中导航采用二维 XZ Air Grid：
+
+```text
+NoFly 决定 XZ 是否可进入
+worldY = groundHeight + flightHeight
+```
+
+支持三类技能执行模型：
+
+```text
+瞬发技能
+只需客户端表现的定时弹丸
+轨迹影响命中结果的 Server 权威弹丸
+```
+
+玩家客户端只能发送移动和施法意图，不能提交权威位置、命中、伤害或死亡结果。技能表现可以简化，但完整执行链和 Client/Server 边界不能省略。
+
+Lesson 3 不要求 Recast/Detour，不要求完整 3D Voxel Navigation，不实现桥上/桥下空中体积查询。
+
+## Lesson 4（可选高级课）
 
 在学习者已经熟悉：
 
@@ -166,7 +216,7 @@ GridNavigationBackend
 DetourNavigationBackend
 ```
 
-并证明 BattleWorker 上层不需要重写。
+并证明 BattleWorker 上层不需要重写。该课不属于前三课交互战斗闭环的前置条件。
 
 ## Unity
 
@@ -186,7 +236,7 @@ Lesson 1：
 Unity -> BMAP
 ```
 
-Lesson 3：
+Lesson 4：
 
 ```text
 Unity -> NAVSRC
@@ -235,7 +285,7 @@ Lesson 2 每场 Battle 才出现 dynamic occupancy。
 - static GridMap 可 immutable 共享；
 - A* scratch 不能 global mutable；
 - Lesson 2 QueryContext 独立；
-- Lesson 3 Detour QueryContext 独立。
+- Lesson 4 Detour QueryContext 独立。
 
 ## Lesson 2 A*
 
@@ -254,7 +304,7 @@ Lesson 2 每场 Battle 才出现 dynamic occupancy。
 - smoothing 再验证；
 - 不每 Tick 重跑。
 
-## Lesson 3
+## Lesson 4（可选高级课）
 
 固定：
 
@@ -307,6 +357,15 @@ simulate no-yield
 -> return
 ```
 
+同一个核心模拟必须支持两种驱动：
+
+```text
+在线交互：分段接收 PlayerCommand，按 fixed tick 推进，输出 Event + 周期 Snapshot
+自动战斗：输入准备完成后快速模拟到结束，输出完整 Event Log 给 Unity Replay
+```
+
+网络收包、等待玩家输入和 Unity 播放不进入核心 `simulate`。两种模式不能各写一套 AI、导航或技能结算。
+
 ## Determinism
 
 相同：
@@ -324,6 +383,15 @@ seed
 Lesson 3 再增加：
 
 ```text
+skill definitions/version
+player commands
+battle snapshots/events
+air navigation asset version
+```
+
+Lesson 4 使用 Detour 时再增加：
+
+```text
 navigation backend
 navigation asset/build version
 ```
@@ -333,11 +401,115 @@ navigation asset/build version
 - 中文；
 - 顺真实执行链；
 - 标完整路径；
+- 每个文件步骤必须明确标注“新建文件、完整替换、局部修改或只读”，不能只给路径和代码让学习者猜操作；
+- 每节围绕一个当前实际问题组织，按“为什么现在需要 -> 最小必要概念 -> 实际操作 -> 谁会使用 -> 验证”推进；
+- 每节只要求学习者新增或修改当前链路马上会使用的文件。未来步骤才需要的类型、常量和工具，延后到首次真实使用处再引入；
+- 每次要求新建、替换或修改文件前，先用简短白话说明“为什么需要这个文件、哪个步骤会直接使用它、完成后能看到什么结果”；没有这些信息，不得给出文件操作指令；
+- 不以最终目录结构或代码清单驱动教学，不连续要求学习者机械新建文件；若工具代码不是学习者当前目标，提供可运行工具并说明输入、输出和操作，不要求逐文件手写实现；
+- 对以后新增场景的目标，优先讲清场景约束、资产生成入口、产物和验证方式；不要让后端学习者为理解资产生产链而先实现整套 Unity Editor 工具。
+- 正文用自然、直接的陈述句；避免反复使用“不是……而是……”等模板化对照句。确有必要区分两个概念时，先分别说清它们各自是什么。
+- 学习者有资深 C++/Lua Server 背景；优先用 struct/record、二维逻辑网格、一维数组、索引和序列化等熟悉的工程概念解释。简单的数据组织先用几句话和一个小例子讲清，不把它扩写成术语导览。
 - 解释 WHY；
 - 不提前铺未来模块；
 - 不用 AI 培训腔；
 - 不重复 C++ / Lua 基础；
 - 性能结论给测试条件。
+
+面向已有 Server 经验但不熟悉 Unity 的学习者时，Unity/客户端概念必须在第一次成为当前步骤前置条件时解释，不能要求学习者从代码反推。首次解释至少包含：
+
+```text
+是什么
+在 Unity 哪里观察
+与熟悉的 Server 概念如何类比
+为什么当前步骤需要
+属于 Authoring / Asset / Client Runtime / Server Runtime 哪个边界
+一个具体数值例子
+常见误解
+```
+
+每个核心代码文件在完整代码前必须给出：
+
+```text
+本文件解决的问题
+本节必须掌握的概念
+必须精读的类型/字段/函数
+可以略读的语法或样板
+输入、输出和失败条件
+运行验证
+理解自测
+```
+
+代码注释不能替代这层学习导航。
+
+坐标、偏移量或边界在课程中首次举例时，先用非负数建立计算模型。必须使用负数前，先解释坐标零点、负轴方向以及“负坐标不等于非法坐标”，再代回当前工程的真实数值。
+
+坐标轴、世界/局部空间、Bounds、Grid Cell、2.5D 限制、NavMesh 采样等空间关系首次出现时，必须在相邻正文提供图示。图示必须标注方向、起点、单位和关键边界，并紧跟一段“读图要点”；不能用纯装饰截图代替概念图。
+
+空间概念优先复用同一张底图逐步增加标记，不能连续更换坐标、数值、视角和比喻。先让学习者能在图上指出对象和关系，再给精确公式；公式用于把已经理解的空间关系写成代码，不用于建立第一印象。
+
+任何类名、文件名或工具链列表出现前，必须先用一句直白的业务职责回答“它解决什么问题”。不能在过渡段先列出 `BattleMapRoot / Sampler / Validator / Writer` 等名字，再要求学习者到后文猜职责。
+
+教程是面向所有学习者的独立可发布文档，不得写入“你之前的理解”、“我们刚才讨论”、“根据本次反馈”等依赖历史对话的措辞。修改原因只体现为更清晰的正文结构，不将编辑过程写进课程。
+
+## Code Comments
+
+课程代码使用中文注释解释领域语义，不要求学习者靠通读整个函数反推变量作用。
+
+每个源码、脚本、协议和构建文件必须在文件头提供总体说明，适用于 C#、C++、Lua、Shell、PowerShell、Proto 和 CMake。文件头至少说明：
+
+```text
+本文件解决的问题
+所属边界（Authoring / Asset / Client Runtime / Server Runtime / Build / Test / Debug）
+主要输入和输出
+生命周期、所有权或运行时机
+明确不负责的事情
+```
+
+文件头使用该语言的普通注释，不写容易失真的作者、日期、手工版本号，也不重复文件名或逐句翻译代码。文件职责或边界变化时，必须同步更新文件头。
+
+变量注释的位置遵守以下规则：
+
+- struct/record 字段、Lua 配置项、Proto 字段等简短数据定义，优先使用同行尾注释，让类型、名字、单位和范围一次可见；
+- 局部变量的语义能用短句说清时使用同行尾注释；涉及 WHY、所有权、算法不变量或多步计算时，放在相邻上方；
+- C# Inspector 字段带 `[SerializeField]`、`[Min]`、`[Header]` 等 Attribute 时，详细领域注释放在 Attribute 上方，避免 Attribute 割裂字段与说明；
+- 不为了强行同行而写超长行；超过一个短句的说明改为紧邻上方注释。
+
+函数注释是强制要求，不能只靠函数名或函数体让学习者反推。每个函数、方法、构造函数、协议/脚本入口都必须在定义前说明职责；公开函数、跨模块入口和包含领域判断的私有函数还必须完整说明：
+
+```text
+函数解决的具体问题
+每个参数的业务意义、单位、坐标系、合法范围和所有权（适用时）
+返回值各状态的意义和所有权（适用时）
+显式失败条件、错误码或异常
+是否执行 I/O、分配内存、加锁、yield 或修改共享状态
+复杂度、前置条件或调用时机（适用时）
+```
+
+C# 公共 API 和课程核心私有函数优先使用 XML Documentation 的 `summary`、`param`、`returns`、`exception`；C++ 使用紧邻声明或定义的统一函数注释；Lua、Shell、PowerShell 也必须在函数或入口前写清参数与返回/退出约定。无参数、无失败分支的简单属性访问器或薄包装函数可以只用一行说明，不能完全省略，也不能用大段样板掩盖关键函数。
+
+函数内部的关键代码必须解释领域 WHY，包括坐标换算、取整方向、边界判定、字节 offset/stride、CRC 覆盖范围、资源所有权、锁/yield 边界、半包/粘包状态和算法不变量。注释应放在对应逻辑之前；不能只在函数头笼统写“处理数据”。
+
+必须注释：
+
+- 类型职责、生命周期和所属边界（Authoring / Asset / Runtime / Debug）；
+- 每个成员字段的用途、单位、坐标系、合法范围，以及是否进入资产或网络；
+- 方法参数、返回值和显式失败条件；
+- 非显然局部变量承载的中间语义；
+- `x/z/index/offset/size/count` 对应 Grid、数组还是 byte；
+- 集合、缓冲区的元素语义、所有者和生命周期；
+- 算法不变量、WHY、复杂度和适用限制。
+
+禁止只翻译语法的无效注释，例如：
+
+```cpp
+// 遍历数组
+for (...) { }
+
+// 返回结果
+return result;
+```
+
+代码行为、单位或数据布局变化时必须同步更新注释、文档和测试。
 
 ## Codex
 
@@ -374,6 +546,9 @@ navigation asset/build version
 
 - Lesson 1 不提前实现 `INavigationBackend`；
 - Lesson 1 不提前创建 AgentProfile / Path / NavigationContext；
+- Lesson 2 不提前创建 SkillRuntime、Projectile 或 AirNavigationMap；
+- Lesson 3 不把客户端位置、命中或伤害当作权威结果；
+- Lesson 3 不用地面 Walkable 直接代替 Air NoFly 规则；
 - 不把 GridPos 当长期 Lua 业务位置；
 - 不把一个 MapService 做全部高频寻路代理；
 - 不做 global mutable A* scratch；

@@ -1,8 +1,10 @@
 # Polygon Navigation Asset Pipeline：NAVSRC V1 / DNAV V1
 
+> 状态：本文属于可选 Lesson 4 Recast/Detour 专题，不是前三课交互战斗闭环的前置内容。
+
 ## 为什么分两个文件
 
-第三课生产链：
+可选 Lesson 4 生产链：
 
 ```text
 Unity

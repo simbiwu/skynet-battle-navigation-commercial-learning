@@ -1,8 +1,10 @@
 # Native Navigation API
 
+> 状态：本文的 Grid/Detour 双 Backend 目标属于可选 Lesson 4。前三课主线只实现当前行为实际需要的 Grid、BattleWorker、Air Grid 和技能调用，不按本文目录提前创建空抽象。
+
 ## 目录
 
-第三课结束时建议：
+可选 Lesson 4 结束时建议：
 
 ```text
 native/navigation/

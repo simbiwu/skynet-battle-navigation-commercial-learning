@@ -1,4 +1,6 @@
-# Lesson 3 实操：Recast / Detour Polygon NavMesh Backend
+# 可选 Lesson 4 旧草稿：Recast / Detour Polygon NavMesh Backend
+
+> 状态：旧 Recast/Detour 草稿。该主题现已移动到可选 Lesson 4，本文件不再代表三课主线中的 Lesson 3，也不是当前学习入口。新的第三课只在学习者明确要求后，依据 `codex/LESSON_03_SPEC.md` 编写。
 
 ## 这课解决什么
 

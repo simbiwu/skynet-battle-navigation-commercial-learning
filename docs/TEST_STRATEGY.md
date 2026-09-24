@@ -153,7 +153,26 @@ visited nodes
 allocation
 ```
 
-## Lesson 3：NAVSRC Builder
+## Lesson 3：交互战斗、技能与空中导航
+
+必须覆盖：
+
+```text
+相同 snapshot/commands/versions/seed 得到相同有序 BattleEvent
+在线分段推进与批量 simulate 到结束得到相同逻辑结果
+重复、过期、越权和非法 Move/Cast Command 被明确拒绝
+GroundEnemy 的目标、移动、攻击选择可回归
+FlyingEnemy 绕开 NoFly，并保持配置的离地高度
+Ground-only 技能不能命中 Air 目标
+表现型弹丸的 launch/impact time 稳定
+逻辑型弹丸的碰撞、阻挡和销毁结果稳定
+Snapshot 能恢复当前 HP、位置、状态和逻辑 Tick
+Unity 只改变表现，不覆盖 Server 命中和伤害
+```
+
+性能测试分别记录在线 fixed-tick 推进和批量整场模拟，不能把 Unity 播放耗时计入 Server simulate。
+
+## Lesson 4（可选）：NAVSRC Builder
 
 ### NAVSRC Parser
 
@@ -183,7 +202,7 @@ query golden passes
 
 但语义 Query 必须一致。
 
-## Lesson 3：DNAV Loader
+## Lesson 4（可选）：DNAV Loader
 
 ```text
 magic

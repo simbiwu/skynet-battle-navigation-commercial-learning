@@ -1,4 +1,4 @@
-# Skynet Battle Navigation 商业级三课实操
+# Skynet Battle Navigation 三课主线实操
 
 这是一个全新的独立课程，不属于 `Skynet-slg-learning` 主工程。
 
@@ -22,7 +22,7 @@ C++ Native Module 的线程安全与内存边界
 确定性战斗、事件与 Replay
 Protobuf 协议、版本和错误处理
 性能测试、回归、损坏资产与并发测试
-Grid 与 Recast/Detour 的工程选型
+地面/空中导航、权威技能和客户端表现边界
 ```
 
 Unity 在本项目中只有两个角色：离线资产生产工具和联调/回放客户端。评价重点始终是 Server 设计、证据和取舍，而不是场景美术或客户端表现技巧。
@@ -55,19 +55,28 @@ Lesson 2
 -> Path
 -> Dynamic Occupancy
 -> BattleWorker
+-> Server AI
 -> Unity Replay
 
 Lesson 3
+Player Command + GroundEnemy AI + FlyingEnemy AI
+-> Ground Grid / Air Grid / NoFly
+-> 瞬发、表现型弹丸、逻辑型弹丸
+-> Server 权威伤害与死亡
+-> Battle Snapshot / Event
+-> Unity 完整显示移动和技能
+
+Lesson 4（可选）
 Unity Navigation Source
 -> Recast / Detour Polygon NavMesh
--> Detour Backend
 -> Bridge / Multi-level / Off-Mesh Link
--> 与 Grid Backend 共用上层 Battle API
 ```
+
+第三课使用同一个确定性 BattleWorker 支持两种运行方式：人工操作时按命令和 fixed tick 分段推进，发送 Event 并周期发送 Snapshot；纯自动 SLG 战斗时快速模拟到结束，返回完整 Event Log 供 Unity 回放。网络和回放层不能各自复制一套战斗结算。
 
 ## 教学顺序原则
 
-商业架构需要为第三课留下升级空间，但**不会把第三课概念提前塞进第一课**。
+商业架构需要保留升级空间，但**不会把后续课程概念提前塞进第一课**。
 
 概念首次正式出现：
 
@@ -87,9 +96,17 @@ Lesson 2:
   DynamicOccupancy
   A*
   BattleWorker
-  课程后段再整理 Navigation Backend 抽象
+  Server AI
+  Unity Replay
 
 Lesson 3:
+  PlayerCommand
+  SkillDefinition / SkillRuntime
+  Projectile
+  AirNavigationMap / NoFly
+  Battle Snapshot / Event Sync
+
+Lesson 4 optional:
   INavigationBackend 正式形成双实现
   GridNavigationBackend
   DetourNavigationBackend
@@ -117,7 +134,7 @@ Lesson 3:
 
 - 团结引擎 1.10.0
 - 技术基线：Unity 2022.3 LTS
-- AI Navigation：`com.unity.ai.navigation@1.1.5`
+- AI Navigation：`com.unity.ai.navigation@1.1.7`
 - 不静默升级 Unity、AI Navigation、Skynet 或 Recast
 
 说明：
@@ -125,14 +142,14 @@ Lesson 3:
 - 文档中仍会出现 `Unity Scene`、`Unity API`、`Unity Replay` 等术语，它们表示 Unity 技术体系/兼容 API；
 - 本课程实际 Editor 使用 **团结引擎 1.10.0**；
 - 不要求安装 Unity 6000.x；
-- Lesson 3 的 Server Polygon NavMesh 仍由独立 C++ Recast/Detour Toolchain 生成，因此不依赖 Unity 6。
+- 可选 Lesson 4 的 Server Polygon NavMesh 由独立 C++ Recast/Detour Toolchain 生成，因此不依赖 Unity 6。
 
 ### Polygon NavMesh
 
 - Recast Navigation v1.6.0
 - Recast：离线构建
 - Detour：Server Runtime Query
-- Lesson 3 使用 Tiled NavMesh
+- 可选 Lesson 4 使用 Tiled NavMesh
 - 不在 BattleWorker 运行期执行 Recast Bake
 
 ## 为什么先学 2.5D
@@ -149,7 +166,7 @@ RTS / SLG 地面导航
 动态阻挡
 ```
 
-Lesson 3 再解决：
+可选 Lesson 4 再解决：
 
 ```text
 桥上 / 桥下

@@ -1,0 +1,49 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="610" viewBox="0 0 1100 610" role="img" aria-labelledby="title desc">
+  <title id="title">同一张 Grid 上叠加 NavMesh 采样</title>
+  <desc id="desc">BattleMapRoot 定义矩形 Grid，Grid 分成 Cell。蓝色 NavMesh 叠加在同一世界坐标上，Exporter 用每个 Cell 的中心点查询 NavMesh，生成可走或不可走的 NavCell。</desc>
+  <defs>
+    <clipPath id="grid-clip"><rect x="150" y="100" width="600" height="400"/></clipPath>
+    <style>
+      .bg { fill:#fff; }
+      .bounds { fill:#f8fafc; stroke:#1f2937; stroke-width:5; }
+      .navmesh { fill:#60a5fa; fill-opacity:.55; stroke:#2563eb; stroke-width:4; }
+      .gridline { stroke:#64748b; stroke-width:2; }
+      .origin { fill:#dc2626; }
+      .walk { fill:#16a34a; stroke:#fff; stroke-width:3; }
+      .blocked { fill:#64748b; stroke:#fff; stroke-width:3; }
+      .obstacle { fill:#fff; stroke:#dc2626; stroke-width:4; }
+      .label { font:500 22px "Microsoft YaHei",sans-serif; fill:#1f2937; }
+      .small { font:400 18px "Microsoft YaHei",sans-serif; fill:#475569; }
+      .note { font:400 16px "Microsoft YaHei",sans-serif; fill:#64748b; }
+      .red { fill:#b91c1c; }
+    </style>
+  </defs>
+  <rect class="bg" width="1100" height="610" rx="12"/>
+  <text class="label" x="60" y="45">还是同一张 Grid：现在只增加蓝色 NavMesh</text>
+
+  <rect class="bounds" x="150" y="100" width="600" height="400"/>
+  <path class="navmesh" clip-path="url(#grid-clip)" d="M170 125L700 120L735 220L650 275L730 470L445 485L350 420L175 475L165 300L235 235Z"/>
+  <rect class="obstacle" x="390" y="225" width="120" height="110" rx="8"/>
+  <path class="gridline" d="M250 100V500M350 100V500M450 100V500M550 100V500M650 100V500M150 200H750M150 300H750M150 400H750"/>
+
+  <g>
+    <circle class="walk" cx="200" cy="150" r="9"/><circle class="walk" cx="300" cy="150" r="9"/><circle class="walk" cx="400" cy="150" r="9"/><circle class="walk" cx="500" cy="150" r="9"/><circle class="walk" cx="600" cy="150" r="9"/><circle class="walk" cx="700" cy="150" r="9"/>
+    <circle class="blocked" cx="200" cy="250" r="9"/><circle class="walk" cx="300" cy="250" r="9"/><circle class="blocked" cx="400" cy="250" r="9"/><circle class="blocked" cx="500" cy="250" r="9"/><circle class="walk" cx="600" cy="250" r="9"/><circle class="walk" cx="700" cy="250" r="9"/>
+    <circle class="walk" cx="200" cy="350" r="9"/><circle class="walk" cx="300" cy="350" r="9"/><circle class="walk" cx="400" cy="350" r="9"/><circle class="walk" cx="500" cy="350" r="9"/><circle class="walk" cx="600" cy="350" r="9"/><circle class="blocked" cx="700" cy="350" r="9"/>
+    <circle class="blocked" cx="200" cy="450" r="9"/><circle class="walk" cx="300" cy="450" r="9"/><circle class="walk" cx="400" cy="450" r="9"/><circle class="walk" cx="500" cy="450" r="9"/><circle class="walk" cx="600" cy="450" r="9"/><circle class="walk" cx="700" cy="450" r="9"/>
+  </g>
+
+  <circle class="origin" cx="150" cy="500" r="9"/>
+  <text class="small red" x="135" y="535">世界原点 = Grid origin (0,0)</text>
+
+  <rect x="795" y="125" width="22" height="22" fill="#60a5fa" fill-opacity=".55" stroke="#2563eb" stroke-width="2"/>
+  <text class="small" x="832" y="143">蓝色：Unity NavMesh</text>
+  <circle class="walk" cx="806" cy="205" r="9"/>
+  <text class="small" x="832" y="212">绿点：Cell 中心可走</text>
+  <circle class="blocked" cx="806" cy="270" r="9"/>
+  <text class="small" x="832" y="277">灰点：Cell 中心不可走</text>
+  <rect class="obstacle" x="795" y="325" width="24" height="24" rx="3"/>
+  <text class="small" x="832" y="345">红框：障碍物空洞</text>
+
+  <text class="note" x="150" y="580">Grid 不是 NavMesh 自动“变成”的。BattleMapRoot 先定义 Grid，Exporter 再用 Cell Center 逐格采样 NavMesh。</text>
+</svg>

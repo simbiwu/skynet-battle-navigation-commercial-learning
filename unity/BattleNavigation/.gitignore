@@ -3,6 +3,7 @@
 [Oo]bj/
 [Bb]uild/
 [Bb]uilds/
+[Bb]uildArtifacts/
 [Ll]ogs/
 [Uu]ser[Ss]ettings/
 *.csproj
@@ -15,4 +16,3 @@
 *.mdb
 *.opendb
 *.VC.db
-

@@ -1,4 +1,4 @@
-# 三课路线
+# 三课主线路线与可选高级课
 
 ## 面试主线
 
@@ -23,6 +23,8 @@ Authoring Source
 ```
 
 ## Lesson 1：先学清楚地图
+
+学习者以 Server 工程经验为前提，不默认熟悉 Unity。Unity 坐标轴、World/Local Space、Transform、Inspector 序列化、NavMesh Query 和 SceneView 等概念必须在第一次操作或代码使用前完成桥接；核心文件先给学习目标和精读范围，再给完整代码。
 
 目标只有：
 
@@ -115,7 +117,7 @@ Clearance 只是作为地图属性导出，先知道：
 1. Lua 正式业务坐标使用 WorldPosition；
 2. Grid 类型不泄露成长期 Battle Contract。
 
-这样已经足够为第三课保留升级空间。
+这样已经足够为后续技能、空中导航和可选导航后端保留演进空间。
 
 ---
 
@@ -165,7 +167,7 @@ Server Path
 Grid Navigation API
 ```
 
-为 Lesson 3 可替换 Backend 做准备。
+为后续业务继续使用稳定导航入口做准备。此时不要求为了 Detour 提前完成双 Backend。
 
 不是 Lesson 2 开头先造抽象。
 
@@ -179,89 +181,113 @@ clearance、slope、area cost 和 dynamic occupancy 怎样组合；
 为什么 simulate(snapshot) 核心阶段不能 skynet.call；
 如何保证相同版本、输入和 seed 得到相同事件；
 为什么不每 Tick 重跑寻路；
-何时才有资格抽取 Navigation Backend Contract。
+如何在没有第二种实现时只稳定 Grid 调用面，不提前制造双 Backend。
 ```
 
 ---
 
-# Lesson 3：再学习 Polygon NavMesh
+# Lesson 3：完成可交互的 Server 权威战斗
 
-地图增加：
-
-```text
-Bridge
-Road under bridge
-Ramp
-Upper Platform
-Jump Link
-```
-
-2.5D Grid 明确不能表示。
-
-此时自然引入：
+第三课把前两课的地图、寻路和 BattleWorker 组合成一个可人工操作的战斗验证场景：
 
 ```text
-INavigationBackend
-    ├── GridNavigationBackend
-    └── DetourNavigationBackend
+Player       地面单位，人工输入移动和施法意图
+GroundEnemy  地面单位，Server AI 控制
+FlyingEnemy  空中单位，Server AI 控制
 ```
 
-并学习：
+“人工控制”只表示命令来自 Unity。位置、路径、技能合法性、命中、伤害和死亡仍由 Server 决定。
+
+### 空中导航
+
+本课使用适合 SLG 的简化模型：
 
 ```text
-NAVSRC
-Recast
-DNAV
-Detour
-Tile
-PolyRef
-Corridor
-StraightPath
-Off-Mesh Link
+二维 Air Grid 负责 XZ 路径
+NoFly Cell 表示禁止飞入区域
+worldY = groundHeight + flightHeight
 ```
 
-### 生产链
+FlyingEnemy 可以飞越普通地面障碍，但必须绕开 NoFly，并受地图边界、最大爬升/下降速度和技能目标类型约束。本课不实现完整三维体素导航，也不表达同一 XZ 的多层空中空间。
+
+### 技能执行模型
+
+按真实需求逐步引入：
 
 ```text
-Unity
--> NAVSRC
--> standalone nav_builder
--> Recast
--> DNAV
--> Detour Runtime
--> same BattleWorker
+瞬发技能
+-> Server 立即结算，Client 播放表现
+
+表现型弹丸
+-> Server 固定 launch/impact time 和结果，Client 插值轨迹
+
+逻辑型弹丸
+-> Server 权威推进或解析计算轨迹，碰撞会改变结果
 ```
+
+最小技能组合：
+
+```text
+Player：地面近战 + 对空火球
+GroundEnemy：近战攻击
+FlyingEnemy：空中火球
+```
+
+### 同步与显示
+
+```text
+Unity PlayerCommand
+-> Skynet Gateway
+-> BattleWorker fixed tick / no-yield simulate
+-> BattleSnapshot + BattleEvent
+-> Unity interpolation + 简单特效
+```
+
+客户端至少能完整观察三者的移动、施法、弹丸、受伤、HP 和死亡。模型与特效可以使用基础几何体，验证重点是权威边界和执行链。
 
 ### 第三课验收核心
 
-Battle AI 主流程不因 Grid / Detour 改写。
-
-如果需要大面积重写：
-
 ```text
-TargetSelector
-BattleWorker
-EventWriter
-UnitState
+人工移动 Player，Server 返回权威位置；
+GroundEnemy 自动接近并攻击；
+FlyingEnemy 保持固定离地高度并绕开 NoFly；
+地面技能不能错误命中空中目标；
+三类技能模型都有可运行案例；
+Unity 完整显示移动、施法、命中、伤害和死亡；
+相同 battle/map/skill/input/seed 得到相同逻辑事件。
 ```
-
-说明第二课抽象有问题。
 
 ### 第三课面试输出
 
 ```text
-Recast 为什么属于 Offline Build，Detour 为什么属于 Runtime Query；
-NAVSRC 与 DNAV 为什么分别版本化；
-Tile、PolyRef、Corridor、StraightPath 各自解决什么问题；
-dtNavMeshQuery 为什么不能作为跨线程 global mutable context；
-桥上/桥下和 Off-Mesh Link 为什么超出单层 Grid 表达能力；
-如何证明 BattleWorker 不因 Backend 切换而重写；
-怎样用相同条件比较 Grid 与 Detour 的耗时和内存。
+为什么客户端只提交意图，不能提交权威位置和伤害；
+为什么表现型弹丸不需要 Server 每 Tick 更新；
+什么时候轨迹必须由 Server 权威计算；
+Air Grid、NoFly 和固定离地高度怎样协作；
+Snapshot 与 Event 分别解决什么问题；
+BattleWorker 的 no-yield 和确定性怎样延伸到技能系统；
+如何证明地面 AI、空中 AI 与人工输入走同一条结算链。
 ```
 
 ---
 
-# 三课完成后
+# Lesson 4（可选）：Polygon NavMesh
+
+只有项目出现桥上/桥下、多层平台、复杂不规则地面或 Off-Mesh Traversal 时，才进入 Recast/Detour：
+
+```text
+Unity NAVSRC
+-> standalone nav_builder + Recast
+-> DNAV
+-> Detour Runtime
+-> 与 Grid 共用上层 Battle API
+```
+
+本课不是前三课交互战斗闭环的前置条件。典型单层 SLG 可以长期使用 Grid。
+
+---
+
+# 三课主线完成后
 
 学习者应该能回答：
 
@@ -270,7 +296,8 @@ dtNavMeshQuery 为什么不能作为跨线程 global mutable context；
 - Height / Clearance / Occupancy 如何工作；
 - A* 如何工程化；
 - Skynet + Native 并发边界；
-- Polygon NavMesh 为什么解决多层拓扑；
-- Recast 和 Detour 分别做什么；
-- 什么项目继续用 Grid；
-- 什么项目应直接用 Polygon NavMesh。
+- 玩家输入与 Server AI 如何进入同一个权威 BattleWorker；
+- 地面与固定离地空中导航怎样并存；
+- 瞬发、表现型弹丸和逻辑型弹丸怎样划分 Server 职责；
+- Snapshot、Event 与 Unity 表现怎样组成可调试闭环；
+- 什么项目继续用 Grid，什么条件下才需要可选的 Polygon NavMesh。

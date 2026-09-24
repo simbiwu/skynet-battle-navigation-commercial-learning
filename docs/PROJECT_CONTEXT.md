@@ -6,6 +6,8 @@
 
 因此课程不降低到语言语法和基础网络教学，也不要求学习者转型为 Unity 客户端工程师。Unity 只学到能够理解资产来源、亲自完成关键生产步骤、定位 Client/Server 边界问题和完成联调验收。
 
+课程不能假设 Server 开发者天然理解 Unity 坐标、Transform、World/Local Space、Inspector 序列化、NavMesh Query 或 SceneView。相关概念在首次使用前完成 Server 视角桥接；每个核心文件先标出学习目标和精读范围，再进入完整代码。
+
 面试训练不以“写了多少类”为标准，而以能否用真实代码和测试回答以下问题为标准：
 
 ```text
@@ -47,24 +49,23 @@ basic A*
 - Native Query 并发；
 - Skynet BattleWorker；
 - Client / Server 权威边界；
-- Polygon NavMesh；
-- Recast / Detour；
-- 何时选 Grid，何时选 NavMesh。
+- 地面 AI、固定离地空中 AI 与 NoFly；
+- 权威技能、弹丸、Battle Snapshot / Event；
+- 何时继续使用 Grid，何时进入可选 Polygon NavMesh 专题。
 
 ## 目标游戏形态
 
-典型：
+前三课的最小可运行验证场景：
 
 ```text
-布阵
--> Battle Start
--> 自动选目标
--> 自动移动
--> 换目标
--> 进入攻击距离
--> 攻击
--> 3D Replay
+人工控制 Player 提交移动/施法意图
++ GroundEnemy 由 Server AI 控制
++ FlyingEnemy 由 Server AI 控制
+-> Server 权威移动、技能、伤害和死亡
+-> Unity 显示三者移动、弹丸与技能事件
 ```
+
+该场景是 SLG 战斗内核的最小验证沙盒。正式 SLG 可以把单个 Object 扩展为英雄、士兵或编队，并把人工操作降为低频指令；Server 权威、AI、导航、技能和事件边界保持不变。
 
 课程不实现完整：
 
@@ -92,11 +93,11 @@ Path
 Battle integration
 ```
 
-而这些知识不会因为第三课 Detour 消失。
+这些知识会直接被第三课的地面 AI、空中 AI 和技能系统使用。
 
 Recast 自己构建 NavMesh 也包含 Rasterization / Heightfield 阶段。
 
-## 为什么第三课学 Polygon NavMesh
+## 为什么 Polygon NavMesh 放到可选第四课
 
 用于：
 
@@ -107,30 +108,30 @@ Recast 自己构建 NavMesh 也包含 Rasterization / Heightfield 阶段。
 Off-Mesh Traversal
 ```
 
-并理解商业导航系统为何不能只看“A* 算法”。
+并理解商业导航系统为何不能只看“A* 算法”。典型单层 SLG 可以只完成前三课，长期使用 Grid。
 
-## 三课完成后的面试输出
+## 三课主线完成后的面试输出
 
 三课后，学习者不仅能 Review：
 
 ```text
-Grid-based Battle Navigation
-Recast/Detour Server Navigation
-Skynet Integration
-Navigation Asset Pipeline
+Grid-based Ground/Air Navigation
+Server-authoritative Skill and Projectile
+Skynet BattleWorker / AI / Sync
+Unity Navigation Asset and Battle Presentation
 ```
 
-并能解释不同方案的成本和适用边界。
+并能解释客户端意图与 Server 权威结果、表现型和逻辑型弹丸、地面 Grid 和 Air Grid 的成本与适用边界。
 
 还应能完成一次 20～30 分钟的项目陈述：
 
 ```text
 1. 业务问题与约束
 2. Unity -> Server 的资产生产链
-3. BMAP / NAVSRC / DNAV 的版本与校验
+3. BMAP、Ground/Air Navigation 数据的版本与校验
 4. Native Core / Lua Binding / Skynet Service 的 ownership
 5. Battle simulate no-yield 与确定性事件
-6. Grid 到 Detour 的演进理由
+6. Player、GroundEnemy、FlyingEnemy 和技能事件的完整执行链
 7. 测试、性能条件、已知限制与下一步
 ```
 

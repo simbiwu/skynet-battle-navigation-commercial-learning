@@ -15,7 +15,9 @@
 
 Unity 名词和操作需要从 Server 视角解释，但 Unity 只服务于资产生产、联调和 Replay。教学重心是 Skynet ownership/yield、Native 并发安全、确定性、协议、性能、可观测性和演进边界。
 
-## 这是全新三课项目
+不能让学习者通过通读 C# 反推 Unity 空间概念。坐标轴、World/Local Space、Transform、Unity Unit、Inspector 序列化、NavMesh Query、SceneView 等概念必须在首次使用前完成 Server 视角桥接。
+
+## 这是全新三课主线项目
 
 不合并：
 
@@ -57,7 +59,7 @@ Detour
 
 `docs/NAVIGATION_ABSTRACTION.md` 在 Lesson 1 仅作为 Codex 自己的架构约束参考，不作为学习者当前学习内容。
 
-Lesson 2 再完整读：
+只有学习者明确要求开始生成 Lesson 2 实操时，再完整读：
 
 ```text
 docs/NAVIGATION_ABSTRACTION.md
@@ -69,10 +71,18 @@ codex/LESSON_02_SPEC.md
 Lesson 3：
 
 ```text
-docs/POLYGON_NAV_ASSET_FORMAT.md
-docs/LESSON_03_PRACTICAL.md
-docs/REFERENCES.md
 codex/LESSON_03_SPEC.md
+```
+
+Lesson 3 主线是人工控制 Player、Server AI GroundEnemy/FlyingEnemy、技能、状态/事件同步和 Unity 表现。不要读取旧 Polygon NavMesh 实操草稿来生成第三课。
+
+可选 Lesson 4 才读：
+
+```text
+codex/LESSON_04_OPTIONAL_RECAST_SPEC.md
+docs/POLYGON_NAV_ASSET_FORMAT.md
+docs/LESSON_03_PRACTICAL.md（旧文件名，仅作为 Recast 草稿参考）
+docs/REFERENCES.md
 ```
 
 ## 第一课教学门禁
@@ -130,7 +140,7 @@ gdb --version
 Skynet v1.8.0
 ```
 
-Lesson 3：
+Lesson 4 optional：
 
 ```text
 Recast Navigation v1.6.0
@@ -149,7 +159,7 @@ Recast Navigation v1.6.0
 -> next
 ```
 
-不要为了第三课，第一课就创建最终架构所有空类。
+不要为了后续课程，第一课就创建最终架构所有空类。
 
 每个 Stage 结束时追加三个口头检查：
 
@@ -158,6 +168,20 @@ Recast Navigation v1.6.0
 为什么边界放在这里？
 如果输入损坏、并发增加或版本不匹配，会怎样失败？
 ```
+
+每个核心源码文件在贴出完整代码前，先给学习导航：
+
+```text
+为什么现在需要这个文件
+本文件只负责什么、不负责什么
+必须形成的概念
+精读哪些代码
+哪些 Unity/C#/工具样板可以略读
+如何运行和破坏验证
+脱离代码应能回答什么
+```
+
+注释解决局部语义，学习导航解决学习目标；二者不能互相替代。
 
 ## 工程目录也渐进
 
@@ -179,7 +203,17 @@ native/navigation/grid/
 
 > 如何从一个工作实现抽出稳定接口。
 
-Lesson 3 才加：
+Lesson 3 按真实战斗需求增加：
+
+```text
+PlayerCommand
+SkillDefinition / SkillRuntime
+Projectile
+AirNavigationMap / NoFly
+Battle Snapshot / Event Sync
+```
+
+可选 Lesson 4 才加：
 
 ```text
 native/navigation/detour/
@@ -206,12 +240,22 @@ feat: add native astar
 feat: add agent-aware navigation
 feat: add battle navigation context
 feat: add battle worker simulation
-refactor: extract navigation backend contract
 feat: add unity replay
 perf: add grid benchmark
 ```
 
 Lesson 3：
+
+```text
+feat: add player battle commands
+feat: add ground and flying enemy ai
+feat: add air grid and no-fly navigation
+feat: add authoritative skills and projectiles
+feat: stream battle snapshots and events
+test: complete interactive and batch battle replay
+```
+
+Lesson 4 optional：
 
 ```text
 feat: add nav source exporter

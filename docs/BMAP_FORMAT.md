@@ -284,11 +284,13 @@ Export Failed
 不要选“最近的一个高度”假装正确。
 
 
-## 与第三课的关系
+## 与后续课程的关系
 
-BMAP 是 Grid Backend 的 Runtime Asset。
+BMAP 是地面 Grid 的 Runtime Asset，也为固定离地飞行提供 ground height。
 
-第三课增加 DNAV，不把 BMAP V1 变成“既能 Grid 又能 Polygon”的万能格式。
+第三课需要的 NoFly/Air Grid 使用独立、版本化的空中导航资产，不把空中规则塞进 BMAP V1 的保留位。
+
+可选第四课增加 DNAV，也不把 BMAP V1 变成“既能 Grid 又能 Polygon”的万能格式。
 
 公共层通过：
 

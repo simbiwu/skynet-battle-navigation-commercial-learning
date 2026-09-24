@@ -1,6 +1,6 @@
 # Navigation Abstraction：何时引入，怎么引入
 
-这份文档主要给 Codex 和 Lesson 2 后段 / Lesson 3 使用。
+这份文档主要给 Codex 和可选 Lesson 4 接入 Detour 时使用。Lesson 2 只稳定当前 Grid 调用面，前三课主线不要求提前形成双 Backend。
 
 **不要在 Lesson 1 把它完整讲给学习者。**
 

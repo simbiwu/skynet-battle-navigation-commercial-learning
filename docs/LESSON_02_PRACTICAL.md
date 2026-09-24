@@ -1,5 +1,7 @@
 # Lesson 2 实操：从 A* 到 Skynet 自动战斗
 
+> 状态：旧草稿，当前不作为学习入口，也不继续扩写。学习者完成第一课并明确提出后，必须依据 `codex/LESSON_02_SPEC.md`、第一课真实产物和最新课程路线重新验收或重写，不能直接沿用本稿。
+
 第一课已有：
 
 ```text
@@ -411,7 +413,7 @@ INavigationBackend
 
 目的只有：
 
-> Lesson 3 可以新增 Detour 实现。
+> 可选 Lesson 4 可以新增 Detour 实现；第三课主线不依赖 Detour。
 
 ---
 

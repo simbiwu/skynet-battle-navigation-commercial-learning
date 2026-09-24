@@ -1,0 +1,72 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1100" height="650" viewBox="0 0 1100 650" role="img" aria-labelledby="title desc">
+  <title id="title">世界坐标中的 Grid、origin、Cell 和 Bounds</title>
+  <desc id="desc">一张俯视示意图。世界原点是坐标参考点，Grid 是一张矩形方格地图，origin 是 Grid 开始铺设的位置，Grid 内部由 Cell 组成，外边界是 Bounds。</desc>
+  <defs>
+    <marker id="axis-arrow" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="8" markerHeight="8" orient="auto">
+      <path d="M0 0L10 5L0 10Z" fill="#475569"/>
+    </marker>
+    <marker id="measure-arrow" viewBox="0 0 10 10" refX="5" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse">
+      <path d="M10 0L0 5L10 10Z" fill="#7c3aed"/>
+    </marker>
+    <style>
+      .bg { fill:#fff; }
+      .axis { stroke:#475569; stroke-width:3; marker-end:url(#axis-arrow); }
+      .bounds { fill:#f8fafc; stroke:#2563eb; stroke-width:5; }
+      .cell { fill:none; stroke:#64748b; stroke-width:2; }
+      .first { fill:#dbeafe; stroke:#2563eb; stroke-width:3; }
+      .origin { fill:#dc2626; }
+      .center { fill:#16a34a; stroke:#fff; stroke-width:3; }
+      .measure { stroke:#7c3aed; stroke-width:3; marker-start:url(#measure-arrow); marker-end:url(#measure-arrow); }
+      .label { font:500 22px "Microsoft YaHei",sans-serif; fill:#1f2937; }
+      .small { font:400 18px "Microsoft YaHei",sans-serif; fill:#475569; }
+      .note { font:400 16px "Microsoft YaHei",sans-serif; fill:#64748b; }
+      .red { fill:#b91c1c; }
+      .green { fill:#15803d; }
+      .violet { fill:#6d28d9; }
+      .num { fill:#1d4ed8; }
+      .numtext { font:500 17px "Microsoft YaHei",sans-serif; fill:#fff; text-anchor:middle; dominant-baseline:middle; }
+    </style>
+  </defs>
+  <rect class="bg" width="1100" height="650" rx="12"/>
+  <text class="note" x="65" y="35">俯视 XZ 平面（示意图不按实际距离比例绘制）</text>
+
+  <line class="axis" x1="310" y1="450" x2="995" y2="450"/>
+  <line class="axis" x1="310" y1="450" x2="310" y2="65"/>
+  <text class="label" x="1005" y="458">+X</text>
+  <text class="label" x="290" y="55">+Z</text>
+
+  <rect class="bounds" x="310" y="170" width="480" height="280"/>
+  <rect class="first" x="310" y="310" width="160" height="140"/>
+  <path class="cell" d="M470 170V450M630 170V450M310 310H790"/>
+  <circle class="num" cx="815" cy="185" r="15"/><text class="numtext" x="815" y="185">2</text>
+  <text class="label" x="838" y="182">Grid</text>
+  <text class="small" x="838" y="212">整张方格地图</text>
+
+  <circle class="origin" cx="310" cy="450" r="10"/>
+  <circle class="num" cx="270" cy="490" r="20"/>
+  <text x="270" y="490" style="font:500 14px 'Microsoft YaHei',sans-serif;fill:#fff;text-anchor:middle;dominant-baseline:middle">1/3</text>
+  <text class="label red" x="300" y="505">世界原点 = Grid origin = (0,0)</text>
+  <text class="small" x="300" y="533">方格从这里开始铺</text>
+
+  <circle class="num" cx="335" cy="335" r="15"/><text class="numtext" x="335" y="335">4</text>
+  <text class="label" x="355" y="345">Cell (0,0)</text>
+  <text class="small" x="350" y="375">第一格</text>
+
+  <circle class="num" cx="815" cy="245" r="15"/><text class="numtext" x="815" y="245">5</text>
+  <text class="label" x="838" y="252">Bounds</text>
+  <text class="small" x="838" y="282">Grid 的外边界</text>
+
+  <circle class="center" cx="390" cy="380" r="10"/>
+  <circle class="num" cx="425" cy="405" r="15"/><text class="numtext" x="425" y="405">6</text>
+  <text class="small green" x="448" y="412">Cell Center = (0.5,0.5)</text>
+
+  <line class="measure" x1="315" y1="135" x2="785" y2="135"/>
+  <text class="small violet" x="495" y="116">sizeX = 3m</text>
+  <line class="measure" x1="270" y1="175" x2="270" y2="445"/>
+  <text class="small violet" x="225" y="340" transform="rotate(-90 225 340)">sizeZ = 2m</text>
+  <line class="measure" x1="315" y1="570" x2="465" y2="570"/>
+  <text class="small violet" x="335" y="610">cellSize = 1m</text>
+
+  <text class="note" x="555" y="600">整张 Grid 只有一个 origin 和一个 Bounds。</text>
+  <text class="note" x="555" y="625">内部的小格叫 Cell，不叫“小 Grid”。</text>
+</svg>

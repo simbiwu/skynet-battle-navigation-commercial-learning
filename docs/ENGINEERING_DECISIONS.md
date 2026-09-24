@@ -1,12 +1,14 @@
 # Engineering Decisions
 
-## D001 - 三课，不是两课
+## D001 - 三课主线先完成可交互战斗，Polygon NavMesh 为可选第四课
 
-Lesson 1 / 2 完整实现商业级 2.5D Grid。
+Lesson 1 / 2 完成 2.5D Grid、A*、动态占位和确定性 BattleWorker。
 
-Lesson 3 增加 Recast / Detour Polygon NavMesh。
+Lesson 3 完成人工控制 Player、Server AI GroundEnemy/FlyingEnemy、固定离地空中导航、三类技能、状态/事件同步和 Unity 表现闭环。
 
-第三课不是用来“修掉前两课的教学实现”。
+Recast / Detour Polygon NavMesh 移到 Lesson 4 可选高级专题。典型单层 SLG 可以长期使用 Grid；技能和空中 Air Grid 不依赖 Detour。
+
+本文后续早期决策中写作“Lesson 3”的 Recast/Detour 内容，课程排期统一解释为“可选 Lesson 4”；其技术决策仍保留，不属于前三课前置要求。
 
 ## D002 - Navigation Backend 不在第一课提前抽象
 
@@ -27,9 +29,9 @@ MapRegistry
 
 不提前创建 `AgentProfile / Path / NavigationContext / INavigationBackend`。
 
-Lesson 2 在 A*、Path、动态占位和 BattleWorker 已经有真实用途以后，再从工作中的 Grid 实现提取公共 Navigation Backend Contract。
+Lesson 2 在 A*、Path、动态占位和 BattleWorker 已经有真实用途以后，只稳定当前 Grid 导航调用面，不要求提前完成双 Backend。
 
-Lesson 3 再形成：
+可选 Lesson 4 再形成：
 
 ```text
 INavigationBackend
@@ -64,17 +66,17 @@ Unity 2022.3 LTS 技术基线
 AI Navigation 使用：
 
 ```text
-com.unity.ai.navigation@1.1.5
+com.unity.ai.navigation@1.1.7
 ```
 
-课程操作时由学习者通过 Package Manager 安装，并把解析结果写入 `manifest.json` / lock file；不能自行换成其他补丁版或最新版。
+课程操作时由学习者通过 Package Manager 确认或安装，并把解析结果写入 `manifest.json` / lock file；不能自行换成其他补丁版或最新版。
 
 原因：
 
 - 与当前中国官方发行链一致；
 - 不依赖 Unity 6000.x 海外下载链；
 - 2022.3 / AI Navigation 1.1 已覆盖课程需要的 NavMeshSurface、Modifier、Link、Obstacle 与 NavMesh Query；
-- Lesson 3 Recast/Detour Pipeline 与 Unity 6 无强依赖。
+- 可选 Lesson 4 Recast/Detour Pipeline 与 Unity 6 无强依赖。
 
 不静默切回 Unity 6000.x。
 
@@ -393,7 +395,7 @@ concurrency
 - 会增加认知成本；
 - 容易形成空接口和未来式代码。
 
-Lesson 2 当 `AgentProfile / Path / NavigationContext / FindPath` 已经工作后，再从真实 Grid 实现中提取 Backend Contract。
+Lesson 2 当 `AgentProfile / Path / NavigationContext / FindPath` 已经工作后，只收敛当前 BattleWorker 使用的稳定 Grid 调用面。可选 Lesson 4 第一次出现第二种实现时，再从真实调用者和两个实现中提取 Backend Contract。
 
 这是教学顺序决定，不代表最终商业架构降低标准。
 
@@ -428,3 +430,27 @@ max application payload: 64 KiB
 `.proto` 是唯一权威 Schema。Descriptor 和 C# 类型在构建阶段生成，普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，QueryWorker 和 Native GridMap 不依赖 Protobuf 对象。
 
 这条链只用于第一课查询验收和后续 Unity/Server 通信基础，不把一个 MapService 设计成所有高频导航请求的永久代理。
+
+## D030 - 在线交互与整场回放共用同一个 BattleWorker
+
+第三课同时验证两种 SLG 战斗运行方式：
+
+```text
+在线人工操作：分段接收 PlayerCommand，按 fixed tick 推进
+纯自动战斗：输入准备完成后，不等待墙钟时间，快速模拟到结束
+```
+
+两者共用：
+
+```text
+Battle state
+AI
+Ground/Air navigation
+skill/projectile resolution
+deterministic clock
+ordered BattleEvent
+```
+
+在线模式持续发送 Event，并周期发送 Snapshot 用于加入、重连和状态校正。自动模式返回完整 Event Log，Unity 按逻辑时间回放。
+
+网络收包、等待玩家输入、插值和特效不进入核心 `simulate`。禁止为在线模式和自动回放各写一套战斗规则。
