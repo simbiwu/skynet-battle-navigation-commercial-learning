@@ -132,19 +132,20 @@ int l_query_cell(lua_State* L) {
 
 } // namespace
 
-// 创建当前 Lua State 的 battle_nav 模块 table；Registry 通过闭包 upvalue 注入。
-// 返回值是压在 Lua 栈顶的结果数量 1。
+// 标准 Lua require 入口：为当前 Lua State 创建模块 table，并把进程级 Registry
+// 指针绑定到两个函数的 closure。Registry 由 C++ 单例持有，Lua 只保存 non-owning
+// lightuserdata；本函数不执行文件 I/O、不分配跨调用 scratch、不 yield。
+// 返回 1 表示把栈顶模块 table 交给 require 缓存并返回。
 extern "C" int luaopen_battle_nav(lua_State* L) {
-    luaL_checktype(L, lua_upvalueindex(1), LUA_TLIGHTUSERDATA);
     luaL_checkversion(L);
     lua_newtable(L);
 
-    // 每个导出函数各持有一份相同的非 owning Registry lightuserdata upvalue。
-    lua_pushvalue(L, lua_upvalueindex(1));
+    // 每个 Lua State 得到独立模块 table；closure 指向同一个进程级 immutable 地图目录。
+    lua_pushlightuserdata(L, &MapRegistry::Instance());
     lua_pushcclosure(L, l_load_map, 1);
     lua_setfield(L, -2, "load_map");
 
-    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushlightuserdata(L, &MapRegistry::Instance());
     lua_pushcclosure(L, l_query_cell, 1);
     lua_setfield(L, -2, "query_cell");
     return 1;

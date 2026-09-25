@@ -22,10 +22,7 @@ if(NOT TARGET grid_map_core)
                      "${CMAKE_BINARY_DIR}/grid_map" EXCLUDE_FROM_ALL)
 endif()
 
-add_library(battle_nav_lua MODULE
-    src/lua_battle_nav.cpp
-    src/lua_battle_nav_register.cpp
-)
+add_library(battle_nav_lua MODULE src/lua_battle_nav.cpp)
 target_include_directories(battle_nav_lua PRIVATE
     include
     ../grid_map/include
@@ -33,4 +30,5 @@ target_include_directories(battle_nav_lua PRIVATE
 )
 target_link_libraries(battle_nav_lua PRIVATE grid_map_core)
 target_compile_options(battle_nav_lua PRIVATE -Wall -Wextra -Wpedantic)
-set_target_properties(battle_nav_lua PROPERTIES PREFIX "")
+# Lua 的 require "battle_nav" 按约定查找 battle_nav.so 和 luaopen_battle_nav。
+set_target_properties(battle_nav_lua PROPERTIES PREFIX "" OUTPUT_NAME "battle_nav")

@@ -407,8 +407,9 @@ Lesson 2 当 `AgentProfile / Path / NavigationContext / FindPath` 已经工作�
 Unity WorldPosition
 -> TCP length frame
 -> Protobuf Envelope / QueryCellRequest
--> Skynet Gateway
--> QueryWorker
+-> Navigation Gateway Service
+-> Navigation Query Service
+-> query_logic
 -> battle_nav.so
 -> Protobuf QueryCellResponse
 -> Unity Debug Window
@@ -427,7 +428,7 @@ frame: uint32 big-endian length + Protobuf Envelope
 max application payload: 64 KiB
 ```
 
-`.proto` 是唯一权威 Schema。Descriptor 和 C# 类型在构建阶段生成，普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，QueryWorker 和 Native GridMap 不依赖 Protobuf 对象。
+`.proto` 是唯一权威 Schema。Descriptor 和 C# 类型在构建阶段生成，普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
 
 这条链只用于第一课查询验收和后续 Unity/Server 通信基础，不把一个 MapService 设计成所有高频导航请求的永久代理。
 
@@ -454,3 +455,21 @@ ordered BattleEvent
 在线模式持续发送 Event，并周期发送 Snapshot 用于加入、重连和状态校正。自动模式返回完整 Event Log，Unity 按逻辑时间回放。
 
 网络收包、等待玩家输入、插值和特效不进入核心 `simulate`。禁止为在线模式和自动回放各写一套战斗规则。
+
+## D031 - Skynet Service 入口与 Lua 模块按运行身份分目录
+
+`service/` 只存放由 `skynet.newservice()` 或 `skynet.uniqueservice()` 启动的入口。这里的文件拥有独立 Service Context、消息队列、Lua State、生命周期和 dispatch。
+
+`lualib/` 存放某个 Service 内部通过 `require` 加载的普通模块。`require` 只在当前 Lua State 执行并缓存模块，不创建 Service，也不产生消息边界。
+
+因此第一课固定为：
+
+```text
+service/navigation_query.lua       Query Service 入口
+service/navigation_gateway.lua     Gateway Service 入口
+lualib/navigation/query_logic.lua  Query 内部业务模块
+lualib/network/length_frame.lua    Gateway 内部 framing 工具
+lualib/protocol/navigation_codec.lua  Gateway 内部 codec
+```
+
+启动者保存 `newservice()` 返回的 handle，并显式注入依赖。单节点内不通过全局名字隐藏地址关系，也不让一个 Service 用 `skynet.call` 调用自己。后续 BattleWorker、AI、技能和 Replay 文件继续按同一规则判断目录，不能按“看起来像业务组件”决定是否放入 `service/`。

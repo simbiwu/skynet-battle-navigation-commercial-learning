@@ -43,6 +43,7 @@ Unity 在本项目中只有两个角色：离线资产生产工具和联调/回�
 ## 从这里开始
 
 - 第一课：[从 Unity 地图到 Skynet 查询](docs/Skynet_BattleNavigation第一课_从Unity地图到Skynet查询_实操.md)
+- 第二课：[从 Grid 寻路到 Skynet 自动战斗](docs/Skynet_BattleNavigation第二课_从Grid寻路到Skynet自动战斗_实操.md)
 - Git 入门：[VS Code Git 实操（面向 SVN 使用者）](docs/VS_CODE_GIT_FOR_SVN.md)
 
 仓库当前只初始化本地 `main` 分支。远程仓库地址由项目所有者之后提供。

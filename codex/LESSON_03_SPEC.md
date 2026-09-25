@@ -33,6 +33,10 @@ Server 决定：
 
 Client 不得提交权威位置、命中、伤害或死亡结果。
 
+## Lua 工程目录延续
+
+第三课新增的在线入口、BattleWorker 等真实 Skynet Service 放在 `service/`；技能、AI、弹丸、事件编码等由 Service 在同一 Lua State 内 `require` 的模块放在 `lualib/`。目录取决于运行身份，不取决于文件名听起来是否像 Worker、Gateway 或 System。
+
 ## 地面与空中导航
 
 ```text

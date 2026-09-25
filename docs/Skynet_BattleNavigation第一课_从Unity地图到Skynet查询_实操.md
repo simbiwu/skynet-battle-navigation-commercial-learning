@@ -528,6 +528,8 @@ cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 
 mkdir -p \
   config \
+  lualib/navigation \
+  lualib/network \
   lualib/protocol \
   maps \
   native/grid_map/include \
@@ -535,7 +537,7 @@ mkdir -p \
   native/grid_map/tests \
   protocol/generated \
   scripts/linux \
-  service/nav \
+  service \
   tests/protocol \
   tests/skynet
 ```
@@ -549,7 +551,8 @@ mkdir -p \
 /third_party/skynet/
 /third_party/lua-protobuf/
 /third_party/lua-protobuf-runtime/
-/protocol/generated/*.pb
+/protocol/generated/
+*.orig
 *.so
 *.o
 core
@@ -6140,85 +6143,44 @@ int l_query_cell(lua_State* L) {
 
 } // namespace
 
-// 创建当前 Lua State 的 battle_nav 模块 table；Registry 通过闭包 upvalue 注入。
-// 返回值是压在 Lua 栈顶的结果数量 1。
+// 标准 Lua require 入口：创建当前 Lua State 的模块 table，并把进程级 Registry
+// 指针绑定到两个函数的 closure；不执行文件 I/O、不分配跨调用 scratch、不 yield。
+// 返回 1 表示把栈顶模块 table 交给 require 缓存并返回。
 extern "C" int luaopen_battle_nav(lua_State* L) {
-    luaL_checktype(L, lua_upvalueindex(1), LUA_TLIGHTUSERDATA);
     luaL_checkversion(L);
     lua_newtable(L);
 
-    // 每个导出函数各持有一份相同的非 owning Registry lightuserdata upvalue。
-    lua_pushvalue(L, lua_upvalueindex(1));
+    // 每个 Lua State 有独立模块 table；closure 指向同一个进程级只读地图目录。
+    lua_pushlightuserdata(L, &MapRegistry::Instance());
     lua_pushcclosure(L, l_load_map, 1);
     lua_setfield(L, -2, "load_map");
 
-    lua_pushvalue(L, lua_upvalueindex(1));
+    lua_pushlightuserdata(L, &MapRegistry::Instance());
     lua_pushcclosure(L, l_query_cell, 1);
     lua_setfield(L, -2, "query_cell");
     return 1;
 }
 ```
 
-上面 `luaopen_battle_nav` 需要在注册时绑定 `MapRegistry*` upvalue。为避免不同 Lua 版本的 `luaL_requiref` 签名混乱，工程里使用一个明确的注册函数：
-
-操作：新建模块注册文件，并粘贴下面的完整代码。
-
-新建文件：`native/lua_battle_nav/src/lua_battle_nav_register.cpp`
-
-```cpp
-// 职责：把进程级 MapRegistry 指针绑定为当前 Lua 模块的只读 upvalue。
-// 边界：Server 启动接线；每个 Lua State 初始化一次。
-// 输入/输出：lua_State + Registry -> 全局 battle_nav 模块 table。
-// 不负责：不加载地图，不执行查询，不跨 Lua State 共享 table。
-#include "lua_battle_nav.h"
-#include "map_registry.h"
-
-extern "C" {
-#include <lua.h>
-#include <lauxlib.h>
-}
-
-// 在启动阶段把非 owning registry 指针绑定进模块闭包，并设置全局 battle_nav。
-// L 独占当前 Service 的 Lua State；本函数不加载地图、不 yield，成功返回 0。
-extern "C" int battle_nav_register(lua_State* L,
-                                    battle_nav::MapRegistry* registry) {
-    lua_pushlightuserdata(L, registry);
-    lua_pushcclosure(L, luaopen_battle_nav, 1);
-    lua_call(L, 0, 1);
-    lua_setglobal(L, "battle_nav");
-    return 0;
-}
-```
-
-实际接入 Skynet 时只在服务初始化阶段调用一次 `battle_nav_register`。多个 Service 可以共享 immutable 地图；每个 Service 的 Lua State 只拥有自己的模块 table。任何临时查询数据都在栈和局部变量里，不能放在 C++ 全局可写 scratch。
-
-#### 两个实现文件怎样协作
-
-`lua_battle_nav_register.cpp` 负责启动接线。它把进程级 `MapRegistry*` 作为 light userdata 压栈，再用 `lua_pushcclosure` 把这个指针保存为 `luaopen_battle_nav` 的第一个 upvalue：
-
-```text
-MapRegistry* 压栈
--> 创建携带该指针的 luaopen_battle_nav closure
--> 调用 closure，得到模块 table
--> lua_setglobal 保存为全局 battle_nav
-```
-
-upvalue 可以理解为 C 函数随身携带的上下文。它不属于普通调用参数，所以 `l_query_cell()` 读取 map_id 时仍然使用栈索引 `1`；读取 Registry 时使用独立的伪索引：
-
-```cpp
-lua_upvalueindex(1)
-```
-
-`lua_battle_nav.cpp` 负责具体调用。`luaopen_battle_nav()` 创建模块 table，并把同一个 Registry 指针继续绑定到 `l_load_map` 和 `l_query_cell` 两个 closure。Lua 最终看到：
+`luaopen_battle_nav()` 是标准 Lua C Module 入口。Service 使用：
 
 ```lua
-battle_nav.load_map(...)
-battle_nav.query_cell(...)
+local battle_nav = require "battle_nav"
 ```
 
-这里的 light userdata 只保存地址，不拥有或释放 `MapRegistry`。所以生命周期合同是：进程级 `MapRegistry` 必须比使用它的 Lua State 活得更久。当前 `MapRegistry::Instance()` 满足这个条件。
+`require` 加载 `battle_nav.so`，寻找 `luaopen_battle_nav`，并缓存返回的模块 table。入口函数把 `MapRegistry::Instance()` 地址作为 light userdata 分别绑定到 `l_load_map` 和 `l_query_cell`：
 
-`extern "C"` 让导出函数使用稳定的 C ABI 符号名，避免 C++ name mangling。函数实现仍然是 C++，可以继续使用 `MapRegistry`、`shared_ptr` 和 `NavResult`。
+```text
+require "battle_nav"
+-> luaopen_battle_nav
+-> 创建模块 table
+-> 为 load_map/query_cell closure 绑定 MapRegistry* upvalue
+-> 返回并缓存模块 table
+```
+
+upvalue 不属于普通调用参数，所以 `l_query_cell()` 仍从栈索引 `1` 读取 map_id；内部通过 `lua_upvalueindex(1)` 取得 Registry。每个 Lua State 有自己的 Lua 模块 table，所有 State 的 closure 指向同一个进程级 Registry。light userdata 不拥有或释放 Registry，Registry 单例活到进程退出。
+
+这里不再额外创建 `lua_battle_nav_register.cpp`，也不向 Lua 全局表写入 `battle_nav`。需要 Native 导航的 Service 在自己的 Lua State 中显式 `require`，依赖关系能直接从文件顶部看到。
 
 ### 25.3 Binding 的 CMake 目标
 
@@ -6251,10 +6213,7 @@ if(NOT TARGET grid_map_core)
                      "${CMAKE_BINARY_DIR}/grid_map" EXCLUDE_FROM_ALL)
 endif()
 
-add_library(battle_nav_lua MODULE
-    src/lua_battle_nav.cpp
-    src/lua_battle_nav_register.cpp
-)
+add_library(battle_nav_lua MODULE src/lua_battle_nav.cpp)
 target_include_directories(battle_nav_lua PRIVATE
     include
     ../grid_map/include
@@ -6262,29 +6221,48 @@ target_include_directories(battle_nav_lua PRIVATE
 )
 target_link_libraries(battle_nav_lua PRIVATE grid_map_core)
 target_compile_options(battle_nav_lua PRIVATE -Wall -Wextra -Wpedantic)
-set_target_properties(battle_nav_lua PROPERTIES PREFIX "")
+# require "battle_nav" 查找 battle_nav.so 和 luaopen_battle_nav。
+set_target_properties(battle_nav_lua PROPERTIES PREFIX "" OUTPUT_NAME "battle_nav")
 ```
 
 本工程当前 Skynet 源码树内置 PUC Lua 5.4.7。Binding 直接包含同一源码树的头文件；Skynet 加载模块时，由进程内的同一份 Lua Runtime 提供 Lua C API 符号。这样不会因为机器额外安装了另一份 Lua 而混用 ABI。
 
-## 26. Skynet 服务：先完成 Lua 内部查询，再接 TCP
+## 26. Skynet 服务：把 Service 和普通 Lua 模块分开
 
-为了让故障定位有层次，先写一个不经过 TCP 的服务调用。这样可以区分“地图/Biding 错误”和“协议/网络错误”。服务之间仍然遵守 Skynet 的 ownership/yield 规则：加载地图只发生在启动阶段；一次查询不在 C++ 模块里 yield；Lua 服务可以在消息边界 yield，但不会把正在构建的响应 table 共享给别的协程。
+现在需要两个真正独立的运行单元：Query Service 拥有静态地图查询入口，Gateway Service 拥有监听端口和连接协程。它们由 `skynet.newservice()` 创建，各自拥有 Service Context、消息队列和 Lua State。
+
+业务计算、协议编解码和长度帧只是 Service 内部使用的普通 Lua 模块，放进 `lualib/` 并通过 `require` 加载。`require` 不创建 Service，不产生新 Lua State，也不建立消息边界。
+
+本工程从这里开始固定目录规则：
+
+```text
+service/  只放 newservice/uniqueservice 启动的 Service 入口
+lualib/   只放同一 Lua State 内由 require 加载的普通模块
+```
 
 ### 26.1 服务目录
 
 ```text
 service/
   main.lua
-  nav/
-    bootstrap.lua
-    query_worker.lua
-    tcp_gateway.lua
+  navigation_query.lua
+  navigation_gateway.lua
+lualib/
+  navigation/
+    query_logic.lua
+  network/
+    length_frame.lua
+  protocol/
+    navigation_codec.lua
 protocol/
-  codec.lua
+  navigation_query.proto
+  generated/server/navigation_query.pb
 config/
   game.lua
+  skynet.lua
 ```
+
+`protocol/` 保存 `.proto` 源和生成物；运行期 `require` 的 codec 放在 `lualib/protocol/`。文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -6293,10 +6271,11 @@ config/
 新建文件：`config/game.lua`
 
 ```lua
--- 职责：集中声明游戏 Server 的监听、协议和静态地图启动参数。
--- 边界：Server 启动配置；由 main、bootstrap 和 gateway 只读使用。
--- 输入/输出：无运行时输入 -> 一张配置 table。
--- 不负责：不加载地图、不打开端口、不保存动态状态。
+-- 职责：集中声明导航查询 Server 的监听、协议和静态地图启动参数。
+-- 边界：Server Runtime Config；由各 Service 在自己的 Lua State 中只读加载。
+-- 输入/输出：无运行时输入 -> 一张进程配置 table。
+-- 生命周期：每个 Lua State 由 require 缓存一份；启动完成后不得修改。
+-- 不负责：不加载地图、不打开端口、不保存连接或战斗动态状态。
 return {
     host = "127.0.0.1",          -- TCP 监听地址；开发环境默认只允许本机访问。
     port = 19001,                 -- TCP 监听端口。
@@ -6306,7 +6285,7 @@ return {
     map = {
         id = 1001,                       -- BMAP Header 和协议共用的 uint32 地图 ID。
         version = 1,                     -- 必须与 BMAP Header 一致。
-        bmap = "maps/battle_1001.bmap", -- 启动目录下的资产路径。
+        bmap = "maps/battle_1001.bmap", -- 相对 Server 工作目录的地图资产路径。
     },
 }
 ```
@@ -6315,15 +6294,17 @@ return {
 
 ### 26.3 Protobuf codec
 
-操作：新建 Protobuf codec 文件，并粘贴下面的完整代码。
+这个文件是 Gateway Lua State 内的普通运行库。它不拥有 Socket 和 Service 生命周期，因此放入 `lualib/protocol/`。
 
-新建文件：`protocol/codec.lua`
+操作：把已经创建的 `protocol/codec.lua` 移动并完整替换为下面内容。
+
+移动并完整替换：`protocol/codec.lua` -> `lualib/protocol/navigation_codec.lua`
 
 ```lua
 -- 职责：集中封装导航协议的 Protobuf descriptor 加载和消息编解码。
--- 边界：Server Protocol；只处理 Protobuf bytes，不处理 TCP framing。
+-- 边界：Server Runtime Library；只处理 Protobuf bytes，不处理 TCP framing。
 -- 输入/输出：Lua table <-> Protobuf bytes。
--- 生命周期：descriptor 在 bootstrap 阶段加载一次，类型名为模块只读常量。
+-- 生命周期：每个使用者的 Lua State 各自加载 descriptor；类型名是只读常量。
 -- 不负责：不打开 Socket，不调用地图，不吞掉解码错误。
 local pb = require "pb"
 
@@ -6334,10 +6315,10 @@ M.RESPONSE = ".battle.navigation.v1.QueryCellResponse"
 
 -- 启动阶段从 path 读取 descriptor 并注册消息类型；文件或格式错误直接抛错终止启动。
 function M.load_descriptor(path)
-    local f = assert(io.open(path, "rb"))
-    local data = f:read("*a")
-    f:close()
-    assert(pb.load(data), "cannot load protobuf descriptor: " .. path)
+    local file = assert(io.open(path, "rb"))
+    local bytes = file:read("*a")
+    file:close()
+    assert(pb.load(bytes), "cannot load protobuf descriptor: " .. path)
 end
 
 -- 把命令号、请求 ID、body bytes 和协议版本编码成 Envelope bytes；失败抛错。
@@ -6357,11 +6338,6 @@ function M.decode_envelope(bytes)
     return value
 end
 
--- 编码一个已完成业务校验的 QueryCellRequest table。
-function M.encode_query_request(value)
-    return assert(pb.encode(M.REQUEST, value))
-end
-
 -- 解码 QueryCellRequest bytes；失败抛错，由 Gateway 的 pcall 转成连接错误。
 function M.decode_query_request(bytes)
     return assert(pb.decode(M.REQUEST, bytes))
@@ -6372,33 +6348,30 @@ function M.encode_query_response(value)
     return assert(pb.encode(M.RESPONSE, value))
 end
 
--- 解码 QueryCellResponse bytes，供测试或客户端侧 Lua 工具使用。
-function M.decode_query_response(bytes)
-    return assert(pb.decode(M.RESPONSE, bytes))
-end
-
 return M
 ```
 
-`pb.load` 只在 bootstrap 阶段执行一次；不要在每个请求里读 descriptor。lua-protobuf 的错误必须转成服务层明确错误，不能让 malformed bytes 直接穿过 `pcall` 后变成空响应。
+`pb` 的 descriptor registry 属于当前 Lua State，所以 Gateway Service 在启动阶段加载一次。不要在每个请求中读取 descriptor。
 
-### 26.4 查询 Worker
+### 26.4 查询业务模块
 
-操作：新建查询 Worker，并粘贴下面的完整代码。
+这段逻辑只在 Query Service 的 Lua State 内执行，不需要独立消息队列。名称使用 `query_logic`，避免让 `worker` 暗示它是另一个 Service。
 
-新建文件：`service/nav/query_worker.lua`
+操作：把已经创建的查询模块移动并完整替换为下面内容。
+
+移动并完整替换：`service/nav/query_worker.lua` -> `lualib/navigation/query_logic.lua`
 
 ```lua
 -- 职责：校验 QueryCell 业务请求并调用 Native 静态地图查询。
--- 边界：Server Service Logic；一次请求内不执行外部 skynet.call。
+-- 边界：Server Runtime Library；只由 navigation_query Service 持有和调用。
 -- 输入/输出：QueryCellRequest table -> QueryCellResponse table。
 -- 生命周期：config 在 start 时设置一次；响应 table 归当前消息协程所有。
--- 不负责：不处理 TCP、不做寻路、不保存动态单位。
+-- 不负责：不处理 TCP、不执行跨 Service call、不做寻路、不保存动态单位。
 local skynet = require "skynet"
-local codec = require "protocol.codec"
+local battle_nav = require "battle_nav"
 
 local M = {}
-local config
+local config -- 当前 Query Service 私有的只读配置；start 成功后不再替换。
 
 local RESULT = {
     OK = 1,
@@ -6420,8 +6393,8 @@ end
 
 -- 启动时保存只读 options 并加载唯一课程地图；失败直接阻止服务就绪。
 function M.start(options)
+    assert(config == nil, "navigation query logic already started")
     config = assert(options)
-    assert(battle_nav, "battle_nav native module is not registered")
     local loaded, err = battle_nav.load_map(config.map.bmap)
     assert(loaded, err and (err.code .. ": " .. err.message) or "load_map failed")
     assert(loaded.map_id == config.map.id, "BMAP map_id does not match config")
@@ -6433,8 +6406,9 @@ end
 -- 返回新的响应 table；不 yield、不修改共享地图，Native panic 被收敛为 INTERNAL_ERROR。
 function M.query(request)
     if type(request) ~= "table" or type(request.map_id) ~= "number" or
+       type(request.map_version) ~= "number" or
        type(request.position) ~= "table" then
-        return result_error("BAD_REQUEST", "missing map_id or position")
+        return result_error("BAD_REQUEST", "missing map identity or position")
     end
     if request.map_id ~= config.map.id then
         return result_error("MAP_NOT_FOUND", "map is not loaded")
@@ -6474,45 +6448,48 @@ return M
 
 这里故意没有 `Path`、`AgentProfile`、`NavigationContext` 或 `BattleWorker`。本课行为只是静态地图查询，代码中的对象数量应该和行为需求相匹配。
 
-### 26.5 Bootstrap
+### 26.5 创建真正的 Query Service
 
-操作：新建导航启动服务，并粘贴下面的完整代码。
+这里需要独立消息队列和独立 Lua State，所以使用真正的 Service 入口。它由后面的 `main.lua` 通过 `skynet.newservice("navigation_query")` 创建。
 
-新建文件：`service/nav/bootstrap.lua`
+已经创建的 `service/nav/bootstrap.lua` 不再使用，请删除。它只是被 `require` 的普通模块，却注册了当前 `main` Service 的名字，随后导致 Gateway 按名字 `skynet.call` 自己。
 
-```lua
--- 职责：初始化查询 Worker，并注册 NAV_QUERY 的 Lua 消息入口。
--- 边界：Skynet Service Bootstrap；负责 dispatch 接线，不解释 TCP frame。
--- 输入/输出：只读课程配置 -> 可被 skynet.call 的 NAV_QUERY 服务。
--- 生命周期：服务启动时调用一次；dispatch 随 Service 生命周期存在。
--- 不负责：不监听端口、不执行 Protobuf 编解码。
-local skynet = require "skynet"
-local query_worker = require "service.nav.query_worker"
+操作：删除旧 Bootstrap，新建 Query Service 入口。
 
-local M = {}
-
--- 启动 Query Worker 并注册 NAV_QUERY dispatch；config 在服务生命周期内只读。
-function M.start(config)
-    query_worker.start(config)
-    local address = skynet.self()
-    skynet.register("NAV_QUERY")
-    skynet.dispatch("lua", function(_, source, command, payload)
-        if command == "query_cell" then
-            local request = assert(payload)
-            local response = query_worker.query(request)
-            skynet.ret(skynet.pack(response))
-        else
-            error("unknown NAV_QUERY command: " .. tostring(command))
-        end
-    end)
-    skynet.error("NAV_QUERY_READY ", address, " map=", config.map.id,
-                 " version=", config.map.version)
-end
-
-return M
+```text
+删除文件：service/nav/bootstrap.lua
+新建文件：service/navigation_query.lua
 ```
 
-`query_cell` 是单次同步 C++ 查询。它没有跨服务 `skynet.call`，因此不会把本课的静态查询变成隐藏的服务链。后续 BattleWorker 需要每场战斗自己的上下文时，再按 Lesson 2 的执行链设计。
+```lua
+-- 职责：拥有第一课静态地图查询入口，并响应 Gateway 发来的 QueryCell 消息。
+-- 边界：Skynet Service；拥有独立 Lua State 和消息队列，不处理 TCP/Protobuf。
+-- 输入/输出：Lua 协议 query_cell + request table -> response table。
+-- 生命周期：进程启动时创建一次；启动阶段加载 BMAP，运行期只读查询。
+-- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
+local skynet = require "skynet"
+local config = require "config.game"
+local query_logic = require "navigation.query_logic"
+
+-- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
+-- query_cell handler 内部不 yield，响应 table 由 skynet.pack 复制发送。
+skynet.start(function()
+    query_logic.start(config)
+
+    skynet.dispatch("lua", function(_, _, command, payload)
+        if command ~= "query_cell" then
+            error("unknown navigation_query command: " .. tostring(command))
+        end
+        local response = query_logic.query(assert(payload, "query payload is required"))
+        skynet.ret(skynet.pack(response))
+    end)
+
+    skynet.error("NAV_QUERY_READY address=", skynet.address(skynet.self()),
+                 " map=", config.map.id, " version=", config.map.version)
+end)
+```
+
+这里没有 `skynet.register("NAV_QUERY")`。`main.lua` 会保留 `newservice()` 返回的数字地址，再把地址注入 Gateway。Query Service 的消息处理函数是 `skynet.dispatch()`；`query_logic.query()` 是同一 Lua State 内的普通函数调用，不 yield。
 
 ## 27. TCP 长度帧：把 Protobuf 安全送到 Skynet
 
@@ -6527,15 +6504,18 @@ length bytes Envelope protobuf
 
 ### 27.1 Lua 长度帧工具
 
+长度帧没有独立生命周期，只被 Gateway `require`，因此属于 `lualib/`。
+
 操作：新建 Lua 长度帧工具，并粘贴下面的完整代码。
 
-新建文件：`service/nav/frame.lua`
+新建文件：`lualib/network/length_frame.lua`
 
 ```lua
 -- 职责：实现 4-byte Big Endian 长度头的打包与增量拆包。
--- 边界：Server Transport；payload 对本模块是不透明 bytes。
+-- 边界：Server Runtime Library；payload 对本模块是不透明 bytes。
 -- 输入/输出：payload 或累计 buffer -> frame，或一个 payload + 剩余 buffer。
--- 不负责：不解析 Protobuf、不访问 Socket、不执行查询。
+-- 生命周期：无状态模块；返回字符串均由调用协程持有。
+-- 不负责：不解析 Protobuf、不访问 Socket、不执行业务查询。
 local M = {}
 
 -- 把 0..2^32-1 的整数 n 编码成 4-byte Big Endian 字符串；越界 assert。
@@ -6579,27 +6559,34 @@ end
 return M
 ```
 
-### 27.2 TCP Gateway
+### 27.2 TCP Gateway Service
 
-操作：新建 TCP Gateway，并粘贴下面的完整代码。
+Gateway 拥有监听 fd、连接协程和跨 Service 调用，因此它是真正的 Skynet Service。已经创建的 `service/nav/tcp_gateway.lua` 如果存在，请删除；它把 Service 入口写成了普通模块。
 
-新建文件：`service/nav/tcp_gateway.lua`
+操作：删除旧文件，新建 Gateway Service 入口。
+
+```text
+删除文件：service/nav/tcp_gateway.lua（如果存在）
+新建文件：service/navigation_gateway.lua
+```
 
 ```lua
--- 职责：接受 TCP 连接，处理半包/粘包并把合法 QueryCell 转发给 NAV_QUERY。
--- 边界：Skynet Transport Gateway；Socket 归对应 client_loop 协程所有。
--- 输入/输出：TCP frame -> Protobuf 请求 -> NAV_QUERY 响应 frame。
--- 生命周期：listen fd 随 Gateway 服务存在；client fd 在退出路径统一关闭。
--- 不负责：不直接访问 GridMap，不在 C++ 中保存 fd，不实现战斗模拟。
+-- 职责：监听 TCP、处理长度帧和 Protobuf，并把合法 QueryCell 转发给 Query Service。
+-- 边界：Skynet Gateway Service；拥有 listen fd 和每连接 client coroutine。
+-- 输入/输出：TCP bytes -> QueryCell request -> TCP response bytes。
+-- 生命周期：由 main 创建；start 消息只允许执行一次，连接 fd 在退出路径关闭。
+-- 不负责：不加载 BMAP、不直接调用 Native、不保存战斗状态。
 local skynet = require "skynet"
 local socket = require "skynet.socket"
-local frame = require "service.nav.frame"
-local codec = require "protocol.codec"
+local config = require "config.game"
+local frame = require "network.length_frame"
+local codec = require "protocol.navigation_codec"
 
-local M = {}
+local query_service -- main 注入的 Query Service 地址；start 成功后只读。
+local listen_fd     -- Gateway 持有的监听 fd；Service 退出时由 Skynet 回收。
 
 -- 编码业务 response，并沿 fd 写出一个完整长度帧；fd 仍归 client_loop 所有。
-local function send_response(fd, config, request_id, response)
+local function send_response(fd, request_id, response)
     local body = codec.encode_query_response(response)
     local envelope = codec.encode_envelope(
         config.query_cell_command, request_id, body, config.protocol_version)
@@ -6608,7 +6595,8 @@ end
 
 -- 独占一个 client fd，累计处理半包/粘包；协议错误或 EOF 时关闭连接并返回。
 -- 每个完整合法请求只执行一次 skynet.call；函数自身可在 Socket/Service 调用处 yield。
-local function client_loop(fd, config)
+local function client_loop(fd)
+    assert(socket.start(fd), "cannot start accepted socket")
     local buffer = ""
     while true do
         local chunk = socket.read(fd)
@@ -6642,52 +6630,104 @@ local function client_loop(fd, config)
                 socket.close(fd)
                 return
             end
-            local response = skynet.call("NAV_QUERY", "lua", "query_cell", request)
-            send_response(fd, config, envelope.request_id, response)
+            -- 这里是 Gateway 与 Query 两个 Service 的明确边界；call 会 yield。
+            local response = skynet.call(query_service, "lua", "query_cell", request)
+            send_response(fd, envelope.request_id, response)
         end
     end
     socket.close(fd)
 end
 
--- 监听 config.host:port，并为每条连接 fork 独立 client_loop；返回 listen fd。
-function M.start(config)
-    local listen_fd = socket.listen(config.host, config.port)
-    socket.start(listen_fd, function(fd, addr)
-        skynet.error("NAV_TCP_ACCEPT fd=", fd, " addr=", addr)
-        skynet.fork(client_loop, fd, config)
-    end)
-    skynet.error("NAV_TCP_READY ", config.host, ":", config.port)
-    return listen_fd
+-- 启动监听并保存 Query Service 地址；由 main 通过 skynet.call 调用一次。
+local function start(query_address)
+    assert(query_service == nil, "navigation gateway already started")
+    query_service = assert(query_address, "query service address is required")
+    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
+
+    listen_fd = assert(socket.listen(config.host, config.port))
+    assert(socket.start(listen_fd, function(fd, address)
+        skynet.error("NAV_TCP_ACCEPT fd=", fd, " address=", address)
+        skynet.fork(client_loop, fd)
+    end))
+    skynet.error("NAV_TCP_READY ", config.host, ":", config.port,
+                 " query=", skynet.address(query_service))
+    return true
 end
 
-return M
+-- 先安装 dispatch，再等待 main 注入依赖；Service 之间只传地址和请求副本。
+skynet.start(function()
+    skynet.dispatch("lua", function(_, _, command, ...)
+        if command == "start" then
+            skynet.retpack(start(...))
+            return
+        end
+        error("unknown navigation_gateway command: " .. tostring(command))
+    end)
+end)
 ```
 
-Skynet 不同小版本的 `socket.start` 回调参数可能有细微差异。以当前仓库里实际的 `lualib/skynet/socket.lua` 为准核对一次；如果参数顺序不同，只改这一个 Gateway，不改变协议和 Query Worker。文档中的关键约束是：半包/粘包必须处理、长度必须限流、错误帧必须关闭连接、业务查询不把 client fd 传到 C++。
+当前固定的 Skynet v1.8.0 中，监听 fd 的回调参数是 `(accepted_fd, remote_address)`。每个 accepted fd 必须先执行 `socket.start(fd)`，随后才能 `socket.read(fd)`。Gateway 在 `skynet.call(query_service, ...)` 处 yield；Query Service 处理期间不回调 Gateway 的可变连接状态。
 
-## 28. 启动 Skynet 并验证 Server 内部链路
+## 28. 启动 Skynet 并验证 Service 链路
 
 操作：新建课程 Server 入口文件；如果脚手架已生成同名文件，则完整替换其内容。
 
 新建或完整替换文件：`service/main.lua`
 
 ```lua
--- 职责：按 descriptor -> 查询服务 -> TCP Gateway 的顺序启动第一课 Server。
+-- 职责：创建 Query/Gateway 两个 Service，并显式注入它们之间的地址依赖。
 -- 边界：Skynet 进程入口；只做模块组装和启动顺序控制。
--- 输入/输出：game 配置和已生成资产 -> 可接受查询的服务进程。
--- 不负责：不实现具体查询、framing 或地图解析。
+-- 输入/输出：config/skynet.lua 启动本文件 -> 两个可运行的业务 Service。
+-- 生命周期：完成接线后退出；已创建 Service 继续独立运行。
+-- 不负责：不加载 BMAP、不监听端口、不执行查询或协议编解码。
 local skynet = require "skynet"
-local config = require "config.game"
-local codec = require "protocol.codec"
-local bootstrap = require "service.nav.bootstrap"
-local gateway = require "service.nav.tcp_gateway"
 
+-- Query 先完成地图加载，Gateway 再监听，避免端口就绪时依赖尚未可用。
 skynet.start(function()
-    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
-    bootstrap.start(config)
-    gateway.start(config)
+    local query_service = skynet.newservice("navigation_query")
+    local gateway_service = skynet.newservice("navigation_gateway")
+    assert(skynet.call(gateway_service, "lua", "start", query_service))
+
+    skynet.error("NAV_SERVER_READY query=", skynet.address(query_service),
+                 " gateway=", skynet.address(gateway_service))
+    skynet.exit()
 end)
 ```
+
+这里的两个变量都是真正的 Service handle。`main` 不通过 `require` 假装创建 Service，也不注册 `NAV_QUERY` 全局名字。
+
+Skynet 可执行文件接收的是进程配置文件。下面的配置把本工程 `service/`、`lualib/` 和 Native `.so` 路径接入 Skynet Loader。
+
+操作：新建 Skynet 进程配置。
+
+新建文件：`config/skynet.lua`
+
+```lua
+-- 职责：声明当前工程的 Skynet 进程启动参数和 Lua/C 模块搜索路径。
+-- 边界：Server Runtime Bootstrap；由 skynet 可执行文件在创建 Service 前读取。
+-- 输入/输出：仓库内固定目录 -> main Service 及其运行时加载路径。
+-- 生命周期：进程启动时读取一次；不会进入业务 Service 的 Lua State。
+-- 不负责：不加载 BMAP、不监听业务端口、不包含业务配置。
+local skynet_root = "./third_party/skynet/"
+
+thread = 4
+harbor = 0
+logger = nil
+start = "main"
+bootstrap = "snlua bootstrap"
+
+luaservice = "./service/?.lua;" .. skynet_root .. "service/?.lua"
+lualoader = skynet_root .. "lualib/loader.lua"
+lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
+           skynet_root .. "lualib/?.lua;" ..
+           skynet_root .. "lualib/?/init.lua"
+lua_cpath = "./build/lua_battle_nav/?.so;" ..
+            "./third_party/lua-protobuf-runtime/?.so;" ..
+            skynet_root .. "luaclib/?.so"
+cpath = skynet_root .. "cservice/?.so"
+```
+
+`harbor = 0` 明确第一课是单节点进程，也进一步说明这里不需要无点号的全局服务名。
 
 操作：新建 Server 启动脚本，并粘贴下面的完整内容。
 
@@ -6695,16 +6735,23 @@ end)
 
 ```bash
 #!/usr/bin/env bash
-# 职责：设置 Native 模块搜索路径并以前台方式启动课程 Skynet 进程。
+# 职责：从仓库内固定配置以前台方式启动 Battle Navigation Skynet 进程。
 # 边界：Server Runtime Launcher；不构建源码，不生成资产。
 # 输入/输出：已完成的构建产物和配置 -> 当前 shell 中的 Skynet 进程。
+# 生命周期：使用 exec 让 Skynet 接管当前进程和退出码。
+# 不负责：不自动修复缺失依赖，不后台守护，不修改配置。
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$ROOT"
+SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$SERVER_ROOT"
 
-export LD_LIBRARY_PATH="$ROOT/native/grid_map/build:$ROOT/native/lua_battle_nav/build:${LD_LIBRARY_PATH:-}"
-exec "$ROOT/third_party/skynet/skynet" "$ROOT/service/main.lua"
+test -x third_party/skynet/skynet
+test -f build/lua_battle_nav/battle_nav.so
+test -f third_party/lua-protobuf-runtime/pb.so
+test -f protocol/generated/server/navigation_query.pb
+test -f maps/battle_1001.bmap
+
+exec third_party/skynet/skynet config/skynet.lua
 ```
 
 启动前检查：
@@ -6713,7 +6760,7 @@ exec "$ROOT/third_party/skynet/skynet" "$ROOT/service/main.lua"
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 test -f maps/battle_1001.bmap
 test -f protocol/generated/server/navigation_query.pb
-test -f native/lua_battle_nav/build/battle_nav_lua.so
+test -f build/lua_battle_nav/battle_nav.so
 scripts/linux/run_server.sh
 ```
 
@@ -6723,37 +6770,10 @@ scripts/linux/run_server.sh
 PROTO_DESCRIPTOR_OK
 NAV_QUERY_READY ... map=1001 version=1
 NAV_TCP_READY 127.0.0.1:19001
+NAV_SERVER_READY query=:... gateway=:...
 ```
 
-若只看到 `NAV_QUERY_READY` 没有 `NAV_TCP_READY`，先检查 Skynet socket 模块和端口占用；不要把问题归因到 BMAP。
-
-### 28.1 Lua 内部 smoke test
-
-操作：新建 Lua smoke test，并粘贴下面的完整代码。
-
-新建文件：`scripts/linux/query_smoke.lua`
-
-```lua
--- 职责：绕过 TCP，直接验证 Skynet -> NAV_QUERY -> Native GridMap 内部链路。
--- 边界：Server Smoke Test；运行完一次请求即退出。
--- 输入/输出：固定 WorldPosition 查询 -> 日志结果或 assert 失败。
--- 不负责：不验证网络 framing，不要求测试点一定可走。
-local skynet = require "skynet"
-
-skynet.start(function()
-    local response = skynet.call("NAV_QUERY", "lua", "query_cell", {
-        map_id = 1001,
-        map_version = 1,
-        position = { x_mm = 0, y_mm = 0, z_mm = 0 },
-    })
-    assert(response.result ~= nil)
-    skynet.error("QUERY_SMOKE result=", response.result,
-                 " grid=", response.grid_x, ",", response.grid_z)
-    skynet.exit()
-end)
-```
-
-第一次 smoke test 不要求坐标一定可走；它验证的是 descriptor、Lua dispatch、C Binding、MapRegistry 和 BMAP reader 都能形成闭环。坐标语义测试由 Unity 导出报告和 C++ 测试共同保证。
+日志顺序证明真实链路已经建立：Query Service 先加载地图，Gateway Service 再监听端口，最后 main 报告两个地址。若只有 `NAV_QUERY_READY`，检查 descriptor、端口和 Gateway 启动错误；不要改回全局名字或把 Gateway 合并进 Query Service。
 
 ## 29. Unity C# Protobuf 客户端
 
@@ -7243,17 +7263,17 @@ grid_z = floor((10501 - 10000) / 500) = 1
 
 ### 32.3 LuaPanda 与 gdb
 
-LuaPanda 断点放在 `service/nav/query_worker.lua` 的 `M.query`，观察 request 和 response。C++ 调试：
+LuaPanda 断点放在 `lualib/navigation/query_logic.lua` 的 `M.query`，观察 request 和 response；Gateway 的跨 Service yield 断点放在 `service/navigation_gateway.lua` 调用 `skynet.call` 的位置。C++ 调试：
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-gdb --args third_party/skynet/skynet service/main.lua
+gdb --args third_party/skynet/skynet config/skynet.lua
 ```
 
 ```gdb
 break battle_nav::BMapReader::Read
 break battle_nav::GridMap::QueryWorld
-break battle_nav_register
+break luaopen_battle_nav
 run
 ```
 

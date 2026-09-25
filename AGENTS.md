@@ -287,6 +287,36 @@ Lesson 2 每场 Battle 才出现 dynamic occupancy。
 - Lesson 2 QueryContext 独立；
 - Lesson 4 Detour QueryContext 独立。
 
+## Skynet 工程目录与运行身份
+
+目录必须表达 Lua 文件的真实运行身份：
+
+```text
+service/
+  只放由 skynet.newservice / skynet.uniqueservice 启动的 Service 入口。
+  入口拥有独立 Service Context、消息队列、Lua State、生命周期和 dispatch。
+
+lualib/
+  只放在某个 Service Lua State 内由 require 加载的普通模块。
+  require 不创建 Service，不创建消息队列，也不形成跨 Service 边界。
+
+protocol/
+  放 .proto 等协议源、版本清单和生成物；运行期 require 的 codec 放 lualib/protocol/。
+
+config/
+  放进程配置和只读业务配置；配置文件不能伪装成 Service 或运行时状态 Owner。
+```
+
+禁止：
+
+- 把只会被 `require` 的模块放进 `service/`；
+- 用 `worker`、`agent`、`gateway` 等名字把普通模块伪装成独立 Service；
+- 通过 `skynet.register` 给当前 Service 起名，再从同一个 Service `skynet.call` 自己；
+- 用全局服务名隐藏本可由启动者显式传递的 Service handle；
+- 在 `protocol/` 下放通过 `require` 加载的运行期业务模块。
+
+启动者默认保存 `newservice()` 返回的 handle，并把 handle 显式注入调用方。只有存在明确的跨启动树发现需求时才注册名字；单节点本地名字使用 `.` 前缀，并说明唯一性、重启和冲突处理。
+
 ## Lesson 2 A*
 
 要求：

@@ -19,7 +19,7 @@ docs/
   REFERENCES.md
   VS_CODE_GIT_FOR_SVN.md
   Skynet_BattleNavigation第一课_从Unity地图到Skynet查询_实操.md
-  LESSON_02_PRACTICAL.md
+  Skynet_BattleNavigation第二课_从Grid寻路到Skynet自动战斗_实操.md
   LESSON_03_PRACTICAL.md
 
 codex/
