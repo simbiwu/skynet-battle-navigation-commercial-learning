@@ -10,7 +10,7 @@ Tuanjie Scene
   -> C++ BMapReader / GridMap / MapRegistry
   -> Lua C Binding
   -> Skynet QueryWorker
-  -> TCP + Protobuf
+  -> socketdriver + netpack + Protobuf
   -> Unity Server Query Window
 ```
 
@@ -547,6 +547,7 @@ mkdir -p \
 ```gitignore
 /build/
 /logs/
+/run/
 /tmp/
 /third_party/skynet/
 /third_party/lua-protobuf/
@@ -6229,9 +6230,9 @@ set_target_properties(battle_nav_lua PROPERTIES PREFIX "" OUTPUT_NAME "battle_na
 
 ## 26. Skynet 服务：把 Service 和普通 Lua 模块分开
 
-现在需要两个真正独立的运行单元：Query Service 拥有静态地图查询入口，Gateway Service 拥有监听端口和连接协程。它们由 `skynet.newservice()` 创建，各自拥有 Service Context、消息队列和 Lua State。
+现在需要两个真正独立的运行单元：Query Service 拥有静态地图查询入口；Gateway Service 直接拥有监听 fd、连接状态和 `PTYPE_SOCKET` 事件分发。它们由 `skynet.newservice()` 创建，各自拥有 Service Context、消息队列和 Lua State。
 
-业务计算、协议编解码和长度帧只是 Service 内部使用的普通 Lua 模块，放进 `lualib/` 并通过 `require` 加载。`require` 不创建 Service，不产生新 Lua State，也不建立消息边界。
+业务计算和 Protobuf 编解码仍是 Service 内部的普通 Lua 模块，放进 `lualib/` 并通过 `require` 加载。TCP 分帧不再自己维护字符串 buffer，而由 Skynet v1.8.0 的 `skynet.netpack` 在 Gateway 的 socket protocol filter 中完成。`require` 不创建 Service，不产生新 Lua State，也不建立消息边界。
 
 本工程从这里开始固定目录规则：
 
@@ -6250,8 +6251,6 @@ service/
 lualib/
   navigation/
     query_logic.lua
-  network/
-    length_frame.lua
   protocol/
     navigation_codec.lua
 protocol/
@@ -6266,9 +6265,11 @@ config/
 
 ### 26.2 配置
 
-操作：新建 Server 进程配置文件，并粘贴下面的完整内容。
+Gateway 改成 `socketdriver + netpack` 后，配置除了监听地址和协议版本，还需要明确连接容量、单连接并发请求上限以及慢连接写缓冲保护。`netpack` 使用 16 位包长，因此应用 payload 上限不能再写成 64 KiB；精确上限是 `65535` bytes。
 
-新建文件：`config/game.lua`
+操作：完整替换 Server 业务配置。
+
+完整替换已有文件：`config/game.lua`
 
 ```lua
 -- 职责：集中声明导航查询 Server 的监听、协议和静态地图启动参数。
@@ -6277,11 +6278,20 @@ config/
 -- 生命周期：每个 Lua State 由 require 缓存一份；启动完成后不得修改。
 -- 不负责：不加载地图、不打开端口、不保存连接或战斗动态状态。
 return {
-    host = "127.0.0.1",          -- TCP 监听地址；开发环境默认只允许本机访问。
-    port = 19001,                 -- TCP 监听端口。
-    protocol_version = 1,        -- Envelope 兼容版本。
-    query_cell_command = 1001,   -- QueryCell 命令号。
-    max_frame_bytes = 64 * 1024, -- 单个 Envelope 最大 byte 数。
+    host = "127.0.0.1",              -- 第一课默认只绑定本机；显式修改后才暴露到其他网卡。
+    port = 19001,                     -- Navigation Gateway TCP 端口。
+    backlog = 128,                    -- listen backlog；不是最大在线连接数。
+    tcp_nodelay = true,               -- 小请求/响应优先减少 Nagle 延迟。
+    max_clients = 1024,               -- 单个课程 Gateway 的连接上限。
+    max_inflight_per_connection = 32, -- 防止单连接无限流水请求堆积跨 Service call。
+    write_warning_close_kb = 1024,    -- Skynet write buffer warning 达到该值时主动断开慢连接。
+
+    protocol_version = 1,             -- Envelope 兼容版本。
+    query_cell_command = 1001,        -- QueryCell 命令号。
+    -- skynet.netpack 的 framing 固定为 2-byte Big Endian uint16 length。
+    -- netpack.pack 对 payload >= 0x10000 直接报错，因此业务上限固定为 65535 bytes。
+    max_frame_bytes = 0xffff,
+
     map = {
         id = 1001,                       -- BMAP Header 和协议共用的 uint32 地图 ID。
         version = 1,                     -- 必须与 BMAP Header 一致。
@@ -6290,7 +6300,9 @@ return {
 }
 ```
 
-端口只绑定回环地址，避免第一课把测试服务暴露到局域网。需要局域网测试时显式把 `host` 改成 `0.0.0.0`，并在启动日志中打印出这一变更。
+这里的 `max_clients` 和 `max_inflight_per_connection` 解决的是两个不同问题：前者限制同时存在的 TCP 连接数，后者限制一个连接在 Gateway `skynet.call(Query Service)` yield 期间能够堆积多少未完成请求。二者都属于接入层保护，不进入 Query/Navigate 业务。
+
+端口继续默认绑定 `127.0.0.1`。需要局域网联调时显式改成 `0.0.0.0`，并同时确认宿主机/WSL 防火墙；不要为了“连得上”把正式配置默认暴露到所有网卡。
 
 ### 26.3 Protobuf codec
 
@@ -6491,174 +6503,505 @@ end)
 
 这里没有 `skynet.register("NAV_QUERY")`。`main.lua` 会保留 `newservice()` 返回的数字地址，再把地址注入 Gateway。Query Service 的消息处理函数是 `skynet.dispatch()`；`query_logic.query()` 是同一 Lua State 内的普通函数调用，不 yield。
 
-## 27. TCP 长度帧：把 Protobuf 安全送到 Skynet
+## 27. TCP framing：`socketdriver + netpack` 的事件驱动 Gateway
 
-协议帧为：
+现在处理第一课网络链路中最接近真实 Skynet Server 的一层。旧实现用 `skynet.socket` 给每个连接启动一个 `client_loop`，然后反复 `socket.read(fd)`，自己维护字符串 buffer、半包和粘包。这个写法可以工作，也适合普通 Lua 网络程序入门，但它把 Skynet 底层已经提供的 socket event 与 `netpack` 分帧能力重新做了一遍。
 
-```text
-4 bytes unsigned length, big-endian
-length bytes Envelope protobuf
-```
-
-`length` 只描述 Envelope 字节数，最大 64 KiB。网络层不能依赖一次 `socket.read` 就得到完整消息，也不能把一次 `read` 得到的多个消息当成一个 protobuf。
-
-### 27.1 Lua 长度帧工具
-
-长度帧没有独立生命周期，只被 Gateway `require`，因此属于 `lualib/`。
-
-操作：新建 Lua 长度帧工具，并粘贴下面的完整代码。
-
-新建文件：`lualib/network/length_frame.lua`
-
-```lua
--- 职责：实现 4-byte Big Endian 长度头的打包与增量拆包。
--- 边界：Server Runtime Library；payload 对本模块是不透明 bytes。
--- 输入/输出：payload 或累计 buffer -> frame，或一个 payload + 剩余 buffer。
--- 生命周期：无状态模块；返回字符串均由调用协程持有。
--- 不负责：不解析 Protobuf、不访问 Socket、不执行业务查询。
-local M = {}
-
--- 把 0..2^32-1 的整数 n 编码成 4-byte Big Endian 字符串；越界 assert。
-local function u32be(n)
-    assert(n >= 0 and n <= 0xffffffff)
-    local b1 = math.floor(n / 0x1000000) % 0x100
-    local b2 = math.floor(n / 0x10000) % 0x100
-    local b3 = math.floor(n / 0x100) % 0x100
-    local b4 = n % 0x100
-    return string.char(b1, b2, b3, b4)
-end
-
--- 从至少 4 bytes 的字符串 s 读取 Big Endian uint32；调用方保证长度。
-local function read_u32be(s)
-    local a, b, c, d = s:byte(1, 4)
-    return ((a * 256 + b) * 256 + c) * 256 + d
-end
-
--- 给 payload 添加长度头；payload 超过 max_frame 时失败，避免无界发送。
-function M.pack(payload, max_frame)
-    assert(#payload <= max_frame, "frame too large")
-    return u32be(#payload) .. payload
-end
-
--- 从累计 buffer 拆一个 frame。
--- 返回 payload+rest 表示成功，nil+原 buffer 表示半包，false+message 表示坏长度。
-function M.unpack(buffer, max_frame)
-    if #buffer < 4 then
-        return nil, buffer
-    end
-    local length = read_u32be(buffer:sub(1, 4))
-    if length > max_frame then
-        return false, "frame too large"
-    end
-    if #buffer < 4 + length then
-        return nil, buffer
-    end
-    return buffer:sub(5, 4 + length), buffer:sub(5 + length)
-end
-
-return M
-```
-
-### 27.2 TCP Gateway Service
-
-Gateway 拥有监听 fd、连接协程和跨 Service 调用，因此它是真正的 Skynet Service。已经创建的 `service/nav/tcp_gateway.lua` 如果存在，请删除；它把 Service 入口写成了普通模块。
-
-操作：删除旧文件，新建 Gateway Service 入口。
+这一版直接使用 Skynet v1.8.0 自带的底层组合：
 
 ```text
-删除文件：service/nav/tcp_gateway.lua（如果存在）
-新建文件：service/navigation_gateway.lua
+socket thread
+   -> PTYPE_SOCKET message
+   -> navigation_gateway.lua
+      -> netpack.filter(queue, msg, sz)
+         ├─ init      listen 完成
+         ├─ open      accept 新连接
+         ├─ data      一个完整 frame
+         ├─ more      一次得到多个完整 frame
+         ├─ close     对端关闭
+         ├─ error     socket 错误
+         └─ warning   写缓冲持续积压
+      -> decode Protobuf Envelope
+      -> skynet.call(Query Service)      [yield]
+      -> encode response
+      -> netpack.pack
+      -> socketdriver.send
+```
+
+这里最重要的变化不是 API 名字，而是 ownership 模型：Gateway 不再为每个 fd 建一个“读循环 owner”。连接状态保存在 Gateway Service 的 `connections[fd]` 中，底层 socket 事件不断投递到同一个 Service；每条请求自己的消息协程可以在 `skynet.call` 处 yield。
+
+### 27.1 为什么 framing 必须从 4-byte 改成 2-byte
+
+Skynet v1.8.0 的 `skynet.netpack` 不是通用可配置 parser。它在 C 层固定读取：
+
+```text
+2-byte unsigned length, Big Endian
+length bytes payload
+```
+
+包长字段是 `uint16`，因此：
+
+```text
+HeaderSize       = 2 bytes
+MaxPayload       = 65535 bytes
+Wire payload     = Protobuf Envelope bytes
+```
+
+如果仍保留旧的 4-byte header，就不能让 `netpack.filter` 正确完成半包/粘包处理；前两个 `0x00` 很可能会被解释成长度 0。真正采用 `netpack` 就必须同步修改客户端 framing。Protobuf Schema、Envelope、command、request_id、WorldPosition 都不变，变化只发生在 TCP 消息边界。
+
+### 27.2 `socketdriver` 与 `skynet.socket` 的关系
+
+`skynet.socket` 本身也是在 `socketdriver` 上封装 coroutine/read 语义。第一课现在直接下一层：
+
+```text
+skynet.socket
+  适合：read/readline 风格、一个协程顺序消费连接数据
+
+socketdriver + PTYPE_SOCKET
+  适合：Gateway/接入层直接处理 accept/data/close/error/warning 事件
+```
+
+这不是说业务 Service 都应该使用底层 API。只有 Gateway 这种需要控制连接生命周期、背压、包队列和跨 Service dispatch 的接入层，才值得直接接触 `socketdriver`。
+
+### 27.3 `netpack` 的内存 ownership
+
+`netpack.filter` 可能把完整包放进 C 分配的 queue。`netpack.pop(queue)` 返回：
+
+```text
+fd, lightuserdata msg, size
+```
+
+`msg` 不是 Lua string。当前 Gateway 第一件事调用：
+
+```lua
+local payload = netpack.tostring(msg, sz)
+```
+
+它会复制出 Lua string，并释放原来的 C message block。因此不要在 `netpack.tostring` 前 `skynet.call`、`skynet.sleep` 或把 `msg` 保存到 table 里长期使用。Service 退出时，尚未 pop 的 queue 还要通过 `netpack.clear(queue)` 释放。
+
+发送方向相反：
+
+```lua
+socketdriver.send(fd, netpack.pack(envelope))
+```
+
+`netpack.pack` 分配带 2-byte header 的发送 buffer，`socketdriver.send` 接管它。业务代码不再自己拼接 header string。
+
+### 27.4 yield 以后为什么必须再次确认连接身份
+
+收到请求后会发生：
+
+```text
+fd=17 request A
+-> decode
+-> skynet.call(Query Service)   [yield]
+
+此时 Gateway 仍可能收到：
+fd=17 close
+-> connection[17] 删除
+
+稍后 OS/Skynet 可能让另一个连接重新使用 fd=17
+-> connection[17] = new connection
+
+request A 的 skynet.call 返回
+```
+
+如果旧协程只保存整数 `17`，此时直接 `socketdriver.send(17, ...)` 就可能把旧用户的响应写给新连接。
+
+所以实现保存的是 connection table 对象，并在 call 返回以后检查：
+
+```lua
+if connections[fd] ~= conn or conn.closed then
+    return
+end
+```
+
+这属于 Gateway 连接生命周期问题，不是 Query Service 的业务锁。
+
+### 27.5 为什么限制单连接 in-flight
+
+事件驱动以后，一个连接可以在前一个 `skynet.call` 尚未返回时继续送入后续完整 frame。如果完全不限制，恶意或异常客户端可以让一个 fd 同时挂起大量请求协程。
+
+第一课固定：
+
+```text
+max_inflight_per_connection = 32
+```
+
+超过上限直接关闭连接。这里没有实现复杂排队和流控，因为第一课只是低频 QueryCell 验收链；真正游戏 Gateway 可以根据协议语义选择串行请求、每玩家 Agent、限流队列或 back-pressure。
+
+### 27.6 替换 Gateway
+
+#### 学习导航
+
+```text
+必须精读：PTYPE_SOCKET 注册、netpack.filter/pop/tostring、open/data/more/close/error/warning
+必须理解：msg ownership、fd 复用保护、skynet.call yield、inflight 限制、慢连接写缓冲保护
+可以略读：日志字段拼接和启动参数 assert
+输入：socketdriver 事件 + 完整 netpack payload
+输出：QueryCell response 的 netpack frame
+失败：非法 Envelope/版本/命令/body、Query Service call 失败、连接过载、写缓冲过大
+不负责：BMAP、Native 查询实现、A*、Battle 动态状态
+```
+
+操作：删除旧的手写 framing 工具，并完整替换 Gateway。
+
+```text
+删除：server/lualib/network/length_frame.lua
+完整替换：server/service/navigation_gateway.lua
 ```
 
 ```lua
--- 职责：监听 TCP、处理长度帧和 Protobuf，并把合法 QueryCell 转发给 Query Service。
--- 边界：Skynet Gateway Service；拥有 listen fd 和每连接 client coroutine。
--- 输入/输出：TCP bytes -> QueryCell request -> TCP response bytes。
--- 生命周期：由 main 创建；start 消息只允许执行一次，连接 fd 在退出路径关闭。
--- 不负责：不加载 BMAP、不直接调用 Native、不保存战斗状态。
+-- 职责：使用 socketdriver + netpack 事件模型监听 TCP、完成分帧/协议校验，并转发 QueryCell。
+-- 边界：Skynet Gateway Service；直接拥有 listen/client fd 和 PTYPE_SOCKET 事件分发。
+-- 输入/输出：2-byte Big Endian netpack frame(Envelope protobuf) <-> QueryCell response frame。
+-- 生命周期：main 创建一次并注入 Query Service；连接状态只属于本 Service 的 Lua State。
+-- 不负责：不加载 BMAP、不直接调用 Native、不保存 Battle 状态、不自行实现 A*。
 local skynet = require "skynet"
-local socket = require "skynet.socket"
+local socketdriver = require "skynet.socketdriver"
+local netpack = require "skynet.netpack"
 local config = require "config.game"
-local frame = require "network.length_frame"
 local codec = require "protocol.navigation_codec"
 
-local query_service -- main 注入的 Query Service 地址；start 成功后只读。
-local listen_fd     -- Gateway 持有的监听 fd；Service 退出时由 Skynet 回收。
+local query_service       -- main 注入；start 成功后只读。
+local listen_fd           -- 当前监听 fd；nil 表示未监听或已停止。
+local listen_context      -- start 等待 SOCKET_TYPE_CONNECT/init 时的临时上下文。
+local queue               -- netpack.filter 持有的半包/完整包队列；只属于本 Gateway Lua State。
+local stopping = false
+local client_count = 0
+local connections = {}    -- fd -> connection object；object identity 用于防止 fd 复用误写。
 
--- 编码业务 response，并沿 fd 写出一个完整长度帧；fd 仍归 client_loop 所有。
-local function send_response(fd, request_id, response)
+-- netpack queue 中保存的是 C 分配的消息块；Service 被 GC 时兜底释放尚未 pop 的包。
+local queue_guard = setmetatable({}, {
+    __gc = function()
+        if queue ~= nil then
+            netpack.clear(queue)
+            queue = nil
+        end
+    end,
+})
+
+-- 仅用于保持 queue_guard 存活到 Service Lua State 结束。
+assert(queue_guard)
+
+-- 从 connections 移除当前连接，只执行一次 client_count 递减。
+-- close_mode="close" 走主动正常关闭；"shutdown" 用于 socket error；"none" 表示底层已报告 CLOSE。
+local function detach_connection(fd, reason, close_mode)
+    local conn = connections[fd]
+    if conn == nil then
+        return nil
+    end
+
+    connections[fd] = nil
+    conn.closed = true
+    client_count = client_count - 1
+    skynet.error("NAV_TCP_CLOSE fd=", fd,
+                 " address=", conn.address or "?",
+                 " reason=", reason or "unknown",
+                 " clients=", client_count)
+
+    if close_mode == "shutdown" then
+        socketdriver.shutdown(fd)
+    elseif close_mode == "close" then
+        socketdriver.close(fd)
+    end
+    return conn
+end
+
+-- 关闭协议异常连接。调用方已经把 netpack C message 转成 Lua string，因此这里没有悬挂 msg ownership。
+local function protocol_close(fd, reason)
+    skynet.error("NAV_TCP_PROTOCOL_CLOSE fd=", fd, " reason=", reason)
+    detach_connection(fd, reason, "close")
+end
+
+-- 发送一个响应 Envelope。netpack.pack 返回由 socketdriver.send 接管的 C buffer + size。
+-- conn 必须仍是 connections[fd] 的同一个对象；这个检查防止旧请求协程在 fd 被复用后误写新连接。
+local function send_response(conn, request_id, response)
+    if connections[conn.fd] ~= conn or conn.closed then
+        return false
+    end
+
     local body = codec.encode_query_response(response)
     local envelope = codec.encode_envelope(
-        config.query_cell_command, request_id, body, config.protocol_version)
-    socket.write(fd, frame.pack(envelope, config.max_frame_bytes))
-end
+        config.query_cell_command,
+        request_id,
+        body,
+        config.protocol_version)
 
--- 独占一个 client fd，累计处理半包/粘包；协议错误或 EOF 时关闭连接并返回。
--- 每个完整合法请求只执行一次 skynet.call；函数自身可在 Socket/Service 调用处 yield。
-local function client_loop(fd)
-    assert(socket.start(fd), "cannot start accepted socket")
-    local buffer = ""
-    while true do
-        local chunk = socket.read(fd)
-        if not chunk then
-            break
-        end
-        buffer = buffer .. chunk
-        while true do
-            local payload, rest = frame.unpack(buffer, config.max_frame_bytes)
-            if payload == false then
-                socket.close(fd)
-                return
-            end
-            if not payload then
-                buffer = rest
-                break
-            end
-            buffer = rest
-
-            local ok, envelope = pcall(codec.decode_envelope, payload)
-            if not ok or envelope.protocol_version ~= config.protocol_version then
-                socket.close(fd)
-                return
-            end
-            if envelope.command ~= config.query_cell_command then
-                socket.close(fd)
-                return
-            end
-            local decoded_ok, request = pcall(codec.decode_query_request, envelope.body)
-            if not decoded_ok then
-                socket.close(fd)
-                return
-            end
-            -- 这里是 Gateway 与 Query 两个 Service 的明确边界；call 会 yield。
-            local response = skynet.call(query_service, "lua", "query_cell", request)
-            send_response(fd, envelope.request_id, response)
-        end
+    if #envelope == 0 or #envelope > config.max_frame_bytes then
+        protocol_close(conn.fd, "response frame too large")
+        return false
     end
-    socket.close(fd)
-end
 
--- 启动监听并保存 Query Service 地址；由 main 通过 skynet.call 调用一次。
-local function start(query_address)
-    assert(query_service == nil, "navigation gateway already started")
-    query_service = assert(query_address, "query service address is required")
-    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
-
-    listen_fd = assert(socket.listen(config.host, config.port))
-    assert(socket.start(listen_fd, function(fd, address)
-        skynet.error("NAV_TCP_ACCEPT fd=", fd, " address=", address)
-        skynet.fork(client_loop, fd)
-    end))
-    skynet.error("NAV_TCP_READY ", config.host, ":", config.port,
-                 " query=", skynet.address(query_service))
+    if not socketdriver.send(conn.fd, netpack.pack(envelope)) then
+        detach_connection(conn.fd, "socket send failed", "shutdown")
+        return false
+    end
     return true
 end
 
--- 先安装 dispatch，再等待 main 注入依赖；Service 之间只传地址和请求副本。
+-- 处理一个已经由 netpack 完整切出的 payload。
+-- netpack.tostring 会复制成 Lua string 并释放 msg 指针；必须在任何 yield/return 之前调用。
+-- skynet.call 会 yield，因此 call 返回后必须重新验证 connections[fd] 仍指向同一 conn。
+local function dispatch_packet(fd, msg, sz)
+    local payload = netpack.tostring(msg, sz)
+    local conn = connections[fd]
+    if conn == nil or conn.closed or stopping then
+        return
+    end
+
+    if #payload == 0 or #payload > config.max_frame_bytes then
+        protocol_close(fd, "invalid frame size")
+        return
+    end
+    if conn.inflight >= config.max_inflight_per_connection then
+        protocol_close(fd, "too many in-flight requests")
+        return
+    end
+
+    local envelope_ok, envelope = pcall(codec.decode_envelope, payload)
+    if not envelope_ok then
+        protocol_close(fd, "malformed envelope")
+        return
+    end
+    if envelope.protocol_version ~= config.protocol_version then
+        protocol_close(fd, "protocol version mismatch")
+        return
+    end
+    if envelope.command ~= config.query_cell_command then
+        protocol_close(fd, "unknown command")
+        return
+    end
+
+    local request_ok, request = pcall(codec.decode_query_request, envelope.body)
+    if not request_ok then
+        protocol_close(fd, "malformed QueryCellRequest")
+        return
+    end
+
+    conn.inflight = conn.inflight + 1
+    local call_ok, response = pcall(
+        skynet.call,
+        query_service,
+        "lua",
+        "query_cell",
+        request)
+    conn.inflight = conn.inflight - 1
+
+    -- call 期间本 Service 仍会处理 close/error/其他 socket 消息；fd 也可能随后被复用。
+    if connections[fd] ~= conn or conn.closed then
+        return
+    end
+    if not call_ok then
+        skynet.error("NAV_QUERY_CALL_FAILED fd=", fd, " error=", response)
+        protocol_close(fd, "query service call failed")
+        return
+    end
+
+    send_response(conn, envelope.request_id, response)
+end
+
+local SOCKET = {}
+
+-- netpack.filter 在一条 socket message 中得到一个完整包时直接派发到这里。
+function SOCKET.data(fd, msg, sz)
+    dispatch_packet(fd, msg, sz)
+end
+
+-- 一条 socket message 里可能形成多个完整包；queue 中的包逐个消费。
+-- 第一包允许 yield 时先 fork 一个继续 drain 的协程，保持 socket event dispatch 不被业务 call 串死。
+local function dispatch_queue()
+    local fd, msg, sz = netpack.pop(queue)
+    if fd == nil then
+        return
+    end
+
+    skynet.fork(dispatch_queue)
+    dispatch_packet(fd, msg, sz)
+
+    for next_fd, next_msg, next_sz in netpack.pop, queue do
+        dispatch_packet(next_fd, next_msg, next_sz)
+    end
+end
+
+function SOCKET.more()
+    dispatch_queue()
+end
+
+-- ACCEPT 事件。accepted fd 尚未 start；先建立 connection owner，再允许 socketdriver 投递 DATA。
+function SOCKET.open(fd, address)
+    if stopping then
+        socketdriver.close(fd)
+        return
+    end
+    if client_count >= config.max_clients then
+        skynet.error("NAV_TCP_REJECT fd=", fd, " reason=max_clients address=", address)
+        socketdriver.close(fd)
+        return
+    end
+
+    local conn = {
+        fd = fd,
+        address = address,
+        inflight = 0,
+        closed = false,
+    }
+    connections[fd] = conn
+    client_count = client_count + 1
+
+    if config.tcp_nodelay then
+        socketdriver.nodelay(fd)
+    end
+    socketdriver.start(fd)
+    skynet.error("NAV_TCP_ACCEPT fd=", fd,
+                 " address=", address,
+                 " clients=", client_count)
+end
+
+-- CLOSE 事件到达时 netpack.filter 已清理该 fd 尚未完成的半包。
+function SOCKET.close(fd)
+    if fd == listen_fd then
+        listen_fd = nil
+        return
+    end
+    detach_connection(fd, "peer closed", "none")
+end
+
+-- ERROR 在 listen 启动阶段必须唤醒 start 协程，否则 main 会永久等在 skynet.call(start)。
+function SOCKET.error(fd, message)
+    if listen_context ~= nil and fd == listen_context.fd then
+        listen_context.error = message or "listen socket error"
+        local co = listen_context.co
+        listen_context.co = nil
+        if co ~= nil then
+            skynet.wakeup(co)
+        end
+        return
+    end
+    if fd == listen_fd then
+        skynet.error("NAV_TCP_LISTEN_ERROR fd=", fd, " error=", message)
+        listen_fd = nil
+        return
+    end
+    detach_connection(fd, message or "socket error", "shutdown")
+end
+
+-- size 是 Skynet socket 层报告的待发送缓冲区 KB 数。
+-- 慢客户端持续积压到阈值时主动断开，避免一个连接长期吃掉发送内存。
+function SOCKET.warning(fd, size)
+    skynet.error("NAV_TCP_WRITE_WARNING fd=", fd, " pending_kb=", size)
+    if size >= config.write_warning_close_kb then
+        detach_connection(fd, "write buffer overflow", "shutdown")
+    end
+end
+
+-- socketdriver.listen 成功后会收到 CONNECT/init 事件；记录实际绑定地址/端口并唤醒 start。
+function SOCKET.init(fd, address, port)
+    if listen_context == nil or fd ~= listen_context.fd then
+        return
+    end
+    listen_context.address = address
+    listen_context.port = port
+    local co = listen_context.co
+    listen_context.co = nil
+    if co ~= nil then
+        skynet.wakeup(co)
+    end
+end
+
+-- 停止接受新连接并关闭现有 client。它不直接 skynet.exit，便于未来由进程 Supervisor 统一编排退出。
+local function stop_gateway()
+    if stopping then
+        return true
+    end
+    stopping = true
+
+    if listen_fd ~= nil then
+        socketdriver.close(listen_fd)
+        listen_fd = nil
+    end
+
+    local fds = {}
+    for fd in pairs(connections) do
+        fds[#fds + 1] = fd
+    end
+    for _, fd in ipairs(fds) do
+        detach_connection(fd, "gateway stopping", "close")
+    end
+
+    if queue ~= nil then
+        netpack.clear(queue)
+        queue = nil
+    end
+    skynet.error("NAV_TCP_STOPPED")
+    return true
+end
+
+-- 启动监听并等待 socketdriver 的 init 事件确认 bind 完成。
+-- 这里会因 skynet.wait yield；start 返回 true 后，main 才打印 NAV_SERVER_READY。
+local function start_gateway(query_address)
+    assert(query_service == nil, "navigation gateway already started")
+    assert(config.max_frame_bytes > 0 and config.max_frame_bytes <= 0xffff,
+           "netpack frame limit must fit uint16")
+    assert(config.max_clients > 0, "max_clients must be positive")
+    assert(config.max_inflight_per_connection > 0,
+           "max_inflight_per_connection must be positive")
+
+    query_service = assert(query_address, "query service address is required")
+    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
+
+    local fd = socketdriver.listen(config.host, config.port, config.backlog)
+    assert(fd and fd >= 0, "cannot create navigation listen socket")
+    listen_fd = fd
+    listen_context = {
+        fd = fd,
+        co = coroutine.running(),
+    }
+
+    skynet.wait(listen_context.co)
+    local started = listen_context
+    listen_context = nil
+    if started.error ~= nil then
+        listen_fd = nil
+        error("navigation listen failed: " .. tostring(started.error))
+    end
+
+    socketdriver.start(fd)
+    skynet.error("NAV_TCP_READY ", started.address or config.host,
+                 ":", started.port or config.port,
+                 " query=", skynet.address(query_service),
+                 " framing=netpack-u16be",
+                 " max_frame=", config.max_frame_bytes)
+    return true
+end
+
+-- 直接注册 PTYPE_SOCKET。netpack.filter 负责 TCP 半包/粘包，业务层只接触完整 Envelope payload。
+skynet.register_protocol {
+    name = "socket",
+    id = skynet.PTYPE_SOCKET,
+    unpack = function(msg, sz)
+        return netpack.filter(queue, msg, sz)
+    end,
+    dispatch = function(_, _, updated_queue, event, ...)
+        queue = updated_queue
+        if event ~= nil then
+            local handler = SOCKET[event]
+            if handler == nil then
+                error("unknown socket event: " .. tostring(event))
+            end
+            handler(...)
+        end
+    end,
+}
+
 skynet.start(function()
     skynet.dispatch("lua", function(_, _, command, ...)
         if command == "start" then
-            skynet.retpack(start(...))
+            skynet.retpack(start_gateway(...))
+            return
+        end
+        if command == "stop" then
+            skynet.retpack(stop_gateway())
             return
         end
         error("unknown navigation_gateway command: " .. tostring(command))
@@ -6666,7 +7009,43 @@ skynet.start(function()
 end)
 ```
 
-当前固定的 Skynet v1.8.0 中，监听 fd 的回调参数是 `(accepted_fd, remote_address)`。每个 accepted fd 必须先执行 `socket.start(fd)`，随后才能 `socket.read(fd)`。Gateway 在 `skynet.call(query_service, ...)` 处 yield；Query Service 处理期间不回调 Gateway 的可变连接状态。
+### 27.7 这版 Gateway 的事件与 yield 边界
+
+```text
+SOCKET.open/error/close/warning
+  只更新本 Gateway 的连接状态
+
+SOCKET.data / SOCKET.more
+  netpack 已经给出完整 Envelope bytes
+  -> decode
+  -> inflight++
+  -> skynet.call(query_service, ...)      可 yield
+  -> inflight--
+  -> 再确认 connections[fd] == conn
+  -> send response
+```
+
+`Query Service` 内的 `query_logic.query()` 仍然不 yield；第二课 BattleWorker 的核心 `battle_core.simulate()` 仍然 no-yield。这次网络改造不会把 socket event 或 Gateway 状态带进导航/战斗核心。
+
+### 27.8 验证点
+
+启动后至少观察：
+
+```text
+NAV_TCP_READY ... framing=netpack-u16be max_frame=65535
+NAV_TCP_ACCEPT fd=... address=... clients=...
+NAV_TCP_CLOSE fd=... reason=...
+```
+
+再做三个网络行为测试：
+
+```text
+一个完整 frame 分多次 send       -> 只得到一次业务请求
+两个 frame 合并成一次 send       -> 得到两个独立请求
+旧 4-byte header 客户端连接      -> 不得被当成合法 Envelope 继续执行业务
+```
+
+半包/粘包的状态现在由 `netpack` C 模块管理，不再通过 Lua 字符串 `buffer = buffer .. chunk` 反复复制。
 
 ## 28. 启动 Skynet 并验证 Service 链路
 
@@ -6729,53 +7108,614 @@ cpath = skynet_root .. "cservice/?.so"
 
 `harbor = 0` 明确第一课是单节点进程，也进一步说明这里不需要无点号的全局服务名。
 
-操作：新建 Server 启动脚本，并粘贴下面的完整内容。
+操作：完整替换 Server 启动脚本，并新增安全停止入口。第一课从这里开始不再要求手工先执行一串 bootstrap/build 命令；统一由 `run_server.sh` 做可重复的依赖准备、增量构建、后台启动和 PID 管理。
 
-新建文件：`scripts/linux/run_server.sh`
+完整替换：`server/scripts/linux/run_server.sh`
 
 ```bash
 #!/usr/bin/env bash
-# 职责：从仓库内固定配置以前台方式启动 Battle Navigation Skynet 进程。
-# 边界：Server Runtime Launcher；不构建源码，不生成资产。
-# 输入/输出：已完成的构建产物和配置 -> 当前 shell 中的 Skynet 进程。
-# 生命周期：使用 exec 让 Skynet 接管当前进程和退出码。
-# 不负责：不自动修复缺失依赖，不后台守护，不修改配置。
+# 职责：统一管理 Battle Navigation Server 的依赖准备、构建、后台启动、状态和安全停止。
+# 边界：仓库级 Runtime/Build Launcher；只操作当前 server/ 下已知 build/run/log 目录和固定依赖脚本。
+# 输入/输出：源码、固定版本依赖、BMAP -> 可运行 Skynet 进程及 logs/run 状态文件。
+# 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
+# 不负责：不生成 Unity BMAP、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
 
-SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-cd "$SERVER_ROOT"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+RUN_DIR="$SERVER_ROOT/run"
+LOG_DIR="$SERVER_ROOT/logs"
+PID_FILE="$RUN_DIR/server.pid"
+LOCK_FILE="$RUN_DIR/serverctl.lock"
+SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
+SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
+MAP_FILE="$SERVER_ROOT/maps/battle_1001.bmap"
+source "$SERVER_ROOT/protocol/VERSIONS.env"
 
-test -x third_party/skynet/skynet
-test -f build/lua_battle_nav/battle_nav.so
-test -f third_party/lua-protobuf-runtime/pb.so
-test -f protocol/generated/server/navigation_query.pb
-test -f maps/battle_1001.bmap
+BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
+STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
+STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
 
-exec third_party/skynet/skynet config/skynet.lua
+ACTION="start"
+FOREGROUND=0
+REBUILD=0
+FORCE_STOP=0
+
+usage() {
+    cat <<'USAGE'
+Usage:
+  ./scripts/linux/run_server.sh [start] [--rebuild] [--foreground]
+  ./scripts/linux/run_server.sh foreground [--rebuild]
+  ./scripts/linux/run_server.sh stop [--force]
+  ./scripts/linux/run_server.sh restart [--rebuild] [--foreground]
+  ./scripts/linux/run_server.sh status
+  ./scripts/linux/run_server.sh doctor
+  ./scripts/linux/run_server.sh prepare
+  ./scripts/linux/run_server.sh build
+  ./scripts/linux/run_server.sh rebuild
+
+Actions:
+  start       自动检查/修复项目依赖和缺失构建产物，后台启动并等待 NAV_SERVER_READY。
+  foreground  与 start 相同，但以前台方式 exec Skynet，适合 gdb/LuaPanda/直接看日志。
+  stop        校验 PID 确实属于本仓库 Skynet 后发送 SIGTERM，并等待退出。
+  restart     stop + start；可与 --rebuild 组合。
+  status      显示 PID、运行状态和当前日志。
+  doctor      只检查系统工具、固定依赖、构建产物和地图，不修改文件。
+  prepare     修复/补齐固定版本项目依赖和生成物，并做增量 Native 构建。
+  build       prepare 后运行 Native 单元测试。
+  rebuild     清理本项目 build 目录并完整重编 Skynet/pb/descriptor/Native，再运行测试。
+
+Options:
+  --rebuild      start/restart/foreground 前执行完整 rebuild。
+  --foreground   start/restart 使用前台模式。
+  --force        stop 超时后才允许 SIGKILL；默认不会自动 kill -9。
+
+Environment:
+  BUILD_TYPE=RelWithDebInfo|Debug|Release
+  STARTUP_TIMEOUT_SEC=15
+  STOP_TIMEOUT_SEC=20
+USAGE
+}
+
+log() {
+    printf '[serverctl] %s\n' "$*"
+}
+
+fail() {
+    printf '[serverctl] ERROR: %s\n' "$*" >&2
+    exit 1
+}
+
+parse_args() {
+    if [[ $# -gt 0 && "$1" != --* ]]; then
+        ACTION="$1"
+        shift
+    fi
+    while [[ $# -gt 0 ]]; do
+        case "$1" in
+            --rebuild) REBUILD=1 ;;
+            --foreground) FOREGROUND=1 ;;
+            --force) FORCE_STOP=1 ;;
+            -h|--help) usage; exit 0 ;;
+            *) fail "unknown argument: $1" ;;
+        esac
+        shift
+    done
+    case "$ACTION" in
+        start|foreground|stop|restart|status|doctor|prepare|build|rebuild) ;;
+        *) usage >&2; fail "unknown action: $ACTION" ;;
+    esac
+    if [[ "$ACTION" == "foreground" ]]; then
+        FOREGROUND=1
+    fi
+}
+
+ensure_runtime_dirs() {
+    umask 027
+    mkdir -p "$RUN_DIR" "$LOG_DIR"
+}
+
+require_system_tools() {
+    local missing=()
+    local tool
+    for tool in git curl python3 tar make cmake cc c++ sha256sum nproc flock ps grep sed find; do
+        if ! command -v "$tool" >/dev/null 2>&1; then
+            missing+=("$tool")
+        fi
+    done
+    if ((${#missing[@]} != 0)); then
+        printf '[serverctl] missing system tools:' >&2
+        printf ' %s' "${missing[@]}" >&2
+        printf '\n' >&2
+        printf '[serverctl] Ubuntu/WSL baseline: sudo apt-get update && sudo apt-get install -y build-essential cmake git curl python3 tar unzip util-linux\n' >&2
+        return 1
+    fi
+}
+
+file_newer_than() {
+    local target="$1"
+    shift
+    [[ -e "$target" ]] || return 0
+    local source
+    for source in "$@"; do
+        if [[ -e "$source" ]] && find "$source" -type f -newer "$target" -print -quit 2>/dev/null | grep -q .; then
+            return 0
+        fi
+    done
+    return 1
+}
+
+pid_from_file() {
+    [[ -f "$PID_FILE" ]] || return 1
+    local pid
+    pid="$(tr -d '[:space:]' < "$PID_FILE")"
+    [[ "$pid" =~ ^[1-9][0-9]*$ ]] || return 1
+    printf '%s\n' "$pid"
+}
+
+pid_matches_this_server() {
+    local pid="$1"
+    kill -0 "$pid" 2>/dev/null || return 1
+    [[ -r "/proc/$pid/exe" ]] || return 1
+
+    local running_exe expected_exe cmdline
+    running_exe="$(readlink -f "/proc/$pid/exe" 2>/dev/null || true)"
+    expected_exe="$(readlink -f "$SKYNET_BIN" 2>/dev/null || true)"
+    [[ -n "$running_exe" && -n "$expected_exe" && "$running_exe" == "$expected_exe" ]] || return 1
+
+    cmdline="$(tr '\0' ' ' < "/proc/$pid/cmdline" 2>/dev/null || true)"
+    [[ "$cmdline" == *"config/skynet.lua"* || "$cmdline" == *"$SKYNET_CONFIG"* ]]
+}
+
+current_pid() {
+    local pid
+    if ! pid="$(pid_from_file)"; then
+        return 1
+    fi
+    if ! kill -0 "$pid" 2>/dev/null; then
+        rm -f "$PID_FILE"
+        return 1
+    fi
+    if ! pid_matches_this_server "$pid"; then
+        printf '[serverctl] PID_MISMATCH pid=%s: live process is not this repository Skynet\n' "$pid" >&2
+        return 2
+    fi
+    printf '%s\n' "$pid"
+}
+
+ensure_not_running() {
+    local pid rc
+    if pid="$(current_pid)"; then
+        fail "server is already running: pid=$pid"
+    else
+        rc=$?
+        if ((rc == 2)); then
+            fail "refusing to overwrite a PID file owned by another live process"
+        fi
+    fi
+}
+
+bootstrap_project_dependencies() {
+    require_system_tools || fail "system dependency check failed"
+    cd "$SERVER_ROOT"
+
+    if [[ ! -d third_party/skynet/.git ]]; then
+        log "Skynet source missing; bootstrapping pinned v1.8.0"
+        ./scripts/linux/bootstrap_skynet.sh
+    else
+        ./scripts/linux/bootstrap_skynet.sh >/dev/null
+    fi
+
+    if [[ ! -x third_party/protoc-$PROTOC_VERSION/bin/protoc || ! -f third_party/lua-protobuf/.pinned-commit ]]; then
+        log "protocol toolchain missing; bootstrapping pinned versions"
+        ./scripts/linux/bootstrap_protocol_tools.sh
+    else
+        ./scripts/linux/bootstrap_protocol_tools.sh >/dev/null
+    fi
+}
+
+build_skynet_if_needed() {
+    cd "$SERVER_ROOT"
+    if [[ ! -x "$SKYNET_BIN" ]] || \
+       file_newer_than "$SKYNET_BIN" \
+           "$SERVER_ROOT/third_party/skynet/skynet-src" \
+           "$SERVER_ROOT/third_party/skynet/service" \
+           "$SERVER_ROOT/third_party/skynet/lualib" \
+           "$SERVER_ROOT/third_party/skynet/lualib-src"; then
+        log "building Skynet"
+        ./scripts/linux/build_skynet.sh
+    fi
+}
+
+build_lua_protobuf_if_needed() {
+    local target="$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so"
+    if [[ ! -s "$target" ]] || file_newer_than "$target" "$SERVER_ROOT/third_party/lua-protobuf"; then
+        log "building lua-protobuf runtime"
+        "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
+    fi
+}
+
+build_descriptor_if_needed() {
+    local target="$SERVER_ROOT/protocol/generated/server/navigation_query.pb"
+    if [[ ! -s "$target" || "$SERVER_ROOT/protocol/navigation_query.proto" -nt "$target" ]]; then
+        log "building Protobuf descriptor"
+        "$SERVER_ROOT/protocol/build_server_descriptor.sh"
+    fi
+    "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh" >/dev/null
+    if [[ -s "$target.sha256" ]]; then
+        sha256sum -c "$target.sha256" >/dev/null
+    fi
+}
+
+build_native_incremental() {
+    log "configuring/building Native module ($BUILD_TYPE)"
+    cmake \
+        -S "$SERVER_ROOT/native/lua_battle_nav" \
+        -B "$SERVER_ROOT/build/lua_battle_nav" \
+        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+    cmake --build "$SERVER_ROOT/build/lua_battle_nav" -j"$(nproc)"
+    [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || \
+        fail "battle_nav.so was not generated"
+}
+
+prepare_runtime() {
+    bootstrap_project_dependencies
+    build_skynet_if_needed
+    build_lua_protobuf_if_needed
+    build_descriptor_if_needed
+    build_native_incremental
+}
+
+run_native_tests() {
+    log "running Native tests"
+    "$SERVER_ROOT/native/grid_map/make_test.sh"
+}
+
+safe_remove_build_dir() {
+    local path="$1"
+    case "$path" in
+        "$SERVER_ROOT/build"/*) rm -rf -- "$path" ;;
+        *) fail "refusing unsafe build cleanup path: $path" ;;
+    esac
+}
+
+rebuild_all() {
+    ensure_not_running
+    bootstrap_project_dependencies
+    log "full rebuild: cleaning project build directories only"
+    safe_remove_build_dir "$SERVER_ROOT/build/grid_map"
+    safe_remove_build_dir "$SERVER_ROOT/build/lua_battle_nav"
+
+    if [[ -f "$SERVER_ROOT/third_party/skynet/Makefile" ]]; then
+        make -C "$SERVER_ROOT/third_party/skynet" clean >/dev/null 2>&1 || true
+    fi
+    "$SERVER_ROOT/scripts/linux/build_skynet.sh"
+    "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
+    "$SERVER_ROOT/protocol/build_server_descriptor.sh"
+    "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh"
+    run_native_tests
+    build_native_incremental
+    log "REBUILD_OK"
+}
+
+check_runtime_assets() {
+    [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing: $SKYNET_BIN"
+    [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
+    [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || fail "pb.so missing"
+    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || fail "server descriptor missing"
+    [[ -s "$MAP_FILE" ]] || fail "BMAP missing: $MAP_FILE; export/copy Battle_1001 from Unity first"
+}
+
+doctor() {
+    local failed=0
+    require_system_tools || failed=1
+
+    [[ -d "$SERVER_ROOT/third_party/skynet/.git" ]] || { log "MISSING skynet source"; failed=1; }
+    [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
+    [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
+    [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
+    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || { log "MISSING descriptor"; failed=1; }
+    [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }
+    [[ -s "$MAP_FILE" ]] || { log "MISSING battle_1001.bmap"; failed=1; }
+
+    if ((failed)); then
+        log "DOCTOR_FAILED: run './scripts/linux/run_server.sh prepare'; BMAP must still come from Unity export"
+        return 1
+    fi
+    log "DOCTOR_OK"
+}
+
+start_background() {
+    ensure_not_running
+    check_runtime_assets
+    cd "$SERVER_ROOT"
+
+    local stamp log_file pid deadline
+    stamp="$(date '+%Y%m%d-%H%M%S')"
+    log_file="$LOG_DIR/server-$stamp.log"
+    ln -sfn "$(basename "$log_file")" "$LOG_DIR/server.log"
+
+    log "starting in background; log=$log_file"
+    nohup "$SKYNET_BIN" "config/skynet.lua" >>"$log_file" 2>&1 </dev/null 9>&- &
+    pid=$!
+    printf '%s\n' "$pid" > "$PID_FILE.tmp"
+    mv -f "$PID_FILE.tmp" "$PID_FILE"
+
+    deadline=$((SECONDS + STARTUP_TIMEOUT_SEC))
+    while ((SECONDS < deadline)); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            tail -n 80 "$log_file" >&2 || true
+            fail "server exited during startup"
+        fi
+        if grep -q "NAV_SERVER_READY" "$log_file" 2>/dev/null; then
+            log "START_OK pid=$pid log=$log_file"
+            return 0
+        fi
+        sleep 0.2
+    done
+
+    log "startup readiness timeout; terminating pid=$pid"
+    kill -TERM "$pid" 2>/dev/null || true
+    local cleanup_deadline=$((SECONDS + 5))
+    while kill -0 "$pid" 2>/dev/null && ((SECONDS < cleanup_deadline)); do
+        sleep 0.2
+    done
+    if kill -0 "$pid" 2>/dev/null; then
+        kill -KILL "$pid" 2>/dev/null || true
+    fi
+    rm -f "$PID_FILE"
+    tail -n 80 "$log_file" >&2 || true
+    fail "NAV_SERVER_READY not observed within ${STARTUP_TIMEOUT_SEC}s"
+}
+
+start_foreground() {
+    ensure_not_running
+    check_runtime_assets
+    cd "$SERVER_ROOT"
+    log "starting in foreground; Ctrl+C/SIGTERM ends the current Lesson-1 process"
+    flock -u 9 || true
+    exec 9>&-
+    exec "$SKYNET_BIN" "config/skynet.lua"
+}
+
+stop_server() {
+    local pid deadline rc
+    if pid="$(current_pid)"; then
+        :
+    else
+        rc=$?
+        if ((rc == 1)); then
+            log "STOP_OK server is not running"
+            return 0
+        fi
+        fail "PID file points to another live process; refusing to send a signal"
+    fi
+
+    log "sending SIGTERM to pid=$pid"
+    kill -TERM "$pid"
+    deadline=$((SECONDS + STOP_TIMEOUT_SEC))
+    while ((SECONDS < deadline)); do
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$PID_FILE"
+            log "STOP_OK pid=$pid"
+            return 0
+        fi
+        sleep 0.2
+    done
+
+    if ((FORCE_STOP)); then
+        log "SIGTERM timeout; --force allows SIGKILL pid=$pid"
+        kill -KILL "$pid" 2>/dev/null || true
+        sleep 0.2
+        rm -f "$PID_FILE"
+        log "STOP_FORCED pid=$pid"
+        return 0
+    fi
+
+    fail "pid=$pid did not exit within ${STOP_TIMEOUT_SEC}s; inspect logs, then use 'stop --force' only if necessary"
+}
+
+status_server() {
+    local pid rc
+    if pid="$(current_pid)"; then
+        local log_target=""
+        if [[ -L "$LOG_DIR/server.log" ]]; then
+            log_target="$(readlink "$LOG_DIR/server.log")"
+        fi
+        log "RUNNING pid=$pid log=${log_target:-unknown}"
+        ps -p "$pid" -o pid=,etime=,stat=,cmd=
+    else
+        rc=$?
+        if ((rc == 1)); then
+            log "STOPPED"
+        else
+            fail "PID file points to another live process; status is unsafe/ambiguous"
+        fi
+    fi
+}
+
+main() {
+    parse_args "$@"
+    ensure_runtime_dirs
+
+    exec 9>"$LOCK_FILE"
+    flock -x 9
+
+    case "$ACTION" in
+        doctor)
+            doctor
+            ;;
+        prepare)
+            prepare_runtime
+            log "PREPARE_OK"
+            ;;
+        build)
+            prepare_runtime
+            run_native_tests
+            log "BUILD_OK"
+            ;;
+        rebuild)
+            rebuild_all
+            ;;
+        status)
+            status_server
+            ;;
+        stop)
+            stop_server
+            ;;
+        start|foreground)
+            if ((REBUILD)); then
+                rebuild_all
+            else
+                prepare_runtime
+            fi
+            if ((FOREGROUND)); then
+                start_foreground
+            else
+                start_background
+            fi
+            ;;
+        restart)
+            stop_server
+            if ((REBUILD)); then
+                rebuild_all
+            else
+                prepare_runtime
+            fi
+            if ((FOREGROUND)); then
+                start_foreground
+            else
+                start_background
+            fi
+            ;;
+    esac
+}
+
+main "$@"
 ```
 
-启动前检查：
+新增：`server/scripts/linux/stop_server.sh`
+
+```bash
+#!/usr/bin/env bash
+# 安全停止入口：复用 run_server.sh 的 PID 身份校验、SIGTERM 等待和可选 --force 逻辑。
+set -euo pipefail
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+exec "$SCRIPT_DIR/run_server.sh" stop "$@"
+```
+
+第一次使用：
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-test -f maps/battle_1001.bmap
-test -f protocol/generated/server/navigation_query.pb
-test -f build/lua_battle_nav/battle_nav.so
-scripts/linux/run_server.sh
+chmod +x scripts/linux/run_server.sh scripts/linux/stop_server.sh
+./scripts/linux/run_server.sh doctor || true
+./scripts/linux/run_server.sh start
+./scripts/linux/run_server.sh status
 ```
 
-预期日志：
+`start` 会完成：
+
+```text
+检查基础系统工具
+-> 缺失时给出明确 apt 安装命令，不偷偷 sudo
+-> 检查/补齐 pinned Skynet v1.8.0 源码
+-> 检查/补齐 pinned protoc + lua-protobuf
+-> 按需编译 Skynet / pb.so / descriptor
+-> 增量配置并编译 battle_nav.so
+-> 校验 battle_1001.bmap 已由 Unity 发布
+-> nohup 后台启动
+-> 写 run/server.pid
+-> 写 logs/server-时间.log
+-> 等待 NAV_SERVER_READY
+```
+
+完整重新编译：
+
+```bash
+./scripts/linux/run_server.sh rebuild
+# 或重编后直接启动
+./scripts/linux/run_server.sh start --rebuild
+```
+
+`rebuild` 只允许清理当前工程的 `server/build/*`，并执行 Skynet `make clean` 后重编；不会删除 `maps/`、Unity 导出的 BMAP、Git 源码或 third_party pinned 源码。
+
+前台调试：
+
+```bash
+./scripts/linux/run_server.sh foreground
+```
+
+安全停止：
+
+```bash
+./scripts/linux/run_server.sh stop
+# 等价短入口
+./scripts/linux/stop_server.sh
+```
+
+停止脚本先从 `run/server.pid` 读取 PID，再检查 `/proc/<pid>/exe` 是否确实指向**当前仓库**的 Skynet 可执行文件，同时检查 cmdline 是否使用当前 `config/skynet.lua`。身份不匹配就拒绝发送信号，避免 stale PID 误杀其他进程。
+
+默认只发送 `SIGTERM` 并等待 `STOP_TIMEOUT_SEC`，不会自动 `kill -9`。只有人工明确执行：
+
+```bash
+./scripts/linux/run_server.sh stop --force
+```
+
+并且 TERM 已超时，才允许 SIGKILL。
+
+需要明确一个阶段边界：Skynet v1.8.0 本体只为 `SIGHUP` 注册日志处理，没有给业务提供 SIGTERM drain hook。第一课 Query/Gateway 没有 DB 写回、在线 Battle 或事务状态，所以当前 TERM 可以安全结束这个课程进程；以后进入真实持久化/在线战斗项目，必须再增加应用层 drain/shutdown 协议，不能把这一课的进程级停止当成最终商业停服流程。
+
+后台启动成功后：
+
+```bash
+./scripts/linux/run_server.sh status
+tail -f logs/server.log
+```
+
+预期日志仍保持依赖顺序：
 
 ```text
 PROTO_DESCRIPTOR_OK
 NAV_QUERY_READY ... map=1001 version=1
-NAV_TCP_READY 127.0.0.1:19001
+NAV_TCP_READY 127.0.0.1:19001 ... framing=netpack-u16be max_frame=65535
 NAV_SERVER_READY query=:... gateway=:...
 ```
 
-日志顺序证明真实链路已经建立：Query Service 先加载地图，Gateway Service 再监听端口，最后 main 报告两个地址。若只有 `NAV_QUERY_READY`，检查 descriptor、端口和 Gateway 启动错误；不要改回全局名字或把 Gateway 合并进 Query Service。
+日志证明 Query Service 先加载地图、Gateway 完成 socketdriver listen/init 后再 READY，最后 main 才报告整个查询链可用。
 
 ## 29. Unity C# Protobuf 客户端
+
+### 29.0 生成 Unity C# 协议类型
+
+`ServerQueryClient.cs` 需要 `Envelope`、`WorldPosition`、`QueryCellRequest` 和 `QueryCellResponse` 这些 C# 类型。它们不是 `Google.Protobuf.dll` 自带的类型，而是由当前工程的 `server/protocol/navigation_query.proto` 生成的协议产物。
+
+操作：完整生成协议 C# 文件。输入是已经提交的 `.proto`，输出是 Unity `Protocol` 目录中的新文件；不要手写或局部修改生成文件。
+
+新建/生成文件：
+
+```text
+G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol\NavigationQuery.cs
+```
+
+在 PowerShell 中执行（`protoc.exe` 必须是固定的 36.2 版本）：
+
+```powershell
+$root = 'G:\simbi\dev\skynet-battle-navigation-commercial-learning'
+$protoc = Join-Path $root 'server\third_party\protoc-36.2\bin\protoc.exe'
+$proto = Join-Path $root 'server\protocol\navigation_query.proto'
+$out = Join-Path $root 'unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol'
+
+if (!(Test-Path -LiteralPath $protoc)) {
+    throw "缺少固定 protoc 36.2：$protoc。先按 server/scripts/linux/bootstrap_protocol_tools.sh 准备工具，或使用同版本 Windows protoc。"
+}
+& $protoc --version
+& $protoc -I (Split-Path $proto) --csharp_out=$out $proto
+if ($LASTEXITCODE -ne 0) { throw 'C# Protobuf generation failed' }
+```
+
+验证：打开 `NavigationQuery.cs`，应看到命名空间 `Battle.Navigation.V1`，并包含四个消息类型。Unity 重新导入后，`ServerQueryClient.cs` 的 `using Battle.Navigation.V1;` 才能解析。协议源或 protoc 版本变化后必须重新生成，不能继续使用旧生成物。
 
 ### 29.1 安装 C# runtime
 
@@ -6785,62 +7725,119 @@ NAV_SERVER_READY query=:... gateway=:...
 G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Assets\Plugins\Google.Protobuf.dll
 ```
 
-不要把 `Google.Protobuf.dll` 从系统中随意复制一个“能加载”的版本。版本必须和 `protocol/VERSIONS.env`、`docs/ENGINEERING_DECISIONS.md` 一致。若 package manager 导入失败，先用 NuGet 包内容解压 DLL，再在 Unity Inspector 中确认平台勾选为 Editor/Standalone。
+不要把 `Google.Protobuf.dll` 从系统中随意复制一个“能加载”的版本。版本必须和 `protocol/VERSIONS.env`、`docs/ENGINEERING_DECISIONS.md` 一致。NuGet 的 `netstandard2.0` 资产还需要运行时依赖，至少要把同一依赖图中的 DLL 一起放入 `Assets/Plugins/`：
+
+```text
+Google.Protobuf 3.36.2
+System.Memory 4.5.3
+System.Runtime.CompilerServices.Unsafe 4.5.3
+System.Buffers 4.5.1
+System.Numerics.Vectors 4.4.0
+```
+
+这些依赖版本用于本课程的可复现导入，不要混入机器上其他项目的 DLL。可用下面的 PowerShell 从固定 NuGet 包下载并解压到临时目录；每个包都明确取 `lib/netstandard2.0/` 资产，不要递归取到 `ref/` 或 `netstandard1.x` 下的同名 DLL：
+
+```powershell
+$project = 'G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation'
+$temp = Join-Path $env:TEMP 'skynet-protobuf-runtime'
+$packages = @{
+    'Google.Protobuf' = '3.36.2'
+    'System.Memory' = '4.5.3'
+    'System.Runtime.CompilerServices.Unsafe' = '4.5.3'
+    'System.Buffers' = '4.5.1'
+    'System.Numerics.Vectors' = '4.4.0'
+}
+
+foreach ($item in $packages.GetEnumerator()) {
+    $id = $item.Key.ToLowerInvariant()
+    $version = $item.Value
+    $dir = Join-Path $temp "$id-$version"
+    $nupkg = Join-Path $dir "$id.$version.nupkg"
+    $zip = Join-Path $dir "$id.$version.zip"
+    $out = Join-Path $dir 'package'
+    New-Item -ItemType Directory -Force -Path $dir | Out-Null
+    Invoke-WebRequest `
+        -Uri "https://api.nuget.org/v3-flatcontainer/$id/$version/$id.$version.nupkg" `
+        -OutFile $nupkg
+    Copy-Item $nupkg $zip -Force
+    Expand-Archive -LiteralPath $zip -DestinationPath $out -Force
+}
+
+$pluginDir = Join-Path $project 'Assets\Plugins'
+New-Item -ItemType Directory -Force -Path $pluginDir | Out-Null
+
+$assets = @(
+    @{ Id = 'google.protobuf'; Version = '3.36.2'; Name = 'Google.Protobuf.dll' },
+    @{ Id = 'system.memory'; Version = '4.5.3'; Name = 'System.Memory.dll' },
+    @{ Id = 'system.runtime.compilerservices.unsafe'; Version = '4.5.3'; Name = 'System.Runtime.CompilerServices.Unsafe.dll' },
+    @{ Id = 'system.buffers'; Version = '4.5.1'; Name = 'System.Buffers.dll' },
+    @{ Id = 'system.numerics.vectors'; Version = '4.4.0'; Name = 'System.Numerics.Vectors.dll' }
+)
+
+foreach ($asset in $assets) {
+    $source = Join-Path $temp "$($asset.Id)-$($asset.Version)\package\lib\netstandard2.0\$($asset.Name)"
+    if (!(Test-Path -LiteralPath $source)) { throw "Missing netstandard2.0 asset: $source" }
+    Copy-Item $source (Join-Path $pluginDir $asset.Name) -Force
+}
+```
+
+重新打开 Tuanjie 后，逐个选中这些 DLL，在 Inspector 中确认 `Editor` 已启用、`Standalone` 已启用（Windows 项目至少确认 `Win64`），`Any Platform` 未启用，并保持 `Reference validation` 启用。
+
+如果控制台仍提示 `Unable to resolve reference 'System.Runtime.CompilerServices.Unsafe'`，先确认五个 DLL 位于同一个 `Assets/Plugins/` 目录，并删除同名旧 DLL 后重新导入。不要关闭 `Reference validation`；那只会把缺依赖推迟到编译或运行时。
 
 ### 29.2 TCP framing
 
-TCP 提供有序 byte stream，不保留“发送一次就对应接收一次”的消息边界。客户端可能一次只读到半个消息，也可能一次读到两个消息。因此 Protobuf bytes 外面还需要固定 framing：
+TCP 仍然只是有序 byte stream，不保留消息边界。现在 Server 由 `skynet.netpack` 负责 framing，所以 Unity 必须使用同一线协议：
 
 ```text
-4-byte Big Endian payload length
--> payload bytes
+2-byte unsigned payload length, Big Endian
+payload = Protobuf Envelope
+max payload = 65535 bytes
 ```
 
-这里的 Big Endian 是网络 frame 合同；前面的 BMAP Little Endian 是离线文件合同。两者处在不同边界，不能因为“项目统一”强行改成同一种字节序。
+BMAP 继续是 Little Endian 离线资产；TCP frame 是 Big Endian 运行时协议。两个端序属于不同合同。
 
 #### LengthFrame 学习导航
 
 ```text
-必须精读：HeaderSize/MaxFrameBytes、Pack 的 byte 布局、TryRead 的半包与粘包处理
-必须理解：ref buffer 表示消费后把剩余 bytes 交还调用者
-可以略读：Buffer.BlockCopy 与 Span API 语法
-输入：一个完整 payload 或连接累计 buffer
-输出：完整 frame，或拆出的一个 payload + 剩余 buffer
-失败：payload 超限、声明长度超限；数据不足返回 false 而不是报坏包
-不负责：解析 Protobuf、连接 Socket、执行业务命令
+必须精读：HeaderSize=2、MaxFrameBytes=65535、Pack 的两个 header byte、TryRead 的半包/粘包处理
+必须理解：65536 无法编码进 netpack uint16 header，不能靠“加大 max_frame”绕过
+可以略读：Buffer.BlockCopy 语法
+输入：一个 Envelope payload 或连接累计 buffer
+输出：完整 2-byte frame，或拆出的一个 payload + 剩余 buffer
+失败：payload 超过 65535；数据不足返回 false
+不负责：Protobuf 解析、Socket 生命周期、业务命令
 ```
 
-操作：在 Unity 工程中新建 C# 文件，并粘贴下面的完整代码。
+操作：把第一课 Unity framing 示例完整替换成下面版本。
 
-新建文件：`unity/BattleNavigation/Assets/Scripts/Protocol/LengthFrame.cs`
+完整替换：`unity/BattleNavigation/Assets/Scripts/Protocol/LengthFrame.cs`
 
 ```csharp
-// 职责：实现 Unity 侧 4-byte Big Endian TCP 长度帧的打包与增量拆包。
+// 职责：实现与 Skynet netpack 一致的 2-byte Big Endian TCP 长度帧。
 // 边界：Client Runtime Transport；payload 对本文件是不透明 Protobuf bytes。
-// 输入/输出：payload 或累计接收 buffer -> frame，或一个 payload + 剩余 bytes。
+// 输入/输出：payload 或累计 buffer -> frame，或一个 payload + 剩余 bytes。
 // 不负责：不连接 Socket、不解析业务消息、不执行地图查询。
 using System;
-using System.Buffers.Binary;
 
 namespace BattleNavigation.Protocol
 {
-    /// <summary>4-byte Big Endian 长度头的 TCP framing；不解释 Protobuf 内容。</summary>
+    /// <summary>与 Skynet netpack 一致的 uint16 Big Endian framing。</summary>
     public static class LengthFrame
     {
-        // 每个 frame 的固定长度头字节数。
-        public const int HeaderSize = 4;
-        // 单个 Protobuf Envelope 允许的最大字节数，防止无界分配。
-        public const int MaxFrameBytes = 64 * 1024;
+        public const int HeaderSize = 2;
+        public const int MaxFrameBytes = ushort.MaxValue;
 
         /// <param name="payload">一个完整 Envelope 的序列化字节。</param>
-        /// <returns>长度头与 payload 拼接后的完整 frame。</returns>
         public static byte[] Pack(byte[] payload)
         {
             if (payload == null) throw new ArgumentNullException(nameof(payload));
-            if (payload.Length > MaxFrameBytes) throw new ArgumentOutOfRangeException(nameof(payload));
-            // output 是本次发送拥有的连续 frame 缓冲区。
+            if (payload.Length > MaxFrameBytes)
+                throw new ArgumentOutOfRangeException(nameof(payload));
+
             var output = new byte[HeaderSize + payload.Length];
-            BinaryPrimitives.WriteUInt32BigEndian(output.AsSpan(0, HeaderSize), (uint)payload.Length);
+            output[0] = (byte)((payload.Length >> 8) & 0xff);
+            output[1] = (byte)(payload.Length & 0xff);
             Buffer.BlockCopy(payload, 0, output, HeaderSize, payload.Length);
             return output;
         }
@@ -6851,17 +7848,16 @@ namespace BattleNavigation.Protocol
         {
             payload = null;
             if (buffer == null || buffer.Length < HeaderSize) return false;
-            // length 是网络大端长度头声明的 payload 字节数。
-            var length = BinaryPrimitives.ReadUInt32BigEndian(buffer.AsSpan(0, HeaderSize));
-            if (length > MaxFrameBytes) throw new InvalidOperationException("frame too large");
+
+            var length = (buffer[0] << 8) | buffer[1];
             if (buffer.Length < HeaderSize + length) return false;
+
             payload = new byte[length];
-            Buffer.BlockCopy(buffer, HeaderSize, payload, 0, (int)length);
-            // remaining 是消费一个完整 frame 后尚未解析的尾部字节数。
-            var remaining = buffer.Length - HeaderSize - (int)length;
-            // next 保存粘包情况下后续 frame 的未消费字节。
+            Buffer.BlockCopy(buffer, HeaderSize, payload, 0, length);
+
+            var remaining = buffer.Length - HeaderSize - length;
             var next = new byte[remaining];
-            Buffer.BlockCopy(buffer, HeaderSize + (int)length, next, 0, remaining);
+            Buffer.BlockCopy(buffer, HeaderSize + length, next, 0, remaining);
             buffer = next;
             return true;
         }
@@ -6869,36 +7865,20 @@ namespace BattleNavigation.Protocol
 }
 ```
 
-如果当前 Tuanjie API profile 不支持 `System.Buffers.Binary`，使用项目中已有的等价大端读写函数，不要改变线协议。端序必须由单元测试锁定。
-
 ### 29.3 ServerQueryClient
 
-`ServerQueryClient` 把三层合同串起来：
+`ServerQueryClient` 的业务三层合同没有变化：
 
 ```text
-QueryCellRequest          业务消息
--> Envelope               协议版本、命令、request_id
--> LengthFrame            TCP 消息边界
--> NetworkStream          byte stream
+QueryCellRequest
+-> Envelope(protocol_version / command / request_id)
+-> LengthFrame(uint16 BE)
+-> NetworkStream
 ```
 
-`TcpClient`/`NetworkStream` 是 Unity 当前进程持有的 OS 网络资源，所以实现 `IDisposable` 并在使用后关闭。当前实现是同步阻塞调用，只允许 Editor 人工调试；如果放进每帧 `Update()`，会阻塞客户端主线程。
+同步短连接仍只用于 Editor 调试。需要修改的是读写 frame 的 header 长度。
 
-#### ServerQueryClient 学习导航
-
-```text
-必须精读：WorldPosition 毫米字段、Envelope 包装、request_id 对照、ReadExact 短读循环
-必须理解：协议版本和 request_id 不匹配为什么必须拒绝
-可以略读：Google.Protobuf 对象初始化语法、TcpClient 构造样板
-输入：host/port、mapId/version、WorldPosition(mm)
-输出：匹配当前请求的 QueryCellResponse
-失败：连接/超时/EOF、非法 frame length、版本错配、request_id 错配、Protobuf 解析失败
-不负责：连接池、重试、高频查询、战斗模拟
-```
-
-操作：在 Unity 工程中新建 C# 文件，并粘贴下面的完整代码。
-
-新建文件：`unity/BattleNavigation/Assets/Scripts/Protocol/ServerQueryClient.cs`
+完整替换：`unity/BattleNavigation/Assets/Scripts/Protocol/ServerQueryClient.cs`
 
 ```csharp
 // 职责：供 Unity Editor 调试时同步发送一次 QueryCell 并校验对应响应。
@@ -6915,24 +7895,14 @@ using BattleNavigation.Protocol;
 
 namespace BattleNavigation.Client
 {
-    /// <summary>
-    /// 第一课 Editor 调试用同步短连接客户端；不放入战斗 Update，不承担高频查询。
-    /// </summary>
     public sealed class ServerQueryClient : IDisposable
     {
-        // Envelope 协议版本，必须与 Skynet Gateway 一致。
         private const uint ProtocolVersion = 1;
-        // QueryCell 命令号，必须与 Lua dispatch 表一致。
         private const uint QueryCellCommand = 1001;
-        // 当前 Editor 进程内递增的请求 ID；该调试客户端不并发共享实例。
         private static ulong nextRequestId = 1;
-        // 当前连接的 TCP 客户端所有者。
         private readonly TcpClient client;
-        // 与 client 绑定的同步读写流。
         private readonly NetworkStream stream;
 
-        /// <param name="host">Skynet Gateway 主机名或 IP。</param>
-        /// <param name="port">Skynet Gateway TCP 端口。</param>
         public ServerQueryClient(string host, int port)
         {
             client = new TcpClient();
@@ -6942,31 +7912,23 @@ namespace BattleNavigation.Client
             stream.WriteTimeout = 3000;
         }
 
-        /// <param name="mapId">服务端地图 ID。</param>
-        /// <param name="mapVersion">期望查询的地图资产版本。</param>
-        /// <param name="xMm">WorldPosition X，单位毫米。</param>
-        /// <param name="yMm">WorldPosition Y，单位毫米。</param>
-        /// <param name="zMm">WorldPosition Z，单位毫米。</param>
         public QueryCellResponse Query(uint mapId, uint mapVersion, long xMm, long yMm, long zMm)
         {
-            // request 是业务 QueryCell 请求，位置始终使用毫米制 WorldPosition。
             var request = new QueryCellRequest {
                 MapId = mapId,
                 MapVersion = mapVersion,
                 Position = new WorldPosition { XMm = xMm, YMm = yMm, ZMm = zMm },
             };
-            // body 是 QueryCellRequest 的 Protobuf 字节，不包含命令和 request_id。
-            var body = request.ToByteArray();
-            // envelope 添加版本、命令和关联响应所需 request_id。
             var envelope = new Envelope {
                 ProtocolVersion = ProtocolVersion,
                 Command = QueryCellCommand,
-                RequestId = nextRequestId++, Body = ByteString.CopyFrom(body),
+                RequestId = nextRequestId++,
+                Body = ByteString.CopyFrom(request.ToByteArray()),
             };
-            // frame 添加 TCP 4-byte Big Endian 长度头。
+
             var frame = LengthFrame.Pack(envelope.ToByteArray());
             stream.Write(frame, 0, frame.Length);
-            // responseEnvelope 是服务端返回并完成 framing 后的 Envelope。
+
             var responseEnvelope = Envelope.Parser.ParseFrom(ReadFrame());
             if (responseEnvelope.ProtocolVersion != ProtocolVersion)
                 throw new InvalidDataException("protocol version mismatch");
@@ -6977,26 +7939,19 @@ namespace BattleNavigation.Client
 
         private byte[] ReadFrame()
         {
-            // header 是固定 4-byte Big Endian payload 长度。
-            var header = ReadExact(4);
-            // length 是从网络字节序解码出的响应 Envelope 字节数。
-            var length = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
-            if (length < 0 || length > LengthFrame.MaxFrameBytes)
+            var header = ReadExact(LengthFrame.HeaderSize);
+            var length = (header[0] << 8) | header[1];
+            if (length <= 0 || length > LengthFrame.MaxFrameBytes)
                 throw new InvalidDataException("invalid frame length");
             return ReadExact(length);
         }
 
-        /// <param name="count">必须从 TCP stream 读取的精确字节数。</param>
         private byte[] ReadExact(int count)
         {
-            // result 是最终精确长度的返回缓冲区。
             var result = new byte[count];
-            // offset 是已经成功读入 result 的字节数。
             var offset = 0;
-            // TCP 可能短读，循环直到累计 count bytes。
             while (offset < count)
             {
-                // read 是本次 stream.Read 实际返回的字节数；TCP 不保证一次读满。
                 var read = stream.Read(result, offset, count - offset);
                 if (read == 0) throw new EndOfStreamException();
                 offset += read;
@@ -7013,7 +7968,7 @@ namespace BattleNavigation.Client
 }
 ```
 
-`ServerQueryClient` 只用于编辑器调试窗口和自动化测试，不把它挂在战斗单位的 `Update()` 上。Lesson 1 没有高频寻路业务，网络查询频率也必须低；后续 BattleWorker 的模拟不能每 Tick 依赖外部 TCP。
+客户端仍然用 `ReadExact`，因为 `netpack` 只存在于 Skynet Server；Unity 的 `NetworkStream.Read` 同样可能短读。`request_id` 继续承担请求/响应关联，因此 Gateway 在多个请求跨 Service 并发完成时不依赖“返回顺序一定等于发送顺序”。
 
 ### 29.4 查询调试窗口
 
@@ -7110,24 +8065,18 @@ namespace BattleNavigation.Editor
 
 ### 30.1 C# framing tests
 
-这组测试只锁定客户端长度帧，不连接真实 Server：
+这组测试锁定 Unity 与 `skynet.netpack` 完全一致的 2-byte Big Endian framing：
 
 ```text
-BigEndianRoundTrip：长度头 bytes 和完整消费
-PartialFrameWaits：只有 Header + 部分 Payload 时必须等待
+BigEndianRoundTrip：header 为 00 04，payload 完整消费
+PartialFrameWaits：2-byte Header + 部分 Payload 时必须等待
+MaxPayloadAccepted：65535 可以编码
+TooLargeRejected：65536 必须在客户端发送前拒绝
 ```
 
-必须精读测试输入为什么包含 `0x80/0xff`、为什么 partial 长度是 5；NUnit 断言语法可以略读。真实连接、错误命令和版本错配由下一节协议负例覆盖。
-
-操作：在 Unity 工程中新建测试文件，并粘贴下面的完整代码。
-
-新建文件：`unity/BattleNavigation/Assets/Tests/Editor/LengthFrameTests.cs`
+完整替换测试示例：
 
 ```csharp
-// 职责：锁定 Unity TCP 长度帧的大端布局、完整消费和半包等待行为。
-// 边界：Editor 单元测试；不连接真实 Skynet Server。
-// 输入/输出：进程内 byte[] -> NUnit 断言结果。
-// 不负责：不验证 Protobuf 业务字段和 Socket 生命周期。
 using NUnit.Framework;
 using BattleNavigation.Protocol;
 
@@ -7136,17 +8085,12 @@ public sealed class LengthFrameTests
     [Test]
     public void BigEndianRoundTrip()
     {
-        // input 是包含高位 byte 的 payload，用于避免只测 ASCII/零值。
         var input = new byte[] { 0x01, 0x02, 0x80, 0xff };
-        // frame 应由 4-byte 大端长度头和 input 原样拼接。
         var frame = LengthFrame.Pack(input);
         Assert.That(frame[0], Is.EqualTo(0));
-        Assert.That(frame[1], Is.EqualTo(0));
-        Assert.That(frame[2], Is.EqualTo(0));
-        Assert.That(frame[3], Is.EqualTo(4));
-        // buffer 模拟连接当前尚未消费的全部接收字节。
+        Assert.That(frame[1], Is.EqualTo(4));
+
         var buffer = frame;
-        // output 是 TryRead 从 buffer 中拆出的完整 payload。
         Assert.That(LengthFrame.TryRead(ref buffer, out var output), Is.True);
         Assert.That(output, Is.EqualTo(input));
         Assert.That(buffer.Length, Is.EqualTo(0));
@@ -7155,34 +8099,50 @@ public sealed class LengthFrameTests
     [Test]
     public void PartialFrameWaits()
     {
-        // frame 是 payload 长度为 3 的完整基准帧。
         var frame = LengthFrame.Pack(new byte[] { 1, 2, 3 });
-        // partial 只含 4-byte Header 和 1-byte Payload，必须等待更多 TCP 数据。
-        var partial = new byte[5];
+        var partial = new byte[3]; // 2-byte header + 1 payload byte
         System.Array.Copy(frame, partial, partial.Length);
         Assert.That(LengthFrame.TryRead(ref partial, out _), Is.False);
+    }
+
+    [Test]
+    public void MaxPayloadAccepted()
+    {
+        var frame = LengthFrame.Pack(new byte[ushort.MaxValue]);
+        Assert.That(frame.Length, Is.EqualTo(ushort.MaxValue + LengthFrame.HeaderSize));
+        Assert.That(frame[0], Is.EqualTo(0xff));
+        Assert.That(frame[1], Is.EqualTo(0xff));
+    }
+
+    [Test]
+    public void TooLargeRejected()
+    {
+        Assert.Throws<System.ArgumentOutOfRangeException>(
+            () => LengthFrame.Pack(new byte[ushort.MaxValue + 1]));
     }
 }
 ```
 
-### 30.2 Server protocol negative cases
+### 30.2 Server protocol negative / event cases
 
-用 Python 或 Lua 写一个只连接 `127.0.0.1:19001` 的测试客户端，依次验证：
+真实 TCP Client 与 Gateway 至少覆盖：
 
 ```text
-1. length=0，连接关闭或返回明确 BAD_REQUEST；
-2. length=65537，服务立即关闭连接；
-3. protocol_version=999，服务不执行地图查询；
-4. command=9999，服务不执行地图查询；
-5. Envelope body 不是 QueryCellRequest，服务不崩溃；
-6. 两个 frame 一次 write，服务返回两个独立响应；
-7. 一个 frame 分 3 次 write，服务仍能返回一个响应；
-8. response.request_id 必须等于 request.request_id；
-9. map_version 不匹配只能得到 MAP_VERSION_MISMATCH；
-10. 世界坐标越界只能得到 OUT_OF_BOUNDS。
+1.  2-byte length=0，连接关闭，不能进入 Query Service；
+2.  旧 4-byte header 客户端连接，不能被误判成合法 Envelope；
+3.  protocol_version=999，不执行地图查询；
+4.  command=9999，不执行地图查询；
+5.  Envelope body 不是 QueryCellRequest，Gateway 不崩溃；
+6.  两个 netpack frame 一次 write，得到两个独立 request_id 响应；
+7.  一个 frame 分 3 次 write，仍只形成一个业务请求；
+8.  response.request_id 必须等于对应 request.request_id；
+9.  map_version 不匹配只能得到 MAP_VERSION_MISMATCH；
+10. 世界坐标越界只能得到 OUT_OF_BOUNDS；
+11. 单连接并发请求超过 max_inflight_per_connection 时连接被保护性关闭；
+12. close/error 在 skynet.call yield 期间发生时，旧协程不能向后来复用的同号 fd 写响应。
 ```
 
-测试完成后查看 Server 日志，确认 malformed frame 不会触发 C++ 崩溃，也不会留下一个永远等待的协程。
+`65536` 及以上 payload 不再属于“收到后检查”的场景：2-byte uint16 header 根本无法表达它，发送端必须在 framing 层拒绝。Server 的 `netpack.pack` 也会拒绝 `>= 0x10000` 的 payload。
 
 ## 31. 完整执行顺序
 
@@ -7227,10 +8187,26 @@ sha256sum maps/battle_1001.bmap
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-scripts/linux/run_server.sh
+./scripts/linux/run_server.sh start
+./scripts/linux/run_server.sh status
+tail -f logs/server.log
 ```
 
 Unity 打开 `Tools/Battle Navigation/Server Query`，输入 `127.0.0.1`、`19001`、`1001`、`1`，再输入场景世界坐标。然后查询 `x_mm=999999999`，预期结果是 `OUT_OF_BOUNDS`，而不是崩溃或卡住。
+
+验证结束安全停止：
+
+```bash
+./scripts/linux/stop_server.sh
+# 或
+./scripts/linux/run_server.sh stop
+```
+
+需要观察前台事件分发或打 LuaPanda/gdb 断点时：
+
+```bash
+./scripts/linux/run_server.sh foreground
+```
 
 ## 32. 结果对照与调试证据
 
@@ -7299,7 +8275,7 @@ run
 
 ### TCP 偶发卡住
 
-检查客户端是否完整读取 4 字节 header，Server 是否处理半包/粘包，`socket.read` 返回值是否符合当前 Skynet 版本。异常连接必须关闭。
+检查客户端是否按 2-byte Big Endian 读取 netpack header；Server 日志是否出现 `NAV_TCP_PROTOCOL_CLOSE`、`NAV_TCP_WRITE_WARNING` 或连接上限保护。半包/粘包由 `netpack.filter` 管理，不再排查 `socket.read` 返回块大小。
 
 ### Unity 与 Server 结果不同
 
@@ -7317,7 +8293,7 @@ run
 [ ] MapRegistry 可按 map_id 查找并拒绝版本不匹配。
 [ ] Lua Binding 只暴露静态查询，没有全局可写 scratch。
 [ ] lua-protobuf descriptor 可以加载。
-[ ] TCP 使用 4 字节大端长度，最大 64 KiB。
+[ ] Gateway 使用 `socketdriver + PTYPE_SOCKET + netpack`，TCP 为 2-byte Big Endian uint16 长度，最大 payload 65535 bytes。
 [ ] Unity 使用 Google.Protobuf 生成类型发送真实 protobuf。
 [ ] Server 返回 request_id、result、grid、height、area、clearance。
 [ ] 半包、粘包、错误版本、未知命令、超大 frame 有测试。

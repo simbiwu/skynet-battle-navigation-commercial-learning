@@ -65,12 +65,15 @@ Registry 只有一份 payload。
 真实 TCP Client 与 Skynet Gateway 覆盖：
 
 ```text
-4-byte big-endian length frame
+2-byte big-endian uint16 netpack frame
+socketdriver open/data/more/close/error/warning event path
 protocol version
 request id
 unknown command
 malformed envelope/body
-64 KiB packet limit
+65535-byte payload limit
+fd close/reuse while a request yields
+per-connection in-flight limit
 map/version mismatch
 out of bounds WorldPosition
 ```

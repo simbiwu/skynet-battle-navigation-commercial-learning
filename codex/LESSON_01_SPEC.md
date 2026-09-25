@@ -60,7 +60,9 @@ Detour
 [ ] multi-service query
 [ ] pinned lua-protobuf / protoc / C# runtime
 [ ] generated server descriptor and Unity C# types
-[ ] TCP length framing and malformed packet tests
+[ ] socketdriver + PTYPE_SOCKET + netpack event-driven Gateway
+[ ] uint16 Big Endian framing, half/sticky packet and malformed packet tests
+[ ] fd close/reuse and per-connection in-flight protection
 [ ] Unity real Protobuf query against Skynet
 [ ] corruption tests
 [ ] golden coordinate test

@@ -1,5 +1,6 @@
 /build/
 /logs/
+/run/
 /tmp/
 /third_party/skynet/
 /third_party/lua-protobuf/

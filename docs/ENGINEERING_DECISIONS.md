@@ -405,7 +405,7 @@ Lesson 2 当 `AgentProfile / Path / NavigationContext / FindPath` 已经工作�
 
 ```text
 Unity WorldPosition
--> TCP length frame
+-> TCP netpack frame
 -> Protobuf Envelope / QueryCellRequest
 -> Navigation Gateway Service
 -> Navigation Query Service
@@ -423,9 +423,13 @@ Protobuf 只负责运行时消息，不替代 BMAP。BMAP 仍是 Unity 到 Serve
 Server Runtime: starwing/lua-protobuf 0.5.3
 commit: ee4beb3865e2b82ea94b8a4314d78875c550ce20
 C# Runtime: Google.Protobuf 3.36.2
+Unity dependency: System.Memory 4.5.3
+Unity dependency: System.Runtime.CompilerServices.Unsafe 4.5.3
+Unity dependency: System.Buffers 4.5.1
+Unity dependency: System.Numerics.Vectors 4.4.0
 protoc: 36.2
-frame: uint32 big-endian length + Protobuf Envelope
-max application payload: 64 KiB
+frame: uint16 big-endian length (Skynet netpack) + Protobuf Envelope
+max application payload: 65535 bytes
 ```
 
 `.proto` 是唯一权威 Schema。Descriptor 和 C# 类型在构建阶段生成，普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
@@ -466,9 +470,8 @@ ordered BattleEvent
 
 ```text
 service/navigation_query.lua       Query Service 入口
-service/navigation_gateway.lua     Gateway Service 入口
+service/navigation_gateway.lua     Gateway Service 入口；直接持有 socketdriver/netpack event loop
 lualib/navigation/query_logic.lua  Query 内部业务模块
-lualib/network/length_frame.lua    Gateway 内部 framing 工具
 lualib/protocol/navigation_codec.lua  Gateway 内部 codec
 ```
 

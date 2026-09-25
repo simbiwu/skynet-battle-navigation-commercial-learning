@@ -4272,7 +4272,7 @@ DynamicOccupancy
 
 ### 15.1 为什么 no-yield 不是“Skynet 不能 yield”
 
-`BattleMgr` 调 Worker 本来就会 yield。网络 Gateway 等输入也会 yield。
+`BattleMgr` 调 Worker 本来就会 yield。第一课的 Navigation Gateway 现在由 `socketdriver + netpack` 直接接收 `PTYPE_SOCKET` 事件，在完整请求进入 `skynet.call(Query Service)` 时同样允许 yield；这类接入层并发不会改变 Battle 核心的 no-yield 规则。
 
 约束只针对**已经开始推进某段 Battle 状态的核心临界区**：
 
@@ -5145,7 +5145,7 @@ skynet.start(function()
 end)
 ```
 
-注意 Worker 的服务名取决于当前 Skynet `luaservice` 搜索路径。当前 Git 仓库没有提交第一课实际 Skynet config，因此运行前要用本机第一课已经验证的 `luaservice/lua_path/cpath` 配置确认路径，不要为了匹配文档新造 `lesson2_server` 之类阶段性入口。
+注意 Worker 的服务名取决于当前 Skynet `luaservice` 搜索路径。仓库已经提交第一课的 `server/config/skynet.lua`，其 `./service/?.lua` 与 `./lualib/?.lua` 可以继续解析第二课的 `battle/...` 子路径；第二课直接沿用这份进程配置，不为匹配课程阶段另造 `lesson2_server` 入口。
 
 ---
 

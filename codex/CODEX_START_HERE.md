@@ -190,10 +190,9 @@ Lesson 1：
 ```text
 native/grid_map/                 C++ 静态地图
 service/navigation_query.lua    真正的 Query Service 入口
-service/navigation_gateway.lua  真正的 Gateway Service 入口
+service/navigation_gateway.lua  真正的 Gateway Service 入口；直接使用 socketdriver + netpack
 lualib/navigation/              Query Service 内普通模块
-lualib/network/                 Gateway 内普通网络工具
-lualib/protocol/                运行期协议 codec
+lualib/protocol/                运行期 Protobuf codec
 ```
 
 `service/` 只放 `newservice/uniqueservice` 启动的入口；普通 `require` 模块必须放入 `lualib/`。后续课程延续这一规则，不能用文件名把普通模块伪装成 Worker、Agent 或 Gateway。
