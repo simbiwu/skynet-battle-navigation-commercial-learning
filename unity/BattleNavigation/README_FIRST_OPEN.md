@@ -1,6 +1,6 @@
 # BattleNavigation Unity 工程第一次打开
 
-1. 用 `G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe` 打开本目录。
+1. 在 Tuanjie Hub 中选择固定版本 2022.3.62t12，并打开本目录；Editor 实际安装路径由当前机器决定。
 2. 等待右下角脚本编译完成，Console 不应有红色错误。
 3. 打开 `Assets/BattleNavigation/Scenes/Battle_1001.unity`。
 4. 执行课程 Editor 脚本注册的自定义菜单 `Tools > Battle Navigation > Validate Current Battle Scene`。

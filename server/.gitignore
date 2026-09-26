@@ -11,3 +11,6 @@
 *.o
 core
 core.*
+/third_party/luapanda/
+/third_party/luasocket/
+/third_party/luasocket-runtime/

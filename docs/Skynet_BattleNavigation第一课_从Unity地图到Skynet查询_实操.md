@@ -147,19 +147,22 @@ Unity Editor 是第五个可观察现场。不要把 Server 长驻进程、构�
 ```text
 Tuanjie Editor 1.10.0
 Editor build 2022.3.62t12_ab02e98c9779
-G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe
+实际安装路径由本机 Tuanjie Hub 决定
 ```
 
-Windows PowerShell：
+先在 Tuanjie Hub 的 Installs 页面找到 2022.3.62t12，再把对应 `Tuanjie.exe` 路径写入当前 PowerShell 会话。环境变量只用于这次检查，不写入工程文件：
 
 ```powershell
-$editor = 'G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe'
+$editor = $env:TUANJIE_EDITOR
+if ([string]::IsNullOrWhiteSpace($editor)) {
+    throw '请先设置 TUANJIE_EDITOR，例如：$env:TUANJIE_EDITOR = ''<Tuanjie Editor 安装目录>\Editor\Tuanjie.exe'''
+}
 Get-Item -LiteralPath $editor |
     Select-Object FullName,
         @{Name='ProductVersion'; Expression={$_.VersionInfo.ProductVersion}}
 Get-AuthenticodeSignature -LiteralPath $editor |
     Select-Object Status, StatusMessage
-Get-PSDrive C,G |
+Get-PSDrive -PSProvider FileSystem |
     Select-Object Name,
         @{Name='FreeGB'; Expression={[math]::Round($_.Free / 1GB, 2)}}
 ```
@@ -170,10 +173,10 @@ Get-PSDrive C,G |
 2022.3.62t12_ab02e98c9779
 ```
 
-Editor 已经在 G 盘，不重新通过 Hub 下载。若 Hub 的 Installs 页面没有自动列出它，使用 `Locate/定位` 并选择：
+若 Hub 的 Installs 页面没有自动列出已有 Editor，使用 `Locate/定位` 并选择：
 
 ```text
-G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe
+<Tuanjie Editor 安装目录>\Editor\Tuanjie.exe
 ```
 
 这只是让 Hub 记录一个已有 Editor，不会复制安装文件。
@@ -194,27 +197,40 @@ gdb --version
 再确认参考工程的开发环境存在，但不把它合并到新项目：
 
 ```bash
-test -d /mnt/g/simbi/dev/skynet-slg-learning
-find /mnt/g/simbi/dev/skynet-slg-learning -maxdepth 2 -type f \
+reference_root="${SKYNET_SLG_REFERENCE_ROOT:?请设置参考工程在当前机器上的路径}"
+test -d "$reference_root"
+find "$reference_root" -maxdepth 2 -type f \
   -name 'AGENTS.md' -o -name 'README.md'
 ```
 
 `skynet-slg-learning` 只提供教学组织、依赖固定、Skynet ownership/yield、测试和调试方式。不要从中复制 Login、World、Region、H5 或双协议业务。
 
-## 3. 固定目录：资料、Unity、Server 各有位置
+## 3. 目录约定：所有工程路径从仓库根目录推导
 
 ```text
 课程资料：
-G:\simbi\dev\skynet-battle-navigation-commercial-learning
+<仓库根目录>
 
 Unity 工程：
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
+<仓库根目录>\unity\BattleNavigation
 
 Server 工程：
-~/workspace/skynet-battle-navigation-commercial-learning/server
+<仓库根目录>/server
 ```
 
-为什么 Server 不放 `/mnt/g`：Skynet、CMake 和大量小文件编译在 WSL Linux 文件系统中更稳定，也避免 Windows/WSL 文件权限和文件监听差异。Unity 工程放 G 盘，因为 Editor、Library 和导入缓存体积大，C 盘空间有限。
+仓库可以克隆到任意磁盘或 WSL 文件系统。后续命令通过 `git rev-parse --show-toplevel` 获取仓库根目录；不要把某台机器的盘符或用户名写入脚本。若主要在 WSL 编译 Skynet、CMake 和大量小文件，放在 WSL Linux 文件系统通常更稳定；若主要使用 Windows Editor，也可以放在 Windows 文件系统并通过 `/mnt/<drive>/...` 访问。
+
+终端当前目录位于仓库或任一子目录时，可以这样取得真实路径：
+
+```powershell
+$repoRoot = (git rev-parse --show-toplevel).Trim()
+```
+
+```bash
+repo_root="$(git rev-parse --show-toplevel)"
+```
+
+后文的 `<仓库根目录>` 只用于展示文件身份；可执行命令会使用这两个动态结果或脚本自身位置推导路径。
 
 Server 运行时也不直接读取 Unity Project。BMAP 从 Windows 产物目录显式导入到 Server 的 `maps/`，这一步就是课程里的最小资产发布动作。
 
@@ -404,8 +420,8 @@ Console 是 Unity 的日志与编译错误窗口，接近 Server 日志终端。
 当前仓库已经创建好 Unity 工程，不需要再在 Hub 中新建。使用下列 Editor 打开：
 
 ```text
-Editor:  G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe
-Project: G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
+Editor:  <Tuanjie Editor 安装目录>\Editor\Tuanjie.exe
+Project: <仓库根目录>\unity\BattleNavigation
 ```
 
 ### 4.1 第一次打开工程
@@ -462,8 +478,8 @@ Version: 1.1.7
 安装完成后，在 Package Manager 的 `In Project` 列表里应看到 AI Navigation。再打开：
 
 ```text
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Packages\manifest.json
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Packages\packages-lock.json
+<仓库根目录>\unity\BattleNavigation\Packages\manifest.json
+<仓库根目录>\unity\BattleNavigation\Packages\packages-lock.json
 ```
 
 `manifest.json` 中应出现：
@@ -524,7 +540,7 @@ G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
 WSL Build 终端：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 
 mkdir -p \
   config \
@@ -542,7 +558,7 @@ mkdir -p \
   tests/skynet
 ```
 
-完整替换 `~/workspace/skynet-battle-navigation-commercial-learning/server/.gitignore`：
+完整替换 `<仓库根目录>/server/.gitignore`：
 
 ```gitignore
 /build/
@@ -3726,14 +3742,15 @@ Tools -> Battle Navigation -> Export BMAP
 预期输出：
 
 ```text
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.bmap
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.manifest.json
+<仓库根目录>\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.bmap
+<仓库根目录>\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.manifest.json
 ```
 
 PowerShell 检查大小和 Hash：
 
 ```powershell
-$dir = 'G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\BuildArtifacts\Navigation'
+$repoRoot = (git rev-parse --show-toplevel).Trim()
+$dir = Join-Path $repoRoot 'unity\BattleNavigation\BuildArtifacts\Navigation'
 Get-Item -LiteralPath "$dir\battle_1001.bmap"
 Get-Content -LiteralPath "$dir\battle_1001.manifest.json" -Raw
 Get-FileHash -LiteralPath "$dir\battle_1001.bmap" -Algorithm SHA256
@@ -4287,15 +4304,15 @@ Window -> General -> Test Runner -> EditMode -> Run All
 
 ```text
 Unity 输出：<unity-project>/BuildArtifacts/Navigation/battle_1001.bmap
-Server 输入：~/workspace/skynet-battle-navigation-commercial-learning/server/maps/battle_1001.bmap
+Server 输入：<仓库根目录>/server/maps/battle_1001.bmap
 Review 旁路：battle_1001.manifest.json
 ```
 
 操作类型：执行命令，不新建源码文件。先在 Unity Console 确认有 `BMAP_EXPORT_OK`，再在 WSL 中复制导出产物：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-unity_output=/mnt/g/simbi/dev/skynet-battle-navigation-commercial-learning/unity/BattleNavigation/BuildArtifacts/Navigation
+cd "$(git rev-parse --show-toplevel)/server"
+unity_output="$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
 
 test -s "$unity_output/battle_1001.bmap"
 test -s "$unity_output/battle_1001.manifest.json"
@@ -5298,7 +5315,7 @@ add_test(NAME grid_map_test COMMAND grid_map_test)
 第一次构建：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 cmake -S native/grid_map -B build/grid_map -DCMAKE_BUILD_TYPE=Debug
 cmake --build build/grid_map -j"$(nproc)"
 ctest --test-dir build/grid_map --output-on-failure
@@ -5334,7 +5351,7 @@ GRID_MAP_TEST_OK
 
 操作：在 Server 工程中新建协议文件，并粘贴下面的完整内容。
 
-新建文件：`~/workspace/skynet-battle-navigation-commercial-learning/server/protocol/navigation_query.proto`
+新建文件：`<仓库根目录>/server/protocol/navigation_query.proto`
 
 ```proto
 // 职责：定义 Unity 与 Skynet 之间 QueryCell 请求、响应和 Envelope 合同。
@@ -5714,7 +5731,7 @@ LUA_CPATH="$RUNTIME/?.so;;" \
 赋予执行权限并初始化：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 chmod +x scripts/linux/bootstrap_protocol_tools.sh \
          scripts/linux/build_lua_protobuf.sh \
          scripts/linux/check_server_descriptor.sh
@@ -5801,7 +5818,7 @@ PowerShell 生成出来的 C# 文件必须提交到 Unity 工程，Server descri
 -- 输入/输出：descriptor 文件路径 -> 断言或 PROTO_DESCRIPTOR_OK。
 local pb = require "pb"
 
-local path = assert(..., "usage: check_descriptor.lua descriptor.pb")
+local path = assert(arg[1], "usage: check_descriptor.lua descriptor.pb")
 local data = assert(io.open(path, "rb")):read("*a")
 assert(pb.load(data))
 
@@ -5814,7 +5831,7 @@ print("PROTO_DESCRIPTOR_OK")
 运行：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 ./protocol/build_server_descriptor.sh
 ./scripts/linux/check_server_descriptor.sh
 ```
@@ -6488,7 +6505,7 @@ local query_logic = require "navigation.query_logic"
 skynet.start(function()
     query_logic.start(config)
 
-    skynet.dispatch("lua", function(_, _, command, payload)
+    skynet.dispatch("lua", function(_session, _source, command, payload)
         if command ~= "query_cell" then
             error("unknown navigation_query command: " .. tostring(command))
         end
@@ -6527,6 +6544,25 @@ socket thread
       -> netpack.pack
       -> socketdriver.send
 ```
+
+#### 本节的商业级工程边界
+
+第一课只承载低频 `QueryCell`，但 Gateway 仍然是正式接入层，不能用“教学 Demo”作为省略错误边界的理由。本节必须做到：
+
+```text
+Gateway Service 独占 listen fd、client fd、connections 和 netpack queue
+协议先完成 frame/version/command/body 校验，再进入 Query Service
+max_frame、max_clients、单连接 in-flight 和写缓冲都有明确上限
+netpack C message 在任何 yield 前转换或释放
+skynet.call 返回后重新确认 connection object，防止 fd 复用误写
+close/error/stop 都有可重复、可观察的资源回收路径
+main 保存并显式注入 Query Service handle，不依赖隐藏全局名字
+Gateway 只做接入、协议和转发，不加载 BMAP，不执行 Native 查询
+```
+
+这些约束让后续增加真实 SLG 命令时可以沿用同一接入边界，而不需要推翻连接 ownership 和消息模型。
+
+当前阶段不宣称 Gateway 已经可以直接暴露到生产公网。TLS、账号鉴权、按玩家限流、空闲超时、指标平台、多实例负载均衡和应用层 drain 属于真实部署还要补齐的能力。教程会在它们首次成为当前链路需求时引入；缺少这些能力不能被包装成“已经生产就绪”。
 
 这里最重要的变化不是 API 名字，而是 ownership 模型：Gateway 不再为每个 fd 建一个“读循环 owner”。连接状态保存在 Gateway Service 的 `connections[fd]` 中，底层 socket 事件不断投递到同一个 Service；每条请求自己的消息协程可以在 `skynet.call` 处 yield。
 
@@ -6630,7 +6666,154 @@ max_inflight_per_connection = 32
 
 超过上限直接关闭连接。这里没有实现复杂排队和流控，因为第一课只是低频 QueryCell 验收链；真正游戏 Gateway 可以根据协议语义选择串行请求、每玩家 Agent、限流队列或 back-pressure。
 
-### 27.6 替换 Gateway
+### 27.6 第一次理解 `skynet.register_protocol`
+
+Gateway 即将直接接收 `PTYPE_SOCKET`。现在必须先回答一个 Skynet 核心问题：一条底层消息到达某个 Service 后，Skynet 怎样把原始 `msg + size` 变成 Lua 函数参数，并找到处理函数？
+
+`skynet.register_protocol` 在**当前 Service 的 Lua State** 中登记一套消息协议。它不是向 OS 注册 Socket，也不是给 Service 注册全局名字。下面两种写法完全等价：
+
+```lua
+skynet.register_protocol {
+    name = "socket",
+    id = skynet.PTYPE_SOCKET,
+}
+
+skynet.register_protocol({
+    name = "socket",
+    id = skynet.PTYPE_SOCKET,
+})
+```
+
+第一种只是 Lua 对“单个 table 参数函数调用”省略圆括号的语法。协议注册发生在当前 Gateway 中；另一个 Service 有自己的 Lua State，不会自动共享这张注册表。
+
+#### dispatch 参数从哪里来
+
+接收方向可以记成一个固定公式：
+
+```text
+dispatch 的参数
+= session
++ source
++ unpack(msg, sz) 的全部返回值
+```
+
+等价的伪代码是：
+
+```lua
+local a, b, c = protocol.unpack(msg, sz)
+protocol.dispatch(session, source, a, b, c)
+```
+
+当前 Gateway 的 `unpack` 是：
+
+```lua
+unpack = function(msg, sz)
+    return netpack.filter(queue, msg, sz)
+end
+```
+
+`netpack.filter` 返回更新后的 queue、事件名以及该事件的参数，所以 dispatch 写成：
+
+```lua
+dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+    queue = updated_queue
+    if event == nil then
+        return
+    end
+
+    if event == "open" then
+        SOCKET.open(arg1, arg2)
+    elseif event == "data" then
+        SOCKET.data(arg1, arg2, arg3)
+    elseif event == "more" then
+        SOCKET.more()
+    -- init/close/error/warning 同样显式映射；完整代码见 27.7。
+    else
+        error("unknown socket event: " .. tostring(event))
+    end
+end
+```
+
+这里 `_session` 和 `_source` 仍然会收到 Skynet 传入的值；下划线前缀只表示当前函数有意不使用它们。`arg1/arg2/arg3` 是框架适配层接收不同 event 参数的固定槽位：
+
+```text
+updated_queue  当前 netpack queue；必须写回 Gateway 的 queue
+event          init/open/data/more/close/error/warning，或 nil
+arg1..arg3     当前 event 对应的 fd、address、msg、size 等参数
+```
+
+适配层通过显式 event 分支把固定槽位映射成明确函数签名。这样新增事件或改变参数时必须修改一个可检索的分支，IDE 也能显示参数数量；项目自有 Lua 代码不继续传播 `...`：
+
+```lua
+function SOCKET.open(fd, address)
+end
+
+function SOCKET.data(fd, msg, sz)
+end
+
+function SOCKET.error(fd, message)
+end
+
+function SOCKET.warning(fd, pending_kb)
+end
+```
+
+#### `unpack`、`dispatch` 与 `pack` 的职责
+
+对需要接收消息的协议，逻辑上必须同时存在 `unpack` 和 `dispatch`，但不一定都写在同一次调用中：
+
+| 场景 | 谁提供 `unpack` | 谁提供 `dispatch` |
+|---|---|---|
+| 内置 `"lua"` 协议 | Skynet 已注册 | Service 调用 `skynet.dispatch("lua", handler)` |
+| 自定义接收协议 | 当前协议适配层 | 当前 Service |
+| 本节 `PTYPE_SOCKET` | `netpack.filter` 包装函数 | Gateway 的 Socket 事件分发函数 |
+| 只发送、不接收 | 取决于发送 API | 不需要接收 dispatch |
+
+自定义协议也可以先注册解包规则，再单独设置处理函数：
+
+```lua
+skynet.register_protocol {
+    name = "client",
+    id = skynet.PTYPE_CLIENT,
+    unpack = skynet.tostring,
+}
+
+skynet.dispatch("client", function(_session, source, payload)
+    handle_client_message(source, payload)
+end)
+```
+
+`pack` 属于发送方向：
+
+```text
+发送：Lua 参数 -> pack -> Skynet message
+接收：Skynet message -> unpack -> dispatch
+```
+
+当前 Gateway 通过 `socketdriver.send(fd, netpack.pack(payload))` 发送 TCP 数据，因此没有为 `"socket"` 协议提供 `pack`。
+
+#### 为什么这里必须显式调用
+
+`"lua"` 是 Skynet 已准备好的协议，所以 Query Service 只需要调用 `skynet.dispatch("lua", ...)`。本节 Gateway 没有使用负责协程式读取的高层 `skynet.socket`，而是直接使用 `socketdriver + netpack` 接管 `PTYPE_SOCKET`，因此必须显式注册它的 `unpack` 和 `dispatch`。两套 Socket 接收模型不能在同一个 Gateway 中重复注册或混用。
+
+Lua IDE 通常无法自动推导这里的参数，因为 `netpack` 是 C 模块，而且不同 event 返回不同形状的可变参数。遇到框架边界时，以课程固定的 Skynet v1.8.0 源码为准：
+
+```text
+third_party/skynet/lualib/skynet.lua          register_protocol 与 dispatch 调用规则
+third_party/skynet/service/gate.lua           官方 Gateway 使用方式
+third_party/skynet/lualib-src/lua-netpack.c   netpack.filter/pop/pack 的真实合同
+```
+
+实际项目只在 Gateway 这一层理解一次原始合同，再用固定参数、命名函数、Lua Language Server 注解、断言和协议测试把它收敛起来。业务模块不需要反复追到 C 源码。
+
+验证理解：如果 `unpack` 返回 `updated_queue, "open", fd, address`，最终调用关系是什么？答案是：
+
+```lua
+dispatch(session, source, updated_queue, "open", fd, address)
+SOCKET.open(fd, address)
+```
+
+### 27.7 替换 Gateway
 
 #### 学习导航
 
@@ -6665,8 +6848,8 @@ local codec = require "protocol.navigation_codec"
 
 local query_service       -- main 注入；start 成功后只读。
 local listen_fd           -- 当前监听 fd；nil 表示未监听或已停止。
-local listen_context      -- start 等待 SOCKET_TYPE_CONNECT/init 时的临时上下文。
-local queue               -- netpack.filter 持有的半包/完整包队列；只属于本 Gateway Lua State。
+local listen_context      -- start 等待 init/error 的一次性握手状态；保存 fd、等待协程和异步结果。
+local queue               -- netpack 不透明 userdata；持有半包/完整包，首次分配或扩容后句柄可能被替换。
 local stopping = false
 local client_count = 0
 local connections = {}    -- fd -> connection object；object identity 用于防止 fd 复用误写。
@@ -6808,17 +6991,21 @@ function SOCKET.data(fd, msg, sz)
     dispatch_packet(fd, msg, sz)
 end
 
--- 一条 socket message 里可能形成多个完整包；queue 中的包逐个消费。
--- 第一包允许 yield 时先 fork 一个继续 drain 的协程，保持 socket event dispatch 不被业务 call 串死。
+-- 一条 socket message 里可能形成多个完整包；netpack.pop 把当前包的 buffer ownership 交给处理协程。
+-- queue 是整个 Gateway、跨所有 fd 共享的接入层队列；不能让一个连接的 skynet.call 阻塞其他连接。
+-- fork 只登记一个续接协程，不会立刻并行执行。当前包一旦 yield，续接协程会读取最新全局 queue 继续 drain。
 local function dispatch_queue()
     local fd, msg, sz = netpack.pop(queue)
     if fd == nil then
         return
     end
 
+    -- 先安排 continuation，再处理可能 yield 的当前包；若当前包不 yield，下面的 for 会直接批量排空。
     skynet.fork(dispatch_queue)
     dispatch_packet(fd, msg, sz)
 
+    -- 泛型 for 会保存进入循环时的 queue 引用。若循环体 yield 期间发生扩容，旧 queue 已被 C 模块
+    -- 迁移并重置为空；续接协程使用新的全局 queue，因此不会重复 pop 或遗漏迁移后的包。
     for next_fd, next_msg, next_sz in netpack.pop, queue do
         dispatch_packet(next_fd, next_msg, next_sz)
     end
@@ -6867,7 +7054,8 @@ function SOCKET.close(fd)
     detach_connection(fd, "peer closed", "none")
 end
 
--- ERROR 在 listen 启动阶段必须唤醒 start 协程，否则 main 会永久等在 skynet.call(start)。
+-- ERROR 在 listen 启动阶段写入失败结果并唤醒 start 协程，否则 main 会永久等在 skynet.call(start)。
+-- wakeup 不保存“提前通知”；这里能成功是因为本事件只能在 start 协程执行 wait 并 yield 后被当前 Service dispatch。
 function SOCKET.error(fd, message)
     if listen_context ~= nil and fd == listen_context.fd then
         listen_context.error = message or "listen socket error"
@@ -6895,7 +7083,8 @@ function SOCKET.warning(fd, size)
     end
 end
 
--- socketdriver.listen 成功后会收到 CONNECT/init 事件；记录实际绑定地址/端口并唤醒 start。
+-- socketdriver.listen 的异步成功结果通过 CONNECT/init 到达；记录实际绑定地址/端口并唤醒 start。
+-- 同一个 Service Context 不会并行执行两条 Lua 协程，因此本函数不会抢在 start 建立 listen_context 之前重入。
 function SOCKET.init(fd, address, port)
     if listen_context == nil or fd ~= listen_context.fd then
         return
@@ -6937,8 +7126,10 @@ local function stop_gateway()
     return true
 end
 
--- 启动监听并等待 socketdriver 的 init 事件确认 bind 完成。
--- 这里会因 skynet.wait yield；start 返回 true 后，main 才打印 NAV_SERVER_READY。
+-- 启动监听并等待 socketdriver 的 init/error 事件确认 bind 结果。
+-- query_address 是 main 注入的 Query Service handle；成功返回 true，失败抛错并使 main 的 skynet.call 失败。
+-- 本函数执行 Socket I/O、修改 Service 私有启动状态，并在 skynet.wait 处 yield；不创建 OS Thread。
+-- 从 listen 返回到 wait 登记 token 之间必须保持 no-yield，避免未来重构引入丢失通知窗口。
 local function start_gateway(query_address)
     assert(query_service == nil, "navigation gateway already started")
     assert(config.max_frame_bytes > 0 and config.max_frame_bytes <= 0xffff,
@@ -6950,8 +7141,12 @@ local function start_gateway(query_address)
     query_service = assert(query_address, "query service address is required")
     codec.load_descriptor("protocol/generated/server/navigation_query.pb")
 
+    -- listen 只同步返回 Skynet Socket ID；bind/listen 的异步成功或失败分别由 init/error 报告。
     local fd = socketdriver.listen(config.host, config.port, config.backlog)
     assert(fd and fd >= 0, "cannot create navigation listen socket")
+
+    -- 当前消息协程在调用 wait 前不会 yield。同一 Service 即使已经收到 init 消息，也只会先把它排队；
+    -- skynet.wait 会先登记 sleep_session[token] 再 yield，之后 SOCKET.init/error 才可能执行并成功 wakeup。
     listen_fd = fd
     listen_context = {
         fd = fd,
@@ -6959,6 +7154,8 @@ local function start_gateway(query_address)
     }
 
     skynet.wait(listen_context.co)
+
+    -- 局部变量保留本次握手结果；清空共享上下文后，后续 error 将按运行期监听错误处理。
     local started = listen_context
     listen_context = nil
     if started.error ~= nil then
@@ -6966,6 +7163,7 @@ local function start_gateway(query_address)
         error("navigation listen failed: " .. tostring(started.error))
     end
 
+    -- 只有 bind/listen 已确认成功，才允许监听 Socket 开始上报新客户端的 open 事件。
     socketdriver.start(fd)
     skynet.error("NAV_TCP_READY ", started.address or config.host,
                  ":", started.port or config.port,
@@ -6982,25 +7180,41 @@ skynet.register_protocol {
     unpack = function(msg, sz)
         return netpack.filter(queue, msg, sz)
     end,
-    dispatch = function(_, _, updated_queue, event, ...)
+    dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+        -- filter 的第一个返回值是最新 userdata：可能仍是原对象，也可能因首次分配/扩容而替换。
+        -- 必须先写回再处理 more；赋值不会清空数据，ownership 迁移已经由 netpack C 模块完成。
         queue = updated_queue
-        if event ~= nil then
-            local handler = SOCKET[event]
-            if handler == nil then
-                error("unknown socket event: " .. tostring(event))
-            end
-            handler(...)
+        if event == nil then
+            return
+        end
+        if event == "init" then
+            SOCKET.init(arg1, arg2, arg3)
+        elseif event == "open" then
+            SOCKET.open(arg1, arg2)
+        elseif event == "data" then
+            SOCKET.data(arg1, arg2, arg3)
+        elseif event == "more" then
+            SOCKET.more()
+        elseif event == "close" then
+            SOCKET.close(arg1)
+        elseif event == "error" then
+            SOCKET.error(arg1, arg2)
+        elseif event == "warning" then
+            SOCKET.warning(arg1, arg2)
+        else
+            error("unknown socket event: " .. tostring(event))
         end
     end,
 }
 
 skynet.start(function()
-    skynet.dispatch("lua", function(_, _, command, ...)
+    skynet.dispatch("lua", function(_session, _source, command, argument)
         if command == "start" then
-            skynet.retpack(start_gateway(...))
+            skynet.retpack(start_gateway(argument))
             return
         end
         if command == "stop" then
+            assert(argument == nil, "stop does not accept an argument")
             skynet.retpack(stop_gateway())
             return
         end
@@ -7009,7 +7223,7 @@ skynet.start(function()
 end)
 ```
 
-### 27.7 这版 Gateway 的事件与 yield 边界
+### 27.8 这版 Gateway 的事件与 yield 边界
 
 ```text
 SOCKET.open/error/close/warning
@@ -7025,9 +7239,177 @@ SOCKET.data / SOCKET.more
   -> send response
 ```
 
+#### `updated_queue` 是可能被替换的状态对象
+
+`netpack.filter(queue, msg, sz)` 的第一个返回值不是“一个新的空队列”，而是处理完本次 Socket 消息后的最新 queue userdata。这个 C 对象同时保存：
+
+```text
+尚未收完整的包
+已经完整、等待 netpack.pop 的包
+环形队列容量、head/tail
+按 fd 保存的半包状态
+```
+
+初始 `queue` 可以为 `nil`。第一次需要保存半包或多个完整包时，`netpack` 才创建 userdata；环形队列容量不足时，它还可能创建更大的 userdata并迁移状态。因此它更接近下面的 C++ 接口：
+
+```cpp
+queue = FilterAndMaybeReallocate(queue, socket_message);
+```
+
+而不是一个永远固定的整数 fd。每次 dispatch 都必须先写回：
+
+```lua
+dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+    queue = updated_queue
+    -- 写回之后再根据 event 处理 data/more/open 等事件。
+end
+```
+
+可能出现的结果如下：
+
+| 输入情况 | `updated_queue` | `event` |
+|---|---|---|
+| 一个完整包且无需内部状态 | 可能仍为 `nil` | `data` |
+| 只收到半包 | userdata，保存半包 | `nil` |
+| 一次形成多个完整包 | userdata，保存待 pop 包 | `more` |
+| 已有 queue 且未扩容 | 通常是同一个 userdata | 取决于 Socket 事件 |
+| 容量不足 | 新 userdata，状态已迁移 | 通常与 `more` 路径相关 |
+
+`queue = updated_queue` 只是更新 Lua 引用，不会清空队列。扩容时，C 模块把尚未消费的完整包和半包状态迁移到新对象，再把旧对象重置为空；业务代码不能比较 userdata 地址、序列化 queue、跨 Service 传递它，或把旧引用缓存到一次 yield 之后。
+
+已经由 `netpack.pop` 取出的 `msg` 不再属于 queue。`dispatch_packet` 必须在任何 yield 前调用 `netpack.tostring(msg, sz)`，把它转换成 Lua string 并释放 C buffer。这样即使随后 queue 扩容，当前请求的 payload 也不受影响。
+
+#### 为什么 `dispatch_queue` 要先 fork continuation
+
+`netpack` queue 属于整个 Gateway，里面可能同时存在多个 fd 的完整包。如果当前包在 `skynet.call(query_service, ...)` 处 yield，而没有其他协程继续 drain，一个慢客户端请求就会阻塞 queue 中其他客户端已经完整的包：
+
+```text
+queue 中已有：fd1/A、fd2/B、fd3/C
+
+不 fork：
+  pop A -> A 等 Query Service
+  B、C 留在 queue，直到 A 恢复
+```
+
+当前代码先安排一条续接协程，再处理当前包：
+
+```lua
+skynet.fork(dispatch_queue)
+dispatch_packet(fd, msg, sz)
+```
+
+`skynet.fork` 只把新协程加入当前 Service 的待运行队列，不会立刻与当前协程并行。若 A 在 `skynet.call` 处 yield，续接协程才获得机会，从最新的全局 queue 继续取 B：
+
+```text
+协程 A：pop A -> fork 续接 B -> 处理 A -> yield
+协程 B：pop B -> fork 续接 C -> 处理 B -> yield
+协程 C：pop C -> fork 空续接 -> 处理 C
+```
+
+如果当前包在协议校验阶段就返回、完全没有 yield，后面的 `for` 循环会由当前协程直接批量排空，避免无条件为每个包创建协程。提前 fork 的续接协程稍后看到空 queue 就直接结束。
+
+泛型 `for` 会保存进入循环时的 queue 引用。若循环体 yield 期间发生扩容，旧 queue 已被迁移并重置为空；旧循环恢复后会结束，续接协程则通过模块变量读取新 queue。所有操作仍在同一个 Service 中串行执行，不会同时 pop，也不会重复释放 buffer。
+
+#### Gateway 并发接入与业务有序执行分层处理
+
+取消 fork 会把整个 Gateway 变成跨所有连接的全局串行队列，并不能正确表达“同一玩家或同一战斗的命令有序”。商业项目按状态 Owner 保证业务顺序：
+
+```text
+Gateway
+  校验 frame / session / command_seq
+  -> PlayerAgent(player_id)
+       同一玩家命令按 Owner 规则执行
+  -> BattleWorker(battle_id)
+       收集 PlayerCommand，按 fixed tick 和确定性顺序 simulate
+```
+
+第一课 `QueryCell` 是只读请求，多个连接可以并发等待，响应用 `request_id` 匹配，不依赖完成顺序。以后出现移动、施法、背包或奖励等有状态命令时，应路由到唯一 Player/Battle Owner；Owner 的核心状态修改保持 no-yield，便能自然做到 A 完成后再执行 B。
+
+只有某个 Owner 内的完整事务确实必须跨 yield 保持互斥时，才考虑为该 Owner 使用 `require "skynet.queue"` 提供的协程互斥器、状态机或提交前版本复核。不能在整个 Gateway 外层套一个全局互斥器，否则一个玩家的数据库或远程调用会阻塞所有连接。断线重连、重试和跨 Gateway 场景还需要 `command_seq`、目标 tick 与去重规则，不能只依赖 TCP 字节到达顺序。
+
+#### Service 串行执行不等于一条协程运行到底
+
+Skynet 对每个 Service Context 保证消息回调串行执行：同一个 Service 不会同时由两个 Worker Thread 执行两条消息回调。Lua Service 只有一个 Lua State，所以任意瞬间也只有一条 Lua 协程在执行指令。这条保证适用于所有由 Skynet 调度的 Service；不同 Service 仍可在不同 OS Thread 上并行运行，C 模块自行创建的线程也不受这个保证保护。
+
+同一个 Lua Service 可以同时保存多条尚未结束的消息协程。一条协程 yield 后，Service 可以处理下一条消息；因此不会发生两条 Lua 指令在 CPU 上同时修改 table，却会发生 yield 前后状态已经被另一条消息改变的逻辑并发：
+
+```text
+请求协程 A：读取 connections[fd] -> skynet.call 后 yield
+Socket 协程 B：处理 close，删除 connections[fd]
+请求协程 A：恢复，必须重新验证 connections[fd] == conn
+```
+
+固定版本实现可在以下位置核对：
+
+```text
+third_party/skynet/lualib/skynet.lua
+  raw_dispatch_message：每条请求创建 Lua 协程
+  suspend：协程 yield 后把控制权交还调度器
+  dispatch_wakeup：恢复已经登记等待的协程
+```
+
+#### `wakeup` 不是可提前累积的信号
+
+`skynet.wait(token)` 会先把当前协程登记到 `sleep_session[token]`，再 yield。`skynet.wakeup(token)` 只有在登记已经存在时才把 token 放入唤醒队列；如果先 wakeup、后 wait，第一次 wakeup 返回 `nil`，也不会保存一份“唤醒额度”：
+
+```lua
+local token = {}
+local accepted = skynet.wakeup(token) -- nil：当前没有协程等待这个 token。
+skynet.wait(token)                    -- 仍然挂起，需要之后再有一次 wakeup。
+```
+
+因此，业务完成状态不能只存在于一次 wakeup 通知中。通知可能先到时，要用“状态 + wait/wakeup”表达：
+
+```lua
+local completed = false -- 业务结果是否已经产生；属于当前 Service Lua State。
+local waiter = nil      -- 当前等待结果的协程；没有等待者时为 nil。
+local result = nil      -- 已完成结果；生命周期由当前 Service 管理。
+
+-- 保存业务结果；value 由调用方移交给当前 Service，不执行 I/O，不 yield。
+local function complete(value)
+    result = value
+    completed = true
+    if waiter ~= nil then
+        skynet.wakeup(waiter)
+    end
+end
+
+-- 等待并返回已保存结果；可能在 skynet.wait 处 yield，没有超时分支。
+local function wait_result()
+    while not completed do
+        waiter = coroutine.running()
+        skynet.wait(waiter)
+    end
+    waiter = nil
+    return result
+end
+```
+
+这里检查 `completed` 到执行 `skynet.wait` 之间没有其他 yield 点；同一个 Service 的完成回调不能插入执行。进入 `skynet.wait` 后，框架又会先登记 token 再 yield，所以“完成先发生”和“等待先发生”两种顺序都不会丢结果。生产代码还应根据业务增加超时、取消和多等待者规则。
+
+#### 当前监听握手为什么不会丢失 `init`
+
+`socketdriver.listen(host, port, backlog)` 同步返回的是 Skynet Socket ID。无法创建 ID 会立即返回无效值；真正的异步 bind/listen 成功通过 `event == "init"` 返回，异步失败通过 `event == "error"` 返回。
+
+Socket Thread 可能很快把 `init` 投递进 Gateway 消息队列，但它不能重入正在执行的 `start_gateway`：
+
+```text
+start_gateway 当前协程
+  socketdriver.listen
+  -> 建立 listen_context
+  -> skynet.wait 先登记 token
+  -> yield
+
+Gateway 才开始处理队列中的 init/error
+  -> SOCKET.init/error 写入结果
+  -> skynet.wakeup(start 协程)
+```
+
+所以从 `socketdriver.listen` 返回到 `skynet.wait` 登记完成之间是一段明确的 no-yield 区域。不能在中间加入 `skynet.call`、`skynet.sleep` 或其他可能 yield 的函数，否则 `init` 可能在 `listen_context` 建立前被处理并忽略。等待成功结果后才执行 `socketdriver.start(listen_fd)`，让监听 Socket 开始上报新客户端的 `open` 事件。
+
 `Query Service` 内的 `query_logic.query()` 仍然不 yield；第二课 BattleWorker 的核心 `battle_core.simulate()` 仍然 no-yield。这次网络改造不会把 socket event 或 Gateway 状态带进导航/战斗核心。
 
-### 27.8 验证点
+### 27.9 验证点
 
 启动后至少观察：
 
@@ -7107,6 +7489,72 @@ cpath = skynet_root .. "cservice/?.so"
 ```
 
 `harbor = 0` 明确第一课是单节点进程，也进一步说明这里不需要无点号的全局服务名。
+
+构建入口还需要阻止项目自有 Lua 重新引入匿名可变参数。这个检查会被本节的 `build` 和 `rebuild` 直接调用；完成后，违规位置会在启动 Server 前以文件名和行号报告，正常结果是 `LUA_VARARG_POLICY_OK`。
+
+本文件解决的问题：把“稳定接口使用具名参数”从 Code Review 约定变成可重复执行的静态检查。
+
+本节必须掌握的概念：检查范围只包含 `server/service`、`lualib`、`protocol`、`config`、`tests` 下的项目自有 `.lua`，不修改 Skynet 等第三方源码。
+
+必须精读的函数：`collect_project_lua_files` 决定所有权边界，`main` 决定失败条件。
+
+可以略读的内容：Bash 的数组、`mapfile` 和输出格式。
+
+输入、输出和失败条件：输入是项目自有 Lua 源码；零匹配输出 `LUA_VARARG_POLICY_OK`；发现 `...` 时输出位置并以非零状态退出。确有通用基础设施例外时，必须在同一行标记 `VARARG_ALLOWED` 并写清 WHY；当前课程没有例外。
+
+运行验证：在 `server/` 下执行 `./scripts/linux/check_lua_varargs.sh`。
+
+理解自测：为什么检查器不扫描 `third_party/skynet`？为什么不能把“避免 `...`”直接等同于“必然减少分配”？
+
+新建文件：`server/scripts/linux/check_lua_varargs.sh`
+
+```bash
+#!/usr/bin/env bash
+# 职责：阻止项目自有 Lua 源码把可变参数用作稳定接口或继续向业务层传播。
+# 边界：Build/Test 静态策略检查；只扫描当前 server 的自有 Lua 源码，不扫描 third_party/generated。
+# 输入/输出：service/lualib/protocol/config/tests 下的 .lua -> LUA_VARARG_POLICY_OK 或违规位置。
+# 生命周期：由 run_server.sh build/rebuild 调用，也可由开发者单独执行；不修改任何文件。
+# 不负责：不解析第三方 Lua、不替代 Lua 语法检查，也不对性能作无基准结论。
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+
+# 返回项目自有 Lua 文件。目录不存在时跳过，便于课程按阶段逐步增加 tests/lualib。
+# 输出是一行一个绝对路径；不执行 I/O 写入，不分配项目运行时资源。
+collect_project_lua_files() {
+    local relative_dir
+    for relative_dir in service lualib protocol config tests; do
+        if [[ -d "$SERVER_ROOT/$relative_dir" ]]; then
+            find "$SERVER_ROOT/$relative_dir" -type f -name '*.lua' -print
+        fi
+    done
+}
+
+# 检查 Lua vararg token。确有通用转发器例外时，必须在同一行写 VARARG_ALLOWED 和 WHY；
+# 当前课程没有例外，因此正常结果应为零匹配。
+main() {
+    local files=()
+    local violations
+    mapfile -t files < <(collect_project_lua_files)
+
+    if ((${#files[@]} == 0)); then
+        printf '[lua-vararg] LUA_VARARG_POLICY_OK files=0\n'
+        return 0
+    fi
+
+    violations="$(grep -nH -- '\.\.\.' "${files[@]}" | grep -v 'VARARG_ALLOWED' || true)"
+    if [[ -n "$violations" ]]; then
+        printf '[lua-vararg] ERROR: project Lua varargs are forbidden by AGENTS.md\n' >&2
+        printf '%s\n' "$violations" >&2
+        return 1
+    fi
+
+    printf '[lua-vararg] LUA_VARARG_POLICY_OK files=%d\n' "${#files[@]}"
+}
+
+main "$@"
+```
 
 操作：完整替换 Server 启动脚本，并新增安全停止入口。第一课从这里开始不再要求手工先执行一串 bootstrap/build 命令；统一由 `run_server.sh` 做可重复的依赖准备、增量构建、后台启动和 PID 管理。
 
@@ -7371,6 +7819,12 @@ run_native_tests() {
     "$SERVER_ROOT/native/grid_map/make_test.sh"
 }
 
+# 在构建入口统一执行项目 Lua 编码策略，避免仅靠 Code Review 发现动态签名回归。
+run_lua_policy_checks() {
+    log "checking project Lua vararg policy"
+    "$SERVER_ROOT/scripts/linux/check_lua_varargs.sh"
+}
+
 safe_remove_build_dir() {
     local path="$1"
     case "$path" in
@@ -7393,6 +7847,7 @@ rebuild_all() {
     "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
     "$SERVER_ROOT/protocol/build_server_descriptor.sh"
     "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh"
+    run_lua_policy_checks
     run_native_tests
     build_native_incremental
     log "REBUILD_OK"
@@ -7552,6 +8007,7 @@ main() {
             ;;
         build)
             prepare_runtime
+            run_lua_policy_checks
             run_native_tests
             log "BUILD_OK"
             ;;
@@ -7608,8 +8064,9 @@ exec "$SCRIPT_DIR/run_server.sh" stop "$@"
 第一次使用：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-chmod +x scripts/linux/run_server.sh scripts/linux/stop_server.sh
+cd "$(git rev-parse --show-toplevel)/server"
+chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh scripts/linux/stop_server.sh
+./scripts/linux/check_lua_varargs.sh
 ./scripts/linux/run_server.sh doctor || true
 ./scripts/linux/run_server.sh start
 ./scripts/linux/run_server.sh status
@@ -7624,6 +8081,7 @@ chmod +x scripts/linux/run_server.sh scripts/linux/stop_server.sh
 -> 检查/补齐 pinned protoc + lua-protobuf
 -> 按需编译 Skynet / pb.so / descriptor
 -> 增量配置并编译 battle_nav.so
+-> build/rebuild 时检查项目 Lua 不使用匿名可变参数
 -> 校验 battle_1001.bmap 已由 Unity 发布
 -> nohup 后台启动
 -> 写 run/server.pid
@@ -7696,13 +8154,13 @@ NAV_SERVER_READY query=:... gateway=:...
 新建/生成文件：
 
 ```text
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol\NavigationQuery.cs
+<仓库根目录>\unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol\NavigationQuery.cs
 ```
 
 在 PowerShell 中执行（`protoc.exe` 必须是固定的 36.2 版本）：
 
 ```powershell
-$root = 'G:\simbi\dev\skynet-battle-navigation-commercial-learning'
+$root = (git rev-parse --show-toplevel).Trim()
 $protoc = Join-Path $root 'server\third_party\protoc-36.2\bin\protoc.exe'
 $proto = Join-Path $root 'server\protocol\navigation_query.proto'
 $out = Join-Path $root 'unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol'
@@ -7722,7 +8180,7 @@ if ($LASTEXITCODE -ne 0) { throw 'C# Protobuf generation failed' }
 在 Tuanjie 工程中使用已固定的 `Google.Protobuf` 3.36.2 DLL，放到：
 
 ```text
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation\Assets\Plugins\Google.Protobuf.dll
+<仓库根目录>\unity\BattleNavigation\Assets\Plugins\Google.Protobuf.dll
 ```
 
 不要把 `Google.Protobuf.dll` 从系统中随意复制一个“能加载”的版本。版本必须和 `protocol/VERSIONS.env`、`docs/ENGINEERING_DECISIONS.md` 一致。NuGet 的 `netstandard2.0` 资产还需要运行时依赖，至少要把同一依赖图中的 DLL 一起放入 `Assets/Plugins/`：
@@ -7738,7 +8196,8 @@ System.Numerics.Vectors 4.4.0
 这些依赖版本用于本课程的可复现导入，不要混入机器上其他项目的 DLL。可用下面的 PowerShell 从固定 NuGet 包下载并解压到临时目录；每个包都明确取 `lib/netstandard2.0/` 资产，不要递归取到 `ref/` 或 `netstandard1.x` 下的同名 DLL：
 
 ```powershell
-$project = 'G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation'
+$repoRoot = (git rev-parse --show-toplevel).Trim()
+$project = Join-Path $repoRoot 'unity\BattleNavigation'
 $temp = Join-Path $env:TEMP 'skynet-protobuf-runtime'
 $packages = @{
     'Google.Protobuf' = '3.36.2'
@@ -8144,231 +8603,1489 @@ public sealed class LengthFrameTests
 
 `65536` 及以上 payload 不再属于“收到后检查”的场景：2-byte uint16 header 根本无法表达它，发送端必须在 framing 层拒绝。Server 的 `netpack.pack` 也会拒绝 `>= 0x10000` 的 payload。
 
-## 31. 完整执行顺序
+## 31. 第一课最终回顾、调试与验收
 
-每一步先验证结果，再进入下一步；不要最后才发现版本或坐标错误。
+到这里，第一课不再继续增加新概念。本节只做一件事：把前面已经完成的 Unity 地图生产、BMAP、C++ Native、Lua Binding、Skynet Service、`socketdriver + netpack` Gateway、Protobuf 和 Unity 查询重新串成一条能够亲手执行、逐层断点、故意破坏并最终验收的完整链路。
 
-### 31.1 Unity 导出
+如果只做到“代码都在”“Server 能启动”，第一课还没有真正结束。最终要能证明以下四件事：
 
 ```text
-1. 打开 G:\Tuanjie\Editors\2022.3.62t12\Editor\Tuanjie.exe。
-2. 打开 unity\BattleNavigation\ 项目和 Battle_1001.unity。
-3. 检查 BattleMapRoot：Map Id=1001、Map Version=1、Cell Size Meters=0.5。
-4. 执行 Tools/Battle Navigation/Validate Current Battle Scene。
-5. 确认 Console 出现 BATTLE_MAP_AUTHORING_OK，且无红色编译错误。
-6. 执行 Tools/Battle Navigation/Export BMAP。
-7. 确认 .bmap 和 .json manifest 同时存在。
-8. 运行 Unity EditMode 测试。
+1. Unity 导出的地图资产可重复生产，并且 Server 加载的是同一份 map/version。
+2. 一个真实 QueryCell 请求可以从 Unity TCP 进入 Gateway，跨 Service 到 Query，再进入 C++ GridMap。
+3. Gateway / Query / Native 三个边界都可以被调试器准确停住，并能说明 ownership、Lua State 和 yield 边界。
+4. 正常输入和错误输入都得到可解释结果，Server 不靠“偶然跑通”通过验收。
 ```
 
-导出的 `.bmap` 是 Server 输入资产，不是 Server 运行时加载的 Unity 场景。Server 不需要 Unity、GameObject、Rigidbody、NavMeshAgent 或 Animator。
+本节最终执行链：
 
-### 31.2 Server 构建与资产导入
-
-```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-protocol/build_server_descriptor.sh
-lua protocol/check_descriptor.lua protocol/generated/server/navigation_query.pb
-cmake -S native/grid_map -B build/grid_map -DCMAKE_BUILD_TYPE=Debug
-cmake --build build/grid_map -j"$(nproc)"
-ctest --test-dir build/grid_map --output-on-failure
-cmake -S native/lua_battle_nav -B build/lua_battle_nav
-cmake --build build/lua_battle_nav -j"$(nproc)"
-unity_output=/mnt/g/simbi/dev/skynet-battle-navigation-commercial-learning/unity/BattleNavigation/BuildArtifacts/Navigation
-test -s "$unity_output/battle_1001.bmap"
-install -m 0644 "$unity_output/battle_1001.bmap" maps/battle_1001.bmap
-install -m 0644 "$unity_output/battle_1001.manifest.json" maps/battle_1001.manifest.json
-sha256sum maps/battle_1001.bmap
+```text
+Unity Battle_1001 Scene
+        |
+        | Bake / Sampling / Validation / Export
+        v
+battle_1001.bmap + manifest
+        |
+        | lesson1_prepare.sh
+        v
+Server maps/
+        |
+        +-> pinned Skynet / protoc / lua-protobuf
+        +-> descriptor
+        +-> grid_map tests
+        +-> battle_nav.so
+        +-> doctor
+        |
+        v
+Skynet Process
+  |
+  +-> navigation_gateway Service
+  |     socketdriver + PTYPE_SOCKET + netpack
+  |     Envelope decode
+  |     skynet.call(query_service)       <- yield boundary
+  |
+  +-> navigation_query Service
+        query_logic.query                <- no-yield
+        battle_nav.query_cell            <- Lua/C boundary
+              |
+              v
+        MapRegistry -> GridMap
+        WorldToGrid -> QueryWorld
+              |
+              v
+        QueryCellResponse
+              |
+              v
+        Gateway -> netpack.pack -> Unity
 ```
 
-资产复制不代替格式验证。`BMapReader` 加载时必须检查 Magic、`header_size=64`、Cell 数与文件长度、Header/Payload CRC，并核对 `mapId/mapVersion`。
+调试器分工：
 
-### 31.3 启动和联调
+```text
+LuaPanda Gateway target   看 Gateway Lua State
+LuaPanda Query target     看 Query Service Lua State
+gdb                       看 battle_nav.so / GridMap C++
+Unity Query Window        产生真实外部请求并观察最终响应
+```
+
+这里最重要的一条认识是：`skynet.call()` 不是普通 Lua 函数调用。Gateway 和 Query 是两个独立 Service，也就是两个独立 Lua State。LuaPanda 在 Gateway 里不能单步“穿过” `skynet.call()` 直接进入 Query；要分别调试两个 Lua State，再通过 `request_id`、fd、请求字段和日志把两边串起来。进入 `battle_nav.so` 后，LuaPanda 也不能继续跟 C++，此时切换到 gdb。
+
+### 31.1 先回顾第一课到底完成了什么
+
+第一课最终形成两条数据链，它们不能混成一套协议。
+
+离线资产链：
+
+```text
+Unity Scene
+-> NavMesh Authoring
+-> Grid Sampling
+-> BMAP Export
+-> BMapReader
+-> immutable GridMap
+-> MapRegistry
+```
+
+运行时查询链：
+
+```text
+Unity WorldPosition
+-> uint16 Big Endian netpack frame
+-> Protobuf Envelope / QueryCellRequest
+-> Navigation Gateway Service
+-> Navigation Query Service
+-> query_logic
+-> battle_nav.so
+-> GridMap::WorldToGrid / QueryWorld
+-> QueryCellResponse
+-> Unity
+```
+
+两条链的长期职责分别是：
+
+```text
+BMAP
+  保存静态导航资产。
+  有 map_id / map_version / header / payload / CRC。
+  由 Unity 离线生成，Server 启动阶段加载。
+
+Protobuf
+  保存运行期消息。
+  有 protocol_version / command / request_id / body。
+  由网络收发，不替代地图资产。
+```
+
+第一课还形成了几个重要的 ownership 结论：
+
+```text
+GridMap
+  加载后 immutable，可被多个 Service / OS Thread 并发读取。
+
+MapRegistry
+  管理已加载静态地图，不保存每次查询临时状态。
+
+navigation_gateway
+  拥有 listen/client fd、connections、netpack queue。
+
+navigation_query
+  拥有 Query Service 自己的 Lua State 和 query_logic。
+
+query_logic
+  只是 navigation_query Lua State 内的普通 require 模块，不是 Service。
+
+battle_nav.so
+  做 Lua table <-> Native 类型转换，不拥有业务生命周期。
+```
+
+如果现在还会把 `require()` 当成创建 Service，或者认为 `skynet.call()` 和普通 Lua 函数调用没有本质差异，应先回看第 26～27 节再继续验收。
+
+---
+
+### 31.2 用一个总脚本完成 Server 构建与资产导入
+
+前面的章节为了教学，把依赖、descriptor、CMake、测试、BMAP 导入拆开执行。进入最终验收后，不应该再靠人工记住十几条命令的顺序。脚本还会先确认 Server 没有处于运行状态，避免一边运行旧的 `battle_nav.so`，一边覆盖新的构建产物造成验收混淆。
+
+本仓库新增：
+
+```text
+server/scripts/linux/lesson1_prepare.sh
+```
+
+它是第一课的 orchestration 入口。它不会复制 `run_server.sh` 的底层构建逻辑，而是把已经存在的商业化脚本组合成一次可重复的最终准备流程：
+
+```text
+Unity Export
+-> 检查 BMAP / manifest
+-> 校验 manifest map_id / map_version / cell_size
+-> 原子复制到 server/maps
+-> run_server.sh build 或 rebuild
+     -> pinned dependency bootstrap
+     -> Skynet build
+     -> lua-protobuf runtime
+     -> descriptor build/check
+     -> project Lua vararg policy check
+     -> battle_nav.so
+     -> Native tests
+-> run_server.sh doctor
+-> 输出 BMAP / manifest SHA256
+-> LESSON1_SERVER_PREPARE_OK
+```
+
+#### 第一次运行：从 Unity 导入资产
+
+先在 Unity 完成：
+
+```text
+Tools -> Battle Navigation -> Validate Current Battle Scene
+Tools -> Battle Navigation -> Export BMAP
+```
+
+确认输出目录存在：
+
+```text
+BuildArtifacts/Navigation/
+  battle_1001.bmap
+  battle_1001.manifest.json
+```
+
+WSL：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
+
+BUILD_TYPE=Debug \
+./scripts/linux/lesson1_prepare.sh \
+  --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
+```
+
+这里建议第一课最终验收使用 `BUILD_TYPE=Debug`。原因不是 Debug 构建更接近生产，而是后面的 gdb 需要完整符号。性能基线再单独使用 Release/RelWithDebInfo，不要拿 Debug 数据做性能结论。
+
+预期末尾看到：
+
+```text
+...
+DOCTOR_OK
+[lesson1-prepare] BMAP_SHA256 <sha256>
+[lesson1-prepare] MANIFEST_SHA256 <sha256>
+[lesson1-prepare] LESSON1_SERVER_PREPARE_OK
+```
+
+脚本会先读取 manifest，要求当前课程资产满足：
+
+```text
+map_id       = 1001
+map_version  = 1
+cell_size_mm = 500
+```
+
+如果 Unity 误导出了别的地图版本，脚本会在覆盖 `server/maps` 前失败。
+
+#### 后续重复验收：复用已经导入的地图
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+```
+
+#### 需要从零检查构建链
+
+```bash
+BUILD_TYPE=Debug \
+./scripts/linux/lesson1_prepare.sh \
+  --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation" \
+  --rebuild
+```
+
+`--rebuild` 最终调用已有的：
+
+```text
+run_server.sh rebuild
+```
+
+它只清理项目自己的 build 产物和 Skynet 编译产物，不删除：
+
+```text
+maps/
+源码
+Unity 导出物
+固定 third_party 源码
+```
+
+#### 为什么仍然保留底层小脚本
+
+最终使用者平时执行：
+
+```text
+lesson1_prepare.sh
+```
+
+排错时仍然可以单独执行：
+
+```text
+bootstrap_skynet.sh
+bootstrap_protocol_tools.sh
+build_skynet.sh
+build_lua_protobuf.sh
+build_server_descriptor.sh
+check_server_descriptor.sh
+native/grid_map/make_test.sh
+run_server.sh doctor
+```
+
+这和商业工程常见做法一致：
+
+```text
+顶层 orchestration
+  负责正确顺序和日常入口
+
+底层 script
+  负责单一职责和局部故障定位
+```
+
+不要为了“一键运行”把所有 curl、make、cmake、测试、资产复制重新写进一个巨大的脚本，否则以后一个步骤变化会产生两套构建逻辑。
+
+---
+
+### 31.3 启动、状态、日志和安全停止验收
+
+准备完成后，先不用调试器，跑一次纯运行验收。
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
 ./scripts/linux/run_server.sh start
 ./scripts/linux/run_server.sh status
+```
+
+预期：
+
+```text
+[serverctl] START_OK pid=...
+[serverctl] RUNNING pid=... log=server-....log
+```
+
+看当前日志：
+
+```bash
 tail -f logs/server.log
 ```
 
-Unity 打开 `Tools/Battle Navigation/Server Query`，输入 `127.0.0.1`、`19001`、`1001`、`1`，再输入场景世界坐标。然后查询 `x_mm=999999999`，预期结果是 `OUT_OF_BOUNDS`，而不是崩溃或卡住。
+必须能看到：
 
-验证结束安全停止：
+```text
+NAV_QUERY_READY ... map=1001 version=1
+NAV_TCP_READY 127.0.0.1:19001 ... framing=netpack-u16be max_frame=65535
+NAV_SERVER_READY query=:... gateway=:...
+```
+
+三个 READY 的意义不同：
+
+```text
+NAV_QUERY_READY
+  BMAP 已通过 Native 加载，Query Service 已可处理业务查询。
+
+NAV_TCP_READY
+  Gateway listen socket 已完成 bind/start。
+
+NAV_SERVER_READY
+  main 已完成 Query/Gateway 接线，进程整体可以接受第一课请求。
+```
+
+如果只出现前两个而没有 `NAV_SERVER_READY`，不能把它当启动成功。
+
+#### 用 Unity 发真实查询
+
+打开：
+
+```text
+Tools -> Battle Navigation -> Server Query
+```
+
+输入：
+
+```text
+Host        127.0.0.1
+Port        19001
+Map Id      1001
+Map Version 1
+```
+
+先查询一个已知 Ground 点，再查询：
+
+```text
+x_mm = 999999999
+```
+
+越界请求必须返回：
+
+```text
+OUT_OF_BOUNDS
+```
+
+不能：
+
+```text
+崩溃
+卡死
+被当成 walkable=false
+修改 Server 地图状态
+```
+
+#### 安全停止
 
 ```bash
 ./scripts/linux/stop_server.sh
-# 或
+```
+
+或：
+
+```bash
 ./scripts/linux/run_server.sh stop
 ```
 
-需要观察前台事件分发或打 LuaPanda/gdb 断点时：
-
-```bash
-./scripts/linux/run_server.sh foreground
-```
-
-## 32. 结果对照与调试证据
-
-对一个成功查询至少保存五份证据：
+当前 `stop` 会：
 
 ```text
-1. Unity Validator report：采样总数、walkable、area、height、clearance。
-2. BMAP manifest：map_id、map_version、cellSizeMm、originMm、crc32。
-3. C++ grid_map_test：同一坐标得到相同 GridPos、height、area、clearance。
-4. Skynet log：NAV_QUERY_READY、NAV_TCP_READY、request_id、result。
-5. Unity Query Window：Server 返回的 QueryCellResponse。
+读取 run/server.pid
+-> kill -0 检查存活
+-> /proc/<pid>/exe 核对确实是当前仓库 Skynet
+-> cmdline 核对 config/skynet.lua
+-> SIGTERM
+-> 等待退出
 ```
 
-排查时按上游到下游核对，不要看到 Unity 结果不对就直接修改 C++ `WorldToGrid`。
-
-### 32.1 负坐标人工算例
-
-假设 `origin_x_mm=-5000`、`origin_z_mm=10000`、`cell_size_mm=500`，查询 `world_x_mm=-4999`、`world_z_mm=10501`：
-
-```text
-grid_x = floor((-4999 - (-5000)) / 500) = 0
-grid_z = floor((10501 - 10000) / 500) = 1
-```
-
-负坐标不能使用 C++ 整数截断直接除法。文档和测试都必须覆盖左侧边界。
-
-### 32.2 高度和 clearance
-
-`height_mm` 是静态 walkable 高度，不是动态单位 Y 坐标；`clearance` 是静态占用下的邻域信息，不包含动态单位。Lesson 2 引入 `DynamicOccupancy` 后，动态阻挡只存在于战斗上下文，不能改写共享 `GridMap`。
-
-### 32.3 LuaPanda 与 gdb
-
-LuaPanda 断点放在 `lualib/navigation/query_logic.lua` 的 `M.query`，观察 request 和 response；Gateway 的跨 Service yield 断点放在 `service/navigation_gateway.lua` 调用 `skynet.call` 的位置。C++ 调试：
+默认不会直接 `kill -9`。只有明确执行：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-gdb --args third_party/skynet/skynet config/skynet.lua
+./scripts/linux/run_server.sh stop --force
 ```
+
+并且 TERM 超时后才允许 SIGKILL。
+
+第一课没有玩家持久化、DB 延迟写、在线 Battle 和跨服事务，因此这个进程级停止方式满足当前课程。以后进入真正在线商业 Server，要在应用层增加 drain/flush/shutdown 协议，不能把这一课的停止模型原样当成最终生产方案。
+
+---
+
+### 31.4 安装 LuaPanda 调试支持
+
+#### 为什么 Skynet 不能只在 main.lua 接一次 LuaPanda
+
+Skynet 中：
+
+```text
+navigation_gateway Service
+  -> 自己的 Lua State
+
+navigation_query Service
+  -> 自己的 Lua State
+```
+
+`require("LuaPanda")` 只影响当前 Lua State。
+
+如果只在 `main.lua` 启调试器：
+
+```text
+main Service 可以断
+Gateway 断不到
+Query 断不到
+```
+
+而 main 完成接线后本来就退出，因此这种接法没有实际价值。
+
+本仓库这次增加一个 debug-only 模块：
+
+```text
+server/lualib/debug/luapanda_debug.lua
+```
+
+Gateway 和 Query 启动时都会调用：
+
+```text
+luapanda_debug.start("gateway")
+luapanda_debug.start("query")
+```
+
+但只有设置：
+
+```text
+LUA_PANDA_ENABLE=1
+```
+
+才真正加载 LuaPanda 和 LuaSocket。普通：
+
+```bash
+./scripts/linux/run_server.sh start
+```
+
+不会启动调试器，也不要求机器存在 LuaPanda/LuaSocket debug 依赖。
+
+#### 为什么还需要 LuaSocket
+
+LuaPanda Debugger 需要一个 TCP 连接和 VS Code Adapter 通信。Skynet 自己的 `socketdriver` 是 Skynet runtime 网络层，并不是 LuaSocket 的 `socket.core` API。
+
+调试依赖链是：
+
+```text
+LuaPanda.lua
+-> require("socket.core")
+-> LuaSocket
+-> VS Code LuaPanda Adapter
+```
+
+因此不能拿业务 Gateway 的 `socketdriver` 假装成 LuaPanda 的 `socket.core`。
+
+本仓库新增：
+
+```text
+server/scripts/linux/bootstrap_luapanda.sh
+```
+
+它固定：
+
+```text
+LuaPanda 3.3.1
+commit e3ac3d3314f24cf939c36cac5b7dc1f2ed6ee129
+
+LuaSocket 3.1.0
+```
+
+LuaSocket 会直接针对：
+
+```text
+third_party/skynet/3rd/lua
+```
+
+中的 Lua 5.4 Header 构建，安装到仓库本地：
+
+```text
+third_party/luasocket-runtime/
+```
+
+不会：
+
+```text
+sudo make install
+覆盖系统 Lua
+依赖 /usr/local 的另一个 Lua ABI
+```
+
+#### 执行安装
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+./scripts/linux/bootstrap_luapanda.sh
+```
+
+预期：
+
+```text
+LUAPANDA_RUNTIME_OK
+[luapanda-bootstrap] READY LuaPanda=3.3.1 LuaSocket=3.1.0
+```
+
+如果这里 `require("socket.core")` 失败，不要继续调试。先解决 LuaSocket ABI/路径问题。
+
+---
+
+### 31.5 配置 VS Code 的两个 LuaPanda Target
+
+推荐从 WSL 仓库根目录打开 VS Code：
+
+```bash
+cd "$(git rev-parse --show-toplevel)"
+code .
+```
+
+如果 VS Code 提示安装 WSL Remote/在 WSL 中重新打开，选择 WSL 工作区。这样 VS Code Adapter 与 Skynet 都在同一个 Linux/WSL 网络和路径环境中，路径映射最简单。
+
+在 Extensions 中搜索：
+
+```text
+LuaPanda
+```
+
+安装后确认扩展名称为 LuaPanda。
+
+仓库提供模板：
+
+```text
+server/debug/luapanda/launch.json.example
+```
+
+如果当前仓库还没有 `.vscode/launch.json`：
+
+```bash
+mkdir -p .vscode
+cp server/debug/luapanda/launch.json.example .vscode/launch.json
+```
+
+如果已经有自己的 `launch.json`，不要整文件覆盖，只把模板里的两个 configuration 和 compound 合并进去。
+
+模板里有两个目标：
+
+```text
+LuaPanda Lesson1 Gateway  -> port 8818
+LuaPanda Lesson1 Query    -> port 8819
+```
+
+以及一个 compound：
+
+```text
+LuaPanda Lesson1 Gateway + Query
+```
+
+为什么必须两个 port：两个 Service 是两个 Lua State，各自有一套 LuaPanda debugger socket。让它们抢同一个 8818 会产生连接冲突。
+
+模板显式使用：
+
+```json
+"useCHook": false
+```
+
+第一课 WSL/Linux + Lua 5.4 直接使用 Lua hook 即可。LuaPanda 的 C hook 是调试性能优化，不是功能正确性的前置条件；这里优先减少额外 C ABI 变量。
+
+#### 第一次只验证连接
+
+VS Code：
+
+```text
+Run and Debug
+-> LuaPanda Lesson1 Gateway + Query
+-> F5
+```
+
+先让两个 Adapter 进入等待状态，然后 WSL：
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+./scripts/linux/debug_luapanda.sh
+```
+
+日志应出现：
+
+```text
+LUA_PANDA_CONNECT role=query ... port=8819
+LUA_PANDA_READY role=query ... port=8819
+LUA_PANDA_CONNECT role=gateway ... port=8818
+LUA_PANDA_READY role=gateway ... port=8818
+```
+
+Service 创建顺序由调度决定，两个角色日志先后不需要写死；关键是两个都 READY。
+
+如果断点不命中，可以先在 LuaPanda Debug Console 输入：
+
+```text
+LuaPanda.doctor()
+```
+
+重点检查：
+
+```text
+cwd
+实际 source path
+VS Code workspace root
+文件大小写
+connectionPort
+```
+
+---
+
+### 31.6 用 LuaPanda 跟完整 Lua 核心流程
+
+先设置下列断点。
+
+#### Gateway target
+
+文件：
+
+```text
+server/service/navigation_gateway.lua
+```
+
+建议断：
+
+```text
+SOCKET.open
+  看 accepted fd / address / connections[fd]
+
+dispatch_packet
+  看 netpack 已经切好的 payload
+
+codec.decode_envelope 之后
+  看 protocol_version / command / request_id
+
+skynet.call(query_service, "lua", "query_cell", request) 前
+  看最终跨 Service 的 request table
+
+skynet.call 返回后
+  看 response，以及 connections[fd] 是否还是原 conn
+
+send_response
+  看 request_id 怎样原样带回
+```
+
+#### Query target
+
+文件：
+
+```text
+server/service/navigation_query.lua
+```
+
+建议断在：
+
+```lua
+local response = query_logic.query(assert(payload, "query payload is required"))
+```
+
+继续进入：
+
+```text
+server/lualib/navigation/query_logic.lua
+```
+
+断在：
+
+```text
+M.query(request)
+
+map/version 校验
+
+pcall(battle_nav.query_cell, request.map_id, request.map_version, request.position)
+
+Native 返回后的 value / err
+```
+
+#### 发一个真实请求
+
+Unity Query Window 发：
+
+```text
+map=1001
+version=1
+position=(0,0,0) 或一个已验证 Golden Point
+```
+
+你应该先在 Gateway target 停住。
+
+此时观察：
+
+```text
+fd
+conn.address
+conn.inflight
+#payload
+Envelope.protocol_version
+Envelope.command
+Envelope.request_id
+request.map_id
+request.map_version
+request.position.x_mm/y_mm/z_mm
+```
+
+执行到：
+
+```lua
+skynet.call(query_service, "lua", "query_cell", request)
+```
+
+这里不要期待按一次 Step Into 就跳进 `navigation_query.lua`。
+
+真实发生的是：
+
+```text
+Gateway coroutine
+-> pack Skynet message
+-> yield
+-> Query Service mailbox
+-> 某个 Skynet worker thread dispatch Query Lua State
+```
+
+所以应：
+
+```text
+Gateway target Continue
+-> 切换到 Query target
+-> 等 navigation_query 断点命中
+```
+
+这一步如果亲手做通，Skynet 的 Service/Lua State/yield 边界会比只看概念图直观得多。
+
+Query 中继续进入 `query_logic.query()`，确认业务参数已经脱离 Protobuf 对象，只剩普通 Lua table：
+
+```text
+Gateway 接入层结束 Protobuf
+-> Query Service 处理业务 table
+```
+
+执行到：
+
+```lua
+battle_nav.query_cell(request.map_id, request.map_version, request.position)
+```
+
+LuaPanda 到这里已经完成职责。下一层是 C++。
+
+---
+
+### 31.7 用 gdb 跟进 battle_nav.so 和 GridMap
+
+先确保第一课是 Debug 构建：
+
+```bash
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map --rebuild
+```
+
+仓库提供：
+
+```text
+server/debug/gdb/lesson1.gdb
+```
+
+预置断点：
+
+```text
+l_query_cell
+battle_nav::GridMap::WorldToGrid
+battle_nav::GridMap::QueryWorld
+```
+
+由于 `battle_nav.so` 是运行时由 Lua `require` 加载，gdb 启动时符号可能还不存在，所以配置：
+
+```text
+set breakpoint pending on
+```
+
+#### 只做 C++ 调试
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+
+gdb -x debug/gdb/lesson1.gdb \
+  --args third_party/skynet/skynet config/skynet.lua
+```
+
+进入 gdb 后：
 
 ```gdb
-break battle_nav::BMapReader::Read
-break battle_nav::GridMap::QueryWorld
-break luaopen_battle_nav
 run
 ```
 
-多个 Skynet Service 可同时读同一个 immutable `GridMap`；任何可写临时数组都必须属于调用上下文，不能放在 C++ 全局。
+然后用 Unity 发 Query。
 
-## 33. 常见故障
+#### LuaPanda + gdb 同时跟踪
 
-### Unity 找不到 Google.Protobuf
+这是第一课最完整的一次调试演练。
 
-检查 `Assets/Plugins/Google.Protobuf.dll`、Inspector 平台勾选和重复 DLL。DLL 加载问题与 schema 无关，不要先重生成协议。
-
-### descriptor type not found
-
-运行 `sha256sum protocol/generated/server/navigation_query.pb` 和 `lua protocol/check_descriptor.lua ...`。如果 descriptor 能加载但 type 不存在，说明 Unity 和 Server 使用的 `.proto` 不是同一份；`.proto` 是唯一权威。
-
-### 结果全部 OUT_OF_BOUNDS
-
-对照 Unity manifest 的 originMm、BMAP header 的 originMm、Server 的 map_id/map_version，以及查询窗口是否把米转换成毫米。Server 不猜测单位。
-
-### 网格编号相差一格
-
-先跑 BMapBinaryTests 和 C++ 负坐标测试，再用 32.1 的人工算例对照。不要通过把 origin 加一个 cell 来修现象。
-
-### TCP 偶发卡住
-
-检查客户端是否按 2-byte Big Endian 读取 netpack header；Server 日志是否出现 `NAV_TCP_PROTOCOL_CLOSE`、`NAV_TCP_WRITE_WARNING` 或连接上限保护。半包/粘包由 `netpack.filter` 管理，不再排查 `socket.read` 返回块大小。
-
-### Unity 与 Server 结果不同
-
-以 Server 为最终结果。对照顺序是同一 map_id/map_version → 同一毫米坐标 → 同一 BMAP CRC → 同一 C++ `GridMap::QueryWorld`。Unity 只负责 Authoring、导出和调试显示。
-
-## 34. 第一课验收清单
+1. VS Code 先启动：
 
 ```text
-[ ] Unity 工程使用 G:\Tuanjie\Editors\2022.3.62t12。
-[ ] Battle_1001 场景可打开，NavMesh Authoring 可复现。
-[ ] Exporter 生成 BMAP 和 manifest，失败条件有明确错误。
-[ ] BMAP header、payload、CRC 可独立读取和验证。
-[ ] BMapReader 不做 struct cast，显式处理小端和长度溢出。
+LuaPanda Lesson1 Gateway + Query
+```
+
+2. WSL：
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+./scripts/linux/debug_luapanda.sh --gdb
+```
+
+3. gdb：
+
+```gdb
+run
+```
+
+4. Unity 发真实 QueryCell。
+
+调试链会依次表现为：
+
+```text
+LuaPanda Gateway
+  dispatch_packet
+  -> skynet.call
+
+LuaPanda Query
+  navigation_query dispatch
+  -> query_logic.query
+  -> battle_nav.query_cell
+
+GDB
+  l_query_cell
+  -> GridMap::WorldToGrid
+  -> GridMap::QueryWorld
+
+LuaPanda Query
+  Native 返回
+  -> response table
+
+LuaPanda Gateway
+  skynet.call 返回
+  -> send_response
+
+Unity
+  QueryCellResponse
+```
+
+#### GDB 里重点看什么
+
+在 `l_query_cell`：
+
+```gdb
+bt
+info threads
+```
+
+确认当前是从 Lua C Binding 进入。
+
+进入 `GridMap::WorldToGrid` 后：
+
+```gdb
+p world.x_mm
+p world.y_mm
+p world.z_mm
+p metadata_.origin_x_mm
+p metadata_.origin_z_mm
+p metadata_.cell_size_mm
+```
+
+确认世界毫米坐标怎样换成 Grid。
+
+进入 `GridMap::QueryWorld`：
+
+```gdb
+bt
+next
+```
+
+观察：
+
+```text
+WorldToGrid
+-> Contains
+-> IndexOf
+-> cells_[index]
+```
+
+如果查询负坐标，这是验证 floor contract 的最好位置。
+
+当 gdb 命中 C++ breakpoint 时，整个 Skynet 进程会被 ptrace 暂停，LuaPanda 界面可能暂时没有响应，这是正常现象。继续 gdb 后，Lua State 才会继续运行。
+
+---
+
+### 31.8 做一次完整的端到端断点演练
+
+这次不要跳步骤。
+
+#### Step 1：确认 Server 资产与构建
+
+```bash
+cd "$(git rev-parse --show-toplevel)/server"
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+```
+
+必须：
+
+```text
+LESSON1_SERVER_PREPARE_OK
+```
+
+#### Step 2：启动 LuaPanda 两个 target
+
+VS Code：
+
+```text
+LuaPanda Lesson1 Gateway + Query
+```
+
+#### Step 3：以 LuaPanda + gdb 模式启动 Server
+
+```bash
+./scripts/linux/debug_luapanda.sh --gdb
+```
+
+GDB：
+
+```gdb
+run
+```
+
+#### Step 4：查询 Ground Golden Point
+
+Unity Query Window 发一个已在 Scene Overlay 验证的可走点。
+
+依次记录：
+
+```text
+Gateway:
+  fd
+  request_id
+  command
+
+Query:
+  map_id/version
+  position mm
+
+Native:
+  GridPos
+  NavCell.height_mm
+  NavCell.area_type
+  NavCell.clearance_cells
+
+Response:
+  result
+  grid_x/grid_z
+  height/area/clearance
+```
+
+#### Step 5：查询静态障碍
+
+目标是 `CenterBlock` 等已验证阻挡位置。
+
+关注：
+
+```text
+网络路径完全正常
+Protobuf 完全正常
+Native 查询也成功完成
+最终业务语义是 not walkable / 对应 result
+```
+
+不要把“不可走”误判成网络异常。
+
+#### Step 6：查询越界点
+
+```text
+x_mm = 999999999
+```
+
+在 GDB 的 `WorldToGrid` / `QueryWorld` 看越界怎样转为显式错误，再回到 Lua/Protobuf。
+
+#### Step 7：让请求完整返回 Unity
+
+最终必须看到 request_id 匹配当前请求。
+
+这证明：
+
+```text
+同一个请求
+真正经过网络
+真正跨了两个 Skynet Service
+真正进入 C++
+真正使用 BMAP 生成的 immutable GridMap
+真正返回 Unity
+```
+
+---
+
+### 31.9 失败用例也要作为验收内容
+
+最终验收不能只有 happy path。
+
+#### 协议错误
+
+至少保留以下测试：
+
+```text
+protocol_version 错误
+unknown command
+malformed Envelope
+malformed QueryCellRequest
+frame 拆成多个 TCP write
+多个 frame 合成一次 write
+65535 bytes 边界
+超出 netpack uint16 上限的客户端拒绝
+request_id 必须原样匹配
+```
+
+Gateway 的核心观察点：
+
+```text
+netpack 负责半包/粘包
+业务层只拿完整 payload
+协议异常关闭连接
+不会把 malformed bytes 交给 Native
+```
+
+#### fd 关闭/复用
+
+当前 Gateway 在 `skynet.call` 后重新检查：
+
+```lua
+connections[fd] == conn
+```
+
+原因是：
+
+```text
+request 已发给 Query
+-> Gateway coroutine yield
+-> client 断开
+-> fd 未来可能被系统复用
+-> Query 返回
+```
+
+如果只看数字 fd，不看 connection object identity，旧请求可能把响应写给新连接。
+
+这不是“课程为了复杂而加的保护”，而是事件驱动接入层真实需要考虑的生命周期问题。
+
+#### 负世界坐标
+
+再次人工算一次：
+
+```text
+origin_x_mm=-5000
+origin_z_mm=10000
+cell_size_mm=500
+world_x_mm=-4999
+world_z_mm=10501
+
+GridX = floor(1 / 500)   = 0
+GridZ = floor(501 / 500) = 1
+```
+
+更关键的是跨 origin 左侧：
+
+```text
+world_x_mm=-5001
+relative=-1
+floor(-1/500)=-1
+```
+
+C++ 普通向零截断除法不能直接替代 floor division。
+
+#### 高度和 clearance
+
+再次确认：
+
+```text
+height_mm
+  静态地图表面高度。
+
+clearance_cells
+  静态地图空间条件。
+```
+
+它们都不是第二课动态单位状态。
+
+第一课验收结束时，共享 `GridMap` 仍然完全 immutable。
+
+---
+
+### 31.10 最终需要保存哪些调试证据
+
+建议保存一份简单的 Lesson 1 验收记录，不需要写成正式测试报告，但至少有下面这些证据。
+
+```text
+1. Unity Validator
+   BATTLE_MAP_AUTHORING_OK
+
+2. Unity Export
+   battle_1001.bmap
+   battle_1001.manifest.json
+
+3. lesson1_prepare.sh
+   LESSON1_SERVER_PREPARE_OK
+   BMAP SHA256
+
+4. Native tests
+   grid_map_test passed
+
+5. Server startup
+   NAV_QUERY_READY
+   NAV_TCP_READY
+   NAV_SERVER_READY
+
+6. LuaPanda Gateway breakpoint
+   fd / request_id / command / request
+
+7. LuaPanda Query breakpoint
+   request table / response table
+
+8. gdb Native breakpoint
+   WorldPosition -> GridPos -> NavCell
+
+9. Unity response
+   Ground / Blocked / Slope / OOB
+
+10. Safe stop
+    STOP_OK
+```
+
+这十份证据共同回答“系统是否真的跑通”。任何单独一项都不够。
+
+---
+
+### 31.11 第一课最终验收清单
+
+#### Unity / 资产
+
+```text
+[ ] Battle_1001 Scene 可以打开。
+[ ] NavMesh Authoring 可以重新 Bake。
+[ ] Validator 能检查 single-layer 2.5D 约束。
+[ ] Exporter 能生成 BMAP + manifest。
+[ ] manifest map_id/version/cell_size 正确。
+[ ] BMAP Header/Payload CRC 能被 Server 拒错。
+```
+
+#### Native
+
+```text
+[ ] BMapReader 显式读字段，不做 raw struct cast。
+[ ] 长度、Magic、header_size、版本、CRC 都有校验。
+[ ] WorldPosition -> GridPos 对负坐标使用 floor contract。
 [ ] GridMap 加载后 immutable。
-[ ] MapRegistry 可按 map_id 查找并拒绝版本不匹配。
-[ ] Lua Binding 只暴露静态查询，没有全局可写 scratch。
-[ ] lua-protobuf descriptor 可以加载。
-[ ] Gateway 使用 `socketdriver + PTYPE_SOCKET + netpack`，TCP 为 2-byte Big Endian uint16 长度，最大 payload 65535 bytes。
-[ ] Unity 使用 Google.Protobuf 生成类型发送真实 protobuf。
-[ ] Server 返回 request_id、result、grid、height、area、clearance。
-[ ] 半包、粘包、错误版本、未知命令、超大 frame 有测试。
-[ ] Unity 结果不能覆盖 Server 结果。
-[ ] 本课没有 A*、AgentProfile、Path、NavigationContext、DynamicOccupancy、BattleWorker 或 INavigationBackend。
+[ ] MapRegistry 可以按 map/version 获取地图。
+[ ] 多 Service 并发读不依赖 global mutable scratch。
+[ ] grid_map_test 通过。
 ```
 
-最后一条是课程边界验收。只有在 Lesson 2 第一次出现“从 A 到 B 要寻路”时，才引入这些对象。
-
-## 35. 课后练习与性能基线
-
-1. 在 Unity Debug Window 增加“显示九宫格”按钮，发送九个相邻 WorldPosition 并绘制 Scene Overlay；不修改 BMAP、不把 GridPos 存成业务位置、每个 request_id 可追踪。
-2. 复制 BMAP，只修改 payload 一个字节，确认 BMapReader 拒绝加载并打印 CRC mismatch；恢复正确文件后再确认 MapRegistry 注册地图。
-3. 给 Envelope 增加调试字段，验证旧 Server 忽略未知字段；再修改字段号，观察测试失败。
-4. 在 Linux 本机、Debug 构建、固定地图规模下执行 10000 次本地 `GridMap::QueryWorld`，记录总耗时、平均耗时、p50/p95/p99 和内存变化；再执行 1000 次 TCP 查询，分开记录网络/Protobuf 开销，并写明机器、编译类型、地图规模。
-
-## 36. 第一课面试复盘
-
-### 36.1 五分钟项目讲解
-
-不用照读代码，按以下顺序讲：
+#### Lua / Skynet
 
 ```text
-问题：Unity 3D 地图不能直接给 Skynet Server 使用。
-约束：Server 权威、单层 2.5D、版本可追踪、多 Service 并发读。
-生产：Scene/NavMesh -> Sampling/Validator -> BMAP/manifest。
-运行：BMapReader -> immutable GridMap -> MapRegistry -> Lua Binding -> Skynet Query。
-协议：BMAP 是离线资产；Protobuf 是 Unity/Server 运行消息。
-证据：Golden coordinate、CRC corruption、malformed frame、concurrent query。
-限制：不表达桥上下层；当前没有寻路和动态单位。
-演进：第二课需求出现 A->B 时才增加 A* 和每场战斗上下文。
+[ ] service/ 与 lualib/ 的运行身份没有混用。
+[ ] navigation_query 是独立 Service/Lua State。
+[ ] navigation_gateway 是独立 Service/Lua State。
+[ ] Gateway 使用 socketdriver + PTYPE_SOCKET + netpack。
+[ ] 不再使用 skynet.socket + socket.read 循环。
+[ ] netpack queue 的 message ownership 明确。
+[ ] Gateway -> Query 使用显式 Service handle。
+[ ] skynet.call 的 yield 边界能解释。
+[ ] Query -> query_logic 是同 Lua State 普通函数调用。
+[ ] Query 核心静态查询路径本身不 yield。
 ```
 
-### 36.2 面试官可能继续追问
-
-#### 为什么不让 Skynet Lua 直接解析 BMAP？
-
-回答需要覆盖：固定二进制格式校验、查询热路径、共享 immutable 数据、Lua State 隔离，以及 C Binding 仍必须返回显式错误。不要只回答“C++ 更快”。
-
-#### 多 Service 共享一个地图是否一定线程安全？
-
-不是。只有地图加载完成后不再修改、对象生命周期覆盖所有查询、查询临时状态不放在共享 global mutable 数据中，才成立。Lesson 2 的 A* scratch 和动态占位必须独立。
-
-#### 为什么不用一个 MapService 接受所有查询？
-
-低频管理和加载可以由服务协调；高频查询如果全部 `skynet.call` 到单点，会增加序列化、消息调度、yield 和瓶颈风险。immutable Native Map 允许 Worker 本地查询，但要明确模块实例、进程和线程模型。
-
-#### CRC 能不能防恶意篡改？
-
-不能。CRC 用于检测传输、构建和文件损坏，不提供密码学真实性。若部署威胁模型需要防篡改，应增加签名或可信发布链，不能夸大 CRC 能力。
-
-#### 为什么业务保存 WorldPosition，不保存 GridPos？
-
-GridPos 与当前地图实现、origin 和 cell size 绑定；WorldPosition 是更稳定的业务坐标。后续若选择 Polygon NavMesh，上层位置合同不应被迫迁移。
-
-#### 为什么 Protobuf 不直接存整张地图？
-
-BMAP 面向大块定长数据、校验和直接索引；Protobuf 面向兼容演进的消息。二者访问模式、失败路径和版本治理不同，不能因为都能序列化就混成一种格式。
-
-### 36.3 回答质量自检
+#### TCP / Protobuf
 
 ```text
-[ ] 先说当前业务行为，再说技术方案
-[ ] 能画出离线资产链和运行消息链
-[ ] 能指出至少一个失败路径和对应测试
-[ ] 能说明线程安全成立的前提，不说“只读天然安全”就结束
-[ ] 性能数字带机器、Build 类型、地图规模和并发条件
-[ ] 主动说明 2.5D 限制，不包装成万能方案
-[ ] 不提前声称已经实现 Lesson 2/3 功能
+[ ] framing 是 uint16 Big Endian + Envelope。
+[ ] max payload 为 65535 bytes。
+[ ] Envelope 有 protocol_version/command/request_id/body。
+[ ] malformed frame/envelope/body 不进入 Native。
+[ ] 半包/粘包由 netpack 正确处理。
+[ ] fd close/reuse 不会发生旧响应误写新连接。
+[ ] Unity 和 Server 使用同一份 .proto。
+[ ] request_id 请求/响应一致。
 ```
 
-## 37. 下一课的自然入口
+#### 构建 / 运行
 
-第一课结束时系统能回答：给定 battle_version 对应的 map_id/map_version 和 WorldPosition，Server 能验证静态地图并返回该位置的静态网格事实。
+```text
+[ ] lesson1_prepare.sh 能完成最终准备。
+[ ] run_server.sh doctor 通过。
+[ ] start/status/log/stop 正常。
+[ ] PID identity 校验不会误杀其他进程。
+[ ] rebuild 不会删除地图和源码。
+```
 
-下一课只有在需求变成“从 A 到 B 要寻路”时才引入 `Path`、`AgentProfile`、`NavigationContext`、Grid A*、`DynamicOccupancy`、`BattleWorker`。Lesson 3 在这些基础上实现人工控制 Player、Server AI 地面/空中单位、技能和 Unity 战斗表现。Recast/Detour 属于可选 Lesson 4，不是前三课闭环的前置条件。
+#### 调试
 
-这就是本课的完成标准：Unity Authoring、BMAP、Native Reader、GridMap、MapRegistry、Lua Binding、Skynet Query 和 Unity Protobuf 调试链路都能被真实执行、独立测试、明确定位。
+```text
+[ ] bootstrap_luapanda.sh 能验证 LuaSocket + LuaPanda runtime。
+[ ] VS Code Gateway target 能命中断点。
+[ ] VS Code Query target 能命中断点。
+[ ] 能解释为什么 skynet.call 不能在一个 LuaPanda target 中直接 Step Into 另一个 Service。
+[ ] gdb 能命中 l_query_cell。
+[ ] gdb 能命中 GridMap::WorldToGrid / QueryWorld。
+[ ] 能完成 Gateway -> Query -> C++ -> Response 的一次完整跟踪。
+```
+
+#### 课程边界
+
+```text
+[ ] 第一课没有 A*。
+[ ] 没有 AgentProfile。
+[ ] 没有 NavigationContext。
+[ ] 没有 DynamicOccupancy。
+[ ] 没有 BattleWorker。
+[ ] 没有 INavigationBackend。
+```
+
+如果最后六项已经提前出现在第一课核心实现里，说明课程边界又被打乱了。
+
+---
+
+### 31.12 常见最终验收故障
+
+#### LuaPanda Gateway 能连，Query 连不上
+
+先看：
+
+```bash
+ss -lntp | grep -E '8818|8819'
+```
+
+再看 Server 日志有没有：
+
+```text
+LUA_PANDA_CONNECT role=query
+```
+
+确认 VS Code compound 的 Query port 是 `8819`，不要两个 target 都写 8818。
+
+#### LuaPanda 已连接但断点不命中
+
+在 Debug Console：
+
+```text
+LuaPanda.doctor()
+```
+
+优先检查：
+
+```text
+VS Code 是否打开仓库根目录
+cwd 是否是 ${workspaceFolder}/server
+autoPathMode 是否 true
+文件路径大小写是否一致
+```
+
+不要先怀疑 Skynet 调度器。
+
+#### `require("socket.core")` 失败
+
+重新执行：
+
+```bash
+./scripts/linux/bootstrap_luapanda.sh
+```
+
+确认输出 `LUAPANDA_RUNTIME_OK`。
+
+不要通过安装系统 `lua-socket` 随机解决，因为系统包可能针对另一套 Lua ABI。
+
+#### GDB 说找不到 l_query_cell
+
+先确认 Debug 构建：
+
+```bash
+file build/lua_battle_nav/battle_nav.so
+```
+
+GDB 中：
+
+```gdb
+set breakpoint pending on
+break l_query_cell
+run
+```
+
+`battle_nav.so` 是之后由 Lua `require` 动态加载的，启动前 unresolved 是正常现象。
+
+#### Server 已启动但 Unity 连接失败
+
+```bash
+./scripts/linux/run_server.sh status
+ss -lntp | grep 19001
+tail -n 100 logs/server.log
+```
+
+必须先确认 `NAV_TCP_READY`，再排 Unity。
+
+#### 所有坐标都 OOB
+
+按顺序对照：
+
+```text
+Unity manifest origin_mm
+BMAP header origin
+Server map_id/version
+Query Window 单位是否为 mm
+GridMap::WorldToGrid 中 world/origin/cell_size
+```
+
+不要用“给 origin 加一格”修现象。
+
+---
+
+### 31.13 性能基线和课后练习
+
+第一课的性能练习仍然保留，但必须在功能验收之后做。
+
+#### Native Query 基线
+
+使用 Release/RelWithDebInfo：
+
+```text
+固定机器
+固定地图
+固定查询集合
+10000 次 GridMap::QueryWorld
+记录 total / avg / p50 / p95 / p99
+```
+
+#### TCP Query 基线
+
+再做：
+
+```text
+1000 次 TCP QueryCell
+```
+
+Native 与 TCP 结果不能混成一个“寻路性能”数字。
+
+它们测的是：
+
+```text
+Native
+  坐标换算 + Grid 查询
+
+TCP
+  socket + netpack + Protobuf + Service call + Native + response
+```
+
+课后可以做：
+
+```text
+1. Unity Query Window 一次查询九宫格并可视化。
+2. 修改 BMAP payload 一个 byte，验证 CRC 拒绝。
+3. Envelope 增加未知字段，验证 protobuf forward compatibility。
+4. 人工制造 protocol version mismatch / unknown command。
+5. 并发多个短连接，观察 Gateway connection/inflight 行为。
+```
+
+---
+
+### 31.14 第一课面试复盘
+
+最终不要背文件名，按“问题 -> 约束 -> 设计 -> 执行链 -> 证据 -> 限制”讲。
+
+五分钟版本：
+
+```text
+问题：
+Unity 3D Scene 不能直接成为 Skynet Server 的权威导航数据。
+
+约束：
+Server 权威；单层 2.5D；地图资产版本化；多 Service 可并发读；
+运行消息需要稳定协议；Gateway 和 Native 都必须可观测和可失败。
+
+设计：
+Unity NavMesh 只做 Authoring；采样输出 BMAP；
+Server 用 BMapReader 加载为 immutable GridMap；
+MapRegistry 管理静态地图；Lua Binding 保持薄；
+运行时用 Protobuf Envelope；Gateway 使用 socketdriver + netpack；
+Query Service 和 Gateway 各有独立 Lua State。
+
+执行链：
+Scene -> BMAP -> GridMap -> Lua Binding -> Query Service
+-> Gateway -> Unity。
+真实网络方向则是 Unity -> Gateway -> Query -> Native -> Unity。
+
+证据：
+Validator、CRC corruption、Native tests、READY 日志、
+LuaPanda 两个 Service 断点、gdb Native 断点、真实 Unity Query。
+
+限制：
+当前只有 single-layer 2.5D 静态查询；没有寻路、动态单位和 Battle。
+```
+
+面试官继续追问时，要能回答：
+
+```text
+为什么 BMAP 不直接用 Protobuf？
+为什么 GridMap immutable？
+为什么 MapRegistry 不代理每次高频查询？
+为什么 Gateway 和 Query 分两个 Service？
+为什么 skynet.call 会 yield？
+为什么一个 LuaPanda 连接不能直接调两个 Service Lua State？
+为什么 netpack framing 是 uint16 Big Endian？
+fd 复用为什么需要 connection identity？
+为什么 Native Binding 不保存业务状态？
+负世界坐标怎样映射 Grid？
+当前架构为什么还不需要 NavigationContext？
+```
+
+回答质量自检：
+
+```text
+能不能说出真实代码路径？
+能不能说出谁拥有状态？
+能不能说出哪里会 yield？
+能不能说出失败后怎样返回？
+能不能指出对应测试/断点/日志证据？
+能不能说出方案当前不支持什么？
+```
+
+只说“我们用了 Skynet/Protobuf/CRC/immutable”不够。主程面试关注的是为什么、边界和证据。
+
+---
+
+### 31.15 第一课结束，进入第二课
+
+第一课最后停在：
+
+```text
+给一个 WorldPosition
+-> Server 能权威回答这个 Cell 的静态导航属性
+```
+
+此时仍然没有：
+
+```text
+A 到 B 的路径
+不同体型单位的通行约束
+动态单位占位
+战斗内查询 scratch
+Server AI
+自动战斗
+Replay
+```
+
+第二课的新需求才是：
+
+> 一个单位位于世界位置 A，需要在一场独立 Battle 中绕过地图和其他单位移动到世界位置 B。
+
+从这个需求开始，才依次引入：
+
+```text
+AgentProfile
+Path
+NavigationContext
+Grid A*
+DynamicOccupancy
+BattleWorker
+Server AI
+Unity Replay
+```
+
+当本节的最终 checklist、LuaPanda/GDB 跟踪和端到端 Query 都完成后，第一课才算真正验收通过。

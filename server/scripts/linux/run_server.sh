@@ -256,6 +256,12 @@ run_native_tests() {
     "$SERVER_ROOT/native/grid_map/make_test.sh"
 }
 
+# 在构建入口统一执行项目 Lua 编码策略，避免仅靠 Code Review 发现动态签名回归。
+run_lua_policy_checks() {
+    log "checking project Lua vararg policy"
+    "$SERVER_ROOT/scripts/linux/check_lua_varargs.sh"
+}
+
 safe_remove_build_dir() {
     local path="$1"
     case "$path" in
@@ -278,6 +284,7 @@ rebuild_all() {
     "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
     "$SERVER_ROOT/protocol/build_server_descriptor.sh"
     "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh"
+    run_lua_policy_checks
     run_native_tests
     build_native_incremental
     log "REBUILD_OK"
@@ -437,6 +444,7 @@ main() {
             ;;
         build)
             prepare_runtime
+            run_lua_policy_checks
             run_native_tests
             log "BUILD_OK"
             ;;

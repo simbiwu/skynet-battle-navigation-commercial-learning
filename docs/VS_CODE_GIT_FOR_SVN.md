@@ -82,7 +82,9 @@ Stage 不是服务器上的临时区，也不是备份。它只是告诉 Git：�
 在 PowerShell 中：
 
 ```powershell
-Set-Location G:\simbi\dev\skynet-battle-navigation-commercial-learning
+Set-Location '<你克隆仓库的目录>'
+$repoRoot = (git rev-parse --show-toplevel).Trim()
+Set-Location $repoRoot
 code .
 ```
 
@@ -472,4 +474,3 @@ git remote -v
 ```
 
 预期 `main` 已有初始化提交，`git remote -v` 没有输出。项目所有者提供 URL 后，再从第 12 节开始配置 `origin` 和首次 Push。
-

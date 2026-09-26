@@ -6,13 +6,16 @@
 local skynet = require "skynet"
 local config = require "config.game"
 local query_logic = require "navigation.query_logic"
+local luapanda_debug = require "debug.luapanda_debug"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- 本 Service 的 query_cell handler 内部不 yield，响应 table 由 skynet.pack 复制发送。
 skynet.start(function()
+    -- Query 是独立 Lua State，使用与 Gateway 不同的 LuaPanda port。
+    luapanda_debug.start("query")
     query_logic.start(config)
 
-    skynet.dispatch("lua", function(_, _, command, payload)
+    skynet.dispatch("lua", function(_session, _source, command, payload)
         if command ~= "query_cell" then
             error("unknown navigation_query command: " .. tostring(command))
         end

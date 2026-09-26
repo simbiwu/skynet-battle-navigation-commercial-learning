@@ -26,6 +26,35 @@ https://github.com/simbiwu/Skynet-slg-learning
 
 禁止合并旧工程或复制旧业务。
 
+## 本机双工作区职责
+
+本项目在当前开发机使用两个完整 Git worktree，但每类文件只有一个编辑源，禁止同时维护两份实现：
+
+```text
+G:\simbi\dev\skynet-battle-navigation-commercial-learning
+  docs/、unity/、codex/、根目录课程文档和文档生成工具的编辑源
+
+~/workspace/skynet-battle-navigation-commercial-learning
+  server/ 的编辑源
+```
+
+WSL 中必须保持完整主仓库结构，Server 位于：
+
+```text
+~/workspace/skynet-battle-navigation-commercial-learning/server/
+```
+
+禁止把 `service/`、`lualib/`、`native/`、`protocol/` 等目录另建为独立 Git 仓库。旧的 `~/workspace/skynet-battle-navigation-serve` 不再作为开发源。
+
+执行规则：
+
+- 文档、课程规范和 Unity 修改只在 G 盘主仓库进行；
+- `server/` 下的 Lua、C++、协议、配置、构建脚本和测试只在 WSL 主仓库进行；
+- G 盘的 `server/` 只通过远端 Git 更新，不直接编辑；
+- 跨文档与 Server 的任务分别在各自编辑源修改并验证，不用目录复制覆盖另一侧的未提交工作；
+- Commit/Push 前检查两个 worktree 的分支、HEAD、未提交修改和远端分叉；同一远端分支的提交必须串行同步，禁止两边基于旧 HEAD 分别 Push；
+- 没有用户明确的“开始、修改、执行、更新、同步”等指令时，只讨论，不修改任何文件。
+
 ## Learner
 
 可以默认学习者：
@@ -317,6 +346,108 @@ config/
 
 启动者默认保存 `newservice()` 返回的 handle，并把 handle 显式注入调用方。只有存在明确的跨启动树发现需求时才注册名字；单节点本地名字使用 `.` 前缀，并说明唯一性、重启和冲突处理。
 
+## Skynet 教学与商业级实现
+
+本课程的核心是基于 Skynet 实现可演进的 SLG Server。Skynet 不能只作为“能把 Lua 跑起来的容器”，也不能只给最终代码让学习者照抄。每个 Skynet 核心机制第一次在真实链路中出现时，必须就地讲清：
+
+```text
+它解决的当前问题
+它属于哪个 Service / Lua State
+调用者、接收者和状态 Owner
+回调参数与返回值从哪里产生
+消息经过 pack / unpack / dispatch 的顺序
+哪里可能 yield，yield 前后哪些引用仍然有效
+内存、fd、buffer、queue 或 userdata 的 ownership
+失败怎样传播，是否回包、断连或终止启动
+固定 Skynet 版本中可以核对的源码与官方示例位置
+如何通过日志、断点和负向测试验证
+```
+
+至少覆盖课程中实际使用的：
+
+```text
+newservice / uniqueservice
+Service handle 显式注入
+require 与独立 Lua State 的区别
+skynet.start
+skynet.dispatch
+skynet.call / skynet.send / skynet.retpack
+skynet.register_protocol
+session / source / command / ... 的来源
+PTYPE_SOCKET
+socketdriver / netpack
+Service 消息协程与 yield
+```
+
+动态 Lua/C 边界不能依赖 IDE 猜测。教程应给出稳定公式和源码依据。例如自定义接收协议必须说明：
+
+```text
+dispatch 参数 = session + source + unpack(msg, sz) 的全部返回值
+```
+
+并解释 `unpack`、`dispatch`、可选 `pack` 的职责。IDE 注解、命名函数和类型 stub 用于提高开发效率，不能替代协议合同。
+
+### Lua 可变参数限制
+
+项目自有 Lua 源码默认禁止把 `...` 用作函数参数、返回转发或稳定模块接口。该限制覆盖 `service/`、`lualib/`、协议/构建脚本和教程中要求学习者复制的 Lua 代码，不只限于 Gateway。
+
+Skynet 或 C 模块返回可变参数时，适配层必须用固定数量的命名槽位接收，并按 command/event 显式映射到语义函数：
+
+```lua
+dispatch = function(_session, _source, queue, event, arg1, arg2, arg3)
+    if event == "open" then
+        SOCKET.open(arg1, arg2)
+    elseif event == "data" then
+        SOCKET.data(arg1, arg2, arg3)
+    end
+end
+```
+
+跨 Service 和跨模块接口优先使用：
+
+```text
+固定位置参数；或
+command + 一个带 Lua Language Server 注解的 request record；或
+一个明确 result record
+```
+
+禁止：
+
+- 从 Service dispatch 把 `...` 原样继续传给业务函数；
+- 用 `table.pack(...)` / `{...}` 隐藏未定义的长期接口；
+- 把可变参数保存到闭包、table、异步任务或跨 yield 使用；
+- 仅以“Skynet 示例这样写”为理由保留项目内的动态签名；
+- 在教程完整代码中使用 `...` 代替本来已知的业务参数。
+
+只有职责本身就是“转发未知签名”的通用基础设施才可申请例外。例外必须局部、写明 WHY 和参数/ownership 约束、不得进入业务模块，并有针对参数数量、nil 洞、返回值和 yield 的测试。当前课程代码没有默认例外白名单。
+
+性能结论必须区分 Lua VM 的 vararg 访问与 `table.pack/unpack` 产生的额外分配，并给出固定 Lua/Skynet 版本、调用次数、参数数量和 GC 条件。即使性能差异不显著，可读性、IDE 支持和重构安全仍足以作为默认禁用理由。
+
+功能可以按课程范围简化，架构和运行边界不能为了少写代码而简化。所谓商业级，至少要求：
+
+- 状态 Owner、生命周期和跨 Service 边界明确；
+- 输入、协议版本、资源上限和错误结果显式；
+- 队列、连接、并发请求和内存增长有界；
+- yield 前后重新验证可能失效或复用的身份；
+- C buffer、userdata、fd、queue 和动态状态有明确释放路径；
+- 接入层、业务模拟、静态资产和动态状态分离；
+- 启动、停止、日志、调试、测试和故障路径可观察；
+- 后续扩展通过稳定边界演进，不靠复制第二套业务逻辑。
+
+第一课 Gateway 即使只承载低频 `QueryCell`，也必须采用正确接入层边界：
+
+```text
+socketdriver + PTYPE_SOCKET + netpack
+Gateway Service 独占 listen/client fd 与 connections
+netpack C message 在任何 yield 前转成 Lua string 或释放
+fd close/reuse 后用 connection object identity 防止旧协程误写
+max frame / max clients / per-connection in-flight / write warning 有界
+malformed/version/command/body 显式拒绝
+Query Service handle 由 main 显式注入
+```
+
+课程可以明确暂不实现 TLS、账号鉴权、跨区路由、全量限流策略、指标平台或最终 drain 编排，但必须标注这些是阶段外能力，不能把缺失能力包装成“已可直接生产部署”。也不能为了看起来完整而提前创建尚未被当前行为使用的模块。
+
 ## Lesson 2 A*
 
 要求：
@@ -431,6 +562,7 @@ navigation asset/build version
 - 中文；
 - 顺真实执行链；
 - 标完整路径；
+- Skynet 核心机制第一次出现时必须解释运行合同、参数来源、ownership、yield 和固定版本源码依据，不能只给可复制代码；
 - 每个文件步骤必须明确标注“新建文件、完整替换、局部修改或只读”，不能只给路径和代码让学习者猜操作；
 - 每节围绕一个当前实际问题组织，按“为什么现在需要 -> 最小必要概念 -> 实际操作 -> 谁会使用 -> 验证”推进；
 - 每节只要求学习者新增或修改当前链路马上会使用的文件。未来步骤才需要的类型、常量和工具，延后到首次真实使用处再引入；
@@ -583,4 +715,5 @@ return result;
 - 不把一个 MapService 做全部高频寻路代理；
 - 不做 global mutable A* scratch；
 - 不让 Client 结果覆盖 Server；
+- 项目自有 Lua 稳定接口和业务调用不使用 `...`；
 - 不静默升级 Skynet / Unity / Recast。

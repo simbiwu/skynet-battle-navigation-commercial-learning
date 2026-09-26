@@ -215,18 +215,20 @@ Off-Mesh Traversal
 
 ## 推荐工作区
 
+仓库可以克隆到任意目录；下面的 `<仓库根目录>` 表示 `git rev-parse --show-toplevel` 返回的当前仓库路径。
+
 Unity：
 
 ```text
 Windows:
-G:\simbi\dev\skynet-battle-navigation-commercial-learning\unity\BattleNavigation
+<仓库根目录>\unity\BattleNavigation
 ```
 
 Server：
 
 ```text
 WSL:
-~/workspace/skynet-battle-navigation-commercial-learning/server
+<仓库根目录>/server
 ```
 
 ## Codex 第一条指令

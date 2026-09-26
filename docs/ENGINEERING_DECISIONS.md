@@ -476,3 +476,21 @@ lualib/protocol/navigation_codec.lua  Gateway 内部 codec
 ```
 
 启动者保存 `newservice()` 返回的 handle，并显式注入依赖。单节点内不通过全局名字隐藏地址关系，也不让一个 Service 用 `skynet.call` 调用自己。后续 BattleWorker、AI、技能和 Replay 文件继续按同一规则判断目录，不能按“看起来像业务组件”决定是否放入 `service/`。
+
+## D032 - Skynet 是课程主线，功能裁剪不能破坏商业级边界
+
+课程基于 Skynet 实现可演进的 SLG Server。第一次使用 `newservice`、`dispatch`、`call/send`、`register_protocol`、`PTYPE_SOCKET`、`socketdriver/netpack` 等机制时，教程必须解释参数来源、Lua State、消息边界、ownership、yield、失败传播和固定版本源码依据，不能只提供可复制代码。
+
+课程阶段允许暂不实现 TLS、账号鉴权、跨区路由、完整指标平台或最终 drain 编排，但不允许用以下 Demo 捷径换取代码量更少：
+
+```text
+无界连接、队列或并发请求
+跨 yield 保存可能失效的 fd/C buffer/userdata
+用全局名字隐藏本可显式注入的 Service handle
+让 Gateway 同时承担地图、导航或战斗状态 Owner
+同时维护两套 framing 或两套战斗规则
+吞掉协议、版本、资产和业务错误
+把阶段性实现描述成可以直接生产部署
+```
+
+商业级首先意味着 ownership、资源上限、错误、可观察性和演进边界正确。生产环境所需但尚未进入当前课程链路的能力必须明确列为阶段外能力，在首次产生真实用途时再引入。

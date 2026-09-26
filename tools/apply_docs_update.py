@@ -23,6 +23,7 @@ GATEWAY = ROOT / "server/service/navigation_gateway.lua"
 GAME_CONFIG = ROOT / "server/config/game.lua"
 RUN_SERVER = ROOT / "server/scripts/linux/run_server.sh"
 STOP_SERVER = ROOT / "server/scripts/linux/stop_server.sh"
+CHECK_LUA_VARARGS = ROOT / "server/scripts/linux/check_lua_varargs.sh"
 
 BASELINE_SHA1 = {
     LESSON1: "4590311e31057c67ff52988bed7783660218ddf0",
@@ -92,6 +93,7 @@ def update_lesson1() -> None:
     gateway_code = fenced(GATEWAY, "lua")
     run_code = fenced(RUN_SERVER, "bash")
     stop_code = fenced(STOP_SERVER, "bash")
+    lua_vararg_check_code = fenced(CHECK_LUA_VARARGS, "bash")
 
     text = replace_once(
         text,
@@ -163,6 +165,12 @@ socket thread
       -> netpack.pack
       -> socketdriver.send
 ```
+
+#### 本节的商业级工程边界
+
+第一课只承载低频 `QueryCell`，但 Gateway 仍然是正式接入层，不能用“教学 Demo”省略错误边界。本节要求 Gateway 独占 fd、connections 和 netpack queue；frame/version/command/body 先校验；连接数、帧长、单连接 in-flight 和写缓冲有界；C message 在 yield 前释放；`skynet.call` 返回后验证 connection identity；Query Service handle 显式注入；Gateway 不加载 BMAP，也不执行 Native 查询。
+
+当前阶段不宣称它已经可以直接暴露到生产公网。TLS、账号鉴权、按玩家限流、空闲超时、指标平台、多实例负载均衡和应用层 drain 是真实部署仍需补齐的能力。功能可以按课程范围延后，ownership、资源上限、错误和演进边界不能用 Demo 捷径替代。
 
 这里最重要的变化不是 API 名字，而是 ownership 模型：Gateway 不再为每个 fd 建一个“读循环 owner”。连接状态保存在 Gateway Service 的 `connections[fd]` 中，底层 socket 事件不断投递到同一个 Service；每条请求自己的消息协程可以在 `skynet.call` 处 yield。
 
@@ -266,7 +274,56 @@ max_inflight_per_connection = 32
 
 超过上限直接关闭连接。这里没有实现复杂排队和流控，因为第一课只是低频 QueryCell 验收链；真正游戏 Gateway 可以根据协议语义选择串行请求、每玩家 Agent、限流队列或 back-pressure。
 
-### 27.6 替换 Gateway
+### 27.6 第一次理解 `skynet.register_protocol`
+
+Gateway 即将直接接收 `PTYPE_SOCKET`。`skynet.register_protocol` 在当前 Service 的 Lua State 中登记消息类型、解包规则和处理入口；它不是向 OS 注册 Socket，也不是给 Service 注册全局名字。下面的写法本身就是一次显式函数调用，省略圆括号只是 Lua 对单个 table 参数的语法糖：
+
+```lua
+skynet.register_protocol {{
+    name = "socket",
+    id = skynet.PTYPE_SOCKET,
+    unpack = function(msg, sz)
+        return netpack.filter(queue, msg, sz)
+    end,
+    dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+        -- 根据 event 显式映射到 SOCKET.init/open/data/more/close/error/warning。
+    end,
+}}
+```
+
+接收方向使用固定合同：
+
+```text
+dispatch 的参数
+= session
++ source
++ unpack(msg, sz) 的全部返回值
+```
+
+当前 `netpack.filter` 返回更新后的 queue、event 和该 event 的参数，因此 dispatch 的第三、第四个参数分别是 `updated_queue`、`event`。后续返回值由固定的 `arg1/arg2/arg3` 接收，再通过显式 event 分支调用对应 `SOCKET` 函数。`_session`、`_source` 仍然会收到值；下划线前缀只表示当前函数有意不使用它们。
+
+项目自有 Lua 代码不传播 `...`。框架适配层也使用固定槽位，具体事件再由明确函数签名收敛：
+
+```lua
+function SOCKET.open(fd, address) end
+function SOCKET.data(fd, msg, sz) end
+function SOCKET.error(fd, message) end
+function SOCKET.warning(fd, pending_kb) end
+```
+
+对需要接收消息的协议，逻辑上必须同时存在 `unpack` 和 `dispatch`，但不一定都在 `register_protocol` 中编写：
+
+| 场景 | `unpack` | `dispatch` |
+|---|---|---|
+| 内置 `"lua"` 协议 | Skynet 已注册 | Service 调用 `skynet.dispatch("lua", handler)` |
+| 自定义接收协议 | 当前协议适配层提供 | 当前 Service 提供 |
+| 本节 `PTYPE_SOCKET` | 包装 `netpack.filter` | Gateway 事件分发函数 |
+
+`pack` 属于相反的发送方向：`Lua 参数 -> pack -> Skynet message`。当前 Gateway 使用 `socketdriver.send(fd, netpack.pack(payload))`，所以没有为 `"socket"` 协议提供 `pack`。
+
+这里必须显式注册，是因为 Gateway 直接用 `socketdriver + netpack` 接管 `PTYPE_SOCKET`；高层 `skynet.socket` 与这套模型不能在同一个 Gateway 中重复注册或混用。IDE 无法完整推导 C 模块的可变返回值时，以固定 Skynet v1.8.0 的 `lualib/skynet.lua`、`service/gate.lua` 和 `lualib-src/lua-netpack.c` 为准。框架合同只在接入层理解一次，再通过命名函数、注解、断言和测试向业务层收敛。
+
+### 27.7 替换 Gateway
 
 #### 学习导航
 
@@ -289,7 +346,7 @@ max_inflight_per_connection = 32
 
 {gateway_code}
 
-### 27.7 这版 Gateway 的事件与 yield 边界
+### 27.8 这版 Gateway 的事件与 yield 边界
 
 ```text
 SOCKET.open/error/close/warning
@@ -305,9 +362,177 @@ SOCKET.data / SOCKET.more
   -> send response
 ```
 
+#### `updated_queue` 是可能被替换的状态对象
+
+`netpack.filter(queue, msg, sz)` 的第一个返回值不是“一个新的空队列”，而是处理完本次 Socket 消息后的最新 queue userdata。这个 C 对象同时保存：
+
+```text
+尚未收完整的包
+已经完整、等待 netpack.pop 的包
+环形队列容量、head/tail
+按 fd 保存的半包状态
+```
+
+初始 `queue` 可以为 `nil`。第一次需要保存半包或多个完整包时，`netpack` 才创建 userdata；环形队列容量不足时，它还可能创建更大的 userdata并迁移状态。因此它更接近下面的 C++ 接口：
+
+```cpp
+queue = FilterAndMaybeReallocate(queue, socket_message);
+```
+
+而不是一个永远固定的整数 fd。每次 dispatch 都必须先写回：
+
+```lua
+dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+    queue = updated_queue
+    -- 写回之后再根据 event 处理 data/more/open 等事件。
+end
+```
+
+可能出现的结果如下：
+
+| 输入情况 | `updated_queue` | `event` |
+|---|---|---|
+| 一个完整包且无需内部状态 | 可能仍为 `nil` | `data` |
+| 只收到半包 | userdata，保存半包 | `nil` |
+| 一次形成多个完整包 | userdata，保存待 pop 包 | `more` |
+| 已有 queue 且未扩容 | 通常是同一个 userdata | 取决于 Socket 事件 |
+| 容量不足 | 新 userdata，状态已迁移 | 通常与 `more` 路径相关 |
+
+`queue = updated_queue` 只是更新 Lua 引用，不会清空队列。扩容时，C 模块把尚未消费的完整包和半包状态迁移到新对象，再把旧对象重置为空；业务代码不能比较 userdata 地址、序列化 queue、跨 Service 传递它，或把旧引用缓存到一次 yield 之后。
+
+已经由 `netpack.pop` 取出的 `msg` 不再属于 queue。`dispatch_packet` 必须在任何 yield 前调用 `netpack.tostring(msg, sz)`，把它转换成 Lua string 并释放 C buffer。这样即使随后 queue 扩容，当前请求的 payload 也不受影响。
+
+#### 为什么 `dispatch_queue` 要先 fork continuation
+
+`netpack` queue 属于整个 Gateway，里面可能同时存在多个 fd 的完整包。如果当前包在 `skynet.call(query_service, ...)` 处 yield，而没有其他协程继续 drain，一个慢客户端请求就会阻塞 queue 中其他客户端已经完整的包：
+
+```text
+queue 中已有：fd1/A、fd2/B、fd3/C
+
+不 fork：
+  pop A -> A 等 Query Service
+  B、C 留在 queue，直到 A 恢复
+```
+
+当前代码先安排一条续接协程，再处理当前包：
+
+```lua
+skynet.fork(dispatch_queue)
+dispatch_packet(fd, msg, sz)
+```
+
+`skynet.fork` 只把新协程加入当前 Service 的待运行队列，不会立刻与当前协程并行。若 A 在 `skynet.call` 处 yield，续接协程才获得机会，从最新的全局 queue 继续取 B：
+
+```text
+协程 A：pop A -> fork 续接 B -> 处理 A -> yield
+协程 B：pop B -> fork 续接 C -> 处理 B -> yield
+协程 C：pop C -> fork 空续接 -> 处理 C
+```
+
+如果当前包在协议校验阶段就返回、完全没有 yield，后面的 `for` 循环会由当前协程直接批量排空，避免无条件为每个包创建协程。提前 fork 的续接协程稍后看到空 queue 就直接结束。
+
+泛型 `for` 会保存进入循环时的 queue 引用。若循环体 yield 期间发生扩容，旧 queue 已被迁移并重置为空；旧循环恢复后会结束，续接协程则通过模块变量读取新 queue。所有操作仍在同一个 Service 中串行执行，不会同时 pop，也不会重复释放 buffer。
+
+#### Gateway 并发接入与业务有序执行分层处理
+
+取消 fork 会把整个 Gateway 变成跨所有连接的全局串行队列，并不能正确表达“同一玩家或同一战斗的命令有序”。商业项目按状态 Owner 保证业务顺序：
+
+```text
+Gateway
+  校验 frame / session / command_seq
+  -> PlayerAgent(player_id)
+       同一玩家命令按 Owner 规则执行
+  -> BattleWorker(battle_id)
+       收集 PlayerCommand，按 fixed tick 和确定性顺序 simulate
+```
+
+第一课 `QueryCell` 是只读请求，多个连接可以并发等待，响应用 `request_id` 匹配，不依赖完成顺序。以后出现移动、施法、背包或奖励等有状态命令时，应路由到唯一 Player/Battle Owner；Owner 的核心状态修改保持 no-yield，便能自然做到 A 完成后再执行 B。
+
+只有某个 Owner 内的完整事务确实必须跨 yield 保持互斥时，才考虑为该 Owner 使用 `require "skynet.queue"` 提供的协程互斥器、状态机或提交前版本复核。不能在整个 Gateway 外层套一个全局互斥器，否则一个玩家的数据库或远程调用会阻塞所有连接。断线重连、重试和跨 Gateway 场景还需要 `command_seq`、目标 tick 与去重规则，不能只依赖 TCP 字节到达顺序。
+
+#### Service 串行执行不等于一条协程运行到底
+
+Skynet 对每个 Service Context 保证消息回调串行执行：同一个 Service 不会同时由两个 Worker Thread 执行两条消息回调。Lua Service 只有一个 Lua State，所以任意瞬间也只有一条 Lua 协程在执行指令。这条保证适用于所有由 Skynet 调度的 Service；不同 Service 仍可在不同 OS Thread 上并行运行，C 模块自行创建的线程也不受这个保证保护。
+
+同一个 Lua Service 可以同时保存多条尚未结束的消息协程。一条协程 yield 后，Service 可以处理下一条消息；因此不会发生两条 Lua 指令在 CPU 上同时修改 table，却会发生 yield 前后状态已经被另一条消息改变的逻辑并发：
+
+```text
+请求协程 A：读取 connections[fd] -> skynet.call 后 yield
+Socket 协程 B：处理 close，删除 connections[fd]
+请求协程 A：恢复，必须重新验证 connections[fd] == conn
+```
+
+固定版本实现可在以下位置核对：
+
+```text
+third_party/skynet/lualib/skynet.lua
+  raw_dispatch_message：每条请求创建 Lua 协程
+  suspend：协程 yield 后把控制权交还调度器
+  dispatch_wakeup：恢复已经登记等待的协程
+```
+
+#### `wakeup` 不是可提前累积的信号
+
+`skynet.wait(token)` 会先把当前协程登记到 `sleep_session[token]`，再 yield。`skynet.wakeup(token)` 只有在登记已经存在时才把 token 放入唤醒队列；如果先 wakeup、后 wait，第一次 wakeup 返回 `nil`，也不会保存一份“唤醒额度”：
+
+```lua
+local token = {{}}
+local accepted = skynet.wakeup(token) -- nil：当前没有协程等待这个 token。
+skynet.wait(token)                    -- 仍然挂起，需要之后再有一次 wakeup。
+```
+
+因此，业务完成状态不能只存在于一次 wakeup 通知中。通知可能先到时，要用“状态 + wait/wakeup”表达：
+
+```lua
+local completed = false -- 业务结果是否已经产生；属于当前 Service Lua State。
+local waiter = nil      -- 当前等待结果的协程；没有等待者时为 nil。
+local result = nil      -- 已完成结果；生命周期由当前 Service 管理。
+
+-- 保存业务结果；value 由调用方移交给当前 Service，不执行 I/O，不 yield。
+local function complete(value)
+    result = value
+    completed = true
+    if waiter ~= nil then
+        skynet.wakeup(waiter)
+    end
+end
+
+-- 等待并返回已保存结果；可能在 skynet.wait 处 yield，没有超时分支。
+local function wait_result()
+    while not completed do
+        waiter = coroutine.running()
+        skynet.wait(waiter)
+    end
+    waiter = nil
+    return result
+end
+```
+
+这里检查 `completed` 到执行 `skynet.wait` 之间没有其他 yield 点；同一个 Service 的完成回调不能插入执行。进入 `skynet.wait` 后，框架又会先登记 token 再 yield，所以“完成先发生”和“等待先发生”两种顺序都不会丢结果。生产代码还应根据业务增加超时、取消和多等待者规则。
+
+#### 当前监听握手为什么不会丢失 `init`
+
+`socketdriver.listen(host, port, backlog)` 同步返回的是 Skynet Socket ID。无法创建 ID 会立即返回无效值；真正的异步 bind/listen 成功通过 `event == "init"` 返回，异步失败通过 `event == "error"` 返回。
+
+Socket Thread 可能很快把 `init` 投递进 Gateway 消息队列，但它不能重入正在执行的 `start_gateway`：
+
+```text
+start_gateway 当前协程
+  socketdriver.listen
+  -> 建立 listen_context
+  -> skynet.wait 先登记 token
+  -> yield
+
+Gateway 才开始处理队列中的 init/error
+  -> SOCKET.init/error 写入结果
+  -> skynet.wakeup(start 协程)
+```
+
+所以从 `socketdriver.listen` 返回到 `skynet.wait` 登记完成之间是一段明确的 no-yield 区域。不能在中间加入 `skynet.call`、`skynet.sleep` 或其他可能 yield 的函数，否则 `init` 可能在 `listen_context` 建立前被处理并忽略。等待成功结果后才执行 `socketdriver.start(listen_fd)`，让监听 Socket 开始上报新客户端的 `open` 事件。
+
 `Query Service` 内的 `query_logic.query()` 仍然不 yield；第二课 BattleWorker 的核心 `battle_core.simulate()` 仍然 no-yield。这次网络改造不会把 socket event 或 Gateway 状态带进导航/战斗核心。
 
-### 27.8 验证点
+### 27.9 验证点
 
 启动后至少观察：
 
@@ -328,7 +553,27 @@ NAV_TCP_CLOSE fd=... reason=...
 半包/粘包的状态现在由 `netpack` C 模块管理，不再通过 Lua 字符串 `buffer = buffer .. chunk` 反复复制。'''
     text = replace_heading_range(text, r"## 27\.[^\n]*", r"## 28\.", section_27, "Lesson1 27")
 
-    section_28_launcher = f'''操作：完整替换 Server 启动脚本，并新增安全停止入口。第一课从这里开始不再要求手工先执行一串 bootstrap/build 命令；统一由 `run_server.sh` 做可重复的依赖准备、增量构建、后台启动和 PID 管理。
+    section_28_launcher = f'''构建入口还需要阻止项目自有 Lua 重新引入匿名可变参数。这个检查会被本节的 `build` 和 `rebuild` 直接调用；完成后，违规位置会在启动 Server 前以文件名和行号报告，正常结果是 `LUA_VARARG_POLICY_OK`。
+
+本文件解决的问题：把“稳定接口使用具名参数”从 Code Review 约定变成可重复执行的静态检查。
+
+本节必须掌握的概念：检查范围只包含 `server/service`、`lualib`、`protocol`、`config`、`tests` 下的项目自有 `.lua`，不修改 Skynet 等第三方源码。
+
+必须精读的函数：`collect_project_lua_files` 决定所有权边界，`main` 决定失败条件。
+
+可以略读的内容：Bash 的数组、`mapfile` 和输出格式。
+
+输入、输出和失败条件：输入是项目自有 Lua 源码；零匹配输出 `LUA_VARARG_POLICY_OK`；发现 `...` 时输出位置并以非零状态退出。确有通用基础设施例外时，必须在同一行标记 `VARARG_ALLOWED` 并写清 WHY；当前课程没有例外。
+
+运行验证：在 `server/` 下执行 `./scripts/linux/check_lua_varargs.sh`。
+
+理解自测：为什么检查器不扫描 `third_party/skynet`？为什么不能把“避免 `...`”直接等同于“必然减少分配”？
+
+新建文件：`server/scripts/linux/check_lua_varargs.sh`
+
+{lua_vararg_check_code}
+
+操作：完整替换 Server 启动脚本，并新增安全停止入口。第一课从这里开始不再要求手工先执行一串 bootstrap/build 命令；统一由 `run_server.sh` 做可重复的依赖准备、增量构建、后台启动和 PID 管理。
 
 完整替换：`server/scripts/linux/run_server.sh`
 
@@ -341,8 +586,9 @@ NAV_TCP_CLOSE fd=... reason=...
 第一次使用：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-chmod +x scripts/linux/run_server.sh scripts/linux/stop_server.sh
+cd "$(git rev-parse --show-toplevel)/server"
+chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh scripts/linux/stop_server.sh
+./scripts/linux/check_lua_varargs.sh
 ./scripts/linux/run_server.sh doctor || true
 ./scripts/linux/run_server.sh start
 ./scripts/linux/run_server.sh status
@@ -357,6 +603,7 @@ chmod +x scripts/linux/run_server.sh scripts/linux/stop_server.sh
 -> 检查/补齐 pinned protoc + lua-protobuf
 -> 按需编译 Skynet / pb.so / descriptor
 -> 增量配置并编译 battle_nav.so
+-> build/rebuild 时检查项目 Lua 不使用匿名可变参数
 -> 校验 battle_1001.bmap 已由 Unity 发布
 -> nohup 后台启动
 -> 写 run/server.pid
@@ -702,7 +949,7 @@ public sealed class LengthFrameTests
     section_313 = r'''### 31.3 启动和联调
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 ./scripts/linux/run_server.sh start
 ./scripts/linux/run_server.sh status
 tail -f logs/server.log
@@ -820,7 +1067,7 @@ def update_codex_start() -> None:
 
 
 def main() -> None:
-    required = [LESSON1, LESSON2, DECISIONS, TEST_STRATEGY, LESSON1_SPEC, CODEX_START, GATEWAY, GAME_CONFIG, RUN_SERVER, STOP_SERVER]
+    required = [LESSON1, LESSON2, DECISIONS, TEST_STRATEGY, LESSON1_SPEC, CODEX_START, GATEWAY, GAME_CONFIG, RUN_SERVER, STOP_SERVER, CHECK_LUA_VARARGS]
     for path in required:
         if not path.is_file():
             raise RuntimeError(f"required update input missing: {path.relative_to(ROOT)}")

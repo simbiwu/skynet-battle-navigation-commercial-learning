@@ -61,6 +61,7 @@ Detour
 [ ] pinned lua-protobuf / protoc / C# runtime
 [ ] generated server descriptor and Unity C# types
 [ ] socketdriver + PTYPE_SOCKET + netpack event-driven Gateway
+[ ] first-use teaching for register_protocol: current Lua State scope, dispatch(session, source, unpack(...)), unpack/dispatch/pack responsibilities
 [ ] uint16 Big Endian framing, half/sticky packet and malformed packet tests
 [ ] fd close/reuse and per-connection in-flight protection
 [ ] Unity real Protobuf query against Skynet

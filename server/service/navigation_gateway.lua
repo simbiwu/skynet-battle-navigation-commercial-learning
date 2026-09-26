@@ -8,11 +8,12 @@ local socketdriver = require "skynet.socketdriver"
 local netpack = require "skynet.netpack"
 local config = require "config.game"
 local codec = require "protocol.navigation_codec"
+local luapanda_debug = require "debug.luapanda_debug"
 
 local query_service       -- main 注入；start 成功后只读。
 local listen_fd           -- 当前监听 fd；nil 表示未监听或已停止。
-local listen_context      -- start 等待 SOCKET_TYPE_CONNECT/init 时的临时上下文。
-local queue               -- netpack.filter 持有的半包/完整包队列；只属于本 Gateway Lua State。
+local listen_context      -- start 等待 init/error 的一次性握手状态；保存 fd、等待协程和异步结果。
+local queue               -- netpack 不透明 userdata；持有半包/完整包，首次分配或扩容后句柄可能被替换。
 local stopping = false
 local client_count = 0
 local connections = {}    -- fd -> connection object；object identity 用于防止 fd 复用误写。
@@ -154,17 +155,21 @@ function SOCKET.data(fd, msg, sz)
     dispatch_packet(fd, msg, sz)
 end
 
--- 一条 socket message 里可能形成多个完整包；queue 中的包逐个消费。
--- 第一包允许 yield 时先 fork 一个继续 drain 的协程，保持 socket event dispatch 不被业务 call 串死。
+-- 一条 socket message 里可能形成多个完整包；netpack.pop 把当前包的 buffer ownership 交给处理协程。
+-- queue 是整个 Gateway、跨所有 fd 共享的接入层队列；不能让一个连接的 skynet.call 阻塞其他连接。
+-- fork 只登记一个续接协程，不会立刻并行执行。当前包一旦 yield，续接协程会读取最新全局 queue 继续 drain。
 local function dispatch_queue()
     local fd, msg, sz = netpack.pop(queue)
     if fd == nil then
         return
     end
 
+    -- 先安排 continuation，再处理可能 yield 的当前包；若当前包不 yield，下面的 for 会直接批量排空。
     skynet.fork(dispatch_queue)
     dispatch_packet(fd, msg, sz)
 
+    -- 泛型 for 会保存进入循环时的 queue 引用。若循环体 yield 期间发生扩容，旧 queue 已被 C 模块
+    -- 迁移并重置为空；续接协程使用新的全局 queue，因此不会重复 pop 或遗漏迁移后的包。
     for next_fd, next_msg, next_sz in netpack.pop, queue do
         dispatch_packet(next_fd, next_msg, next_sz)
     end
@@ -213,7 +218,8 @@ function SOCKET.close(fd)
     detach_connection(fd, "peer closed", "none")
 end
 
--- ERROR 在 listen 启动阶段必须唤醒 start 协程，否则 main 会永久等在 skynet.call(start)。
+-- ERROR 在 listen 启动阶段写入失败结果并唤醒 start 协程，否则 main 会永久等在 skynet.call(start)。
+-- wakeup 不保存“提前通知”；这里能成功是因为本事件只能在 start 协程执行 wait 并 yield 后被当前 Service dispatch。
 function SOCKET.error(fd, message)
     if listen_context ~= nil and fd == listen_context.fd then
         listen_context.error = message or "listen socket error"
@@ -241,7 +247,8 @@ function SOCKET.warning(fd, size)
     end
 end
 
--- socketdriver.listen 成功后会收到 CONNECT/init 事件；记录实际绑定地址/端口并唤醒 start。
+-- socketdriver.listen 的异步成功结果通过 CONNECT/init 到达；记录实际绑定地址/端口并唤醒 start。
+-- 同一个 Service Context 不会并行执行两条 Lua 协程，因此本函数不会抢在 start 建立 listen_context 之前重入。
 function SOCKET.init(fd, address, port)
     if listen_context == nil or fd ~= listen_context.fd then
         return
@@ -283,8 +290,10 @@ local function stop_gateway()
     return true
 end
 
--- 启动监听并等待 socketdriver 的 init 事件确认 bind 完成。
--- 这里会因 skynet.wait yield；start 返回 true 后，main 才打印 NAV_SERVER_READY。
+-- 启动监听并等待 socketdriver 的 init/error 事件确认 bind 结果。
+-- query_address 是 main 注入的 Query Service handle；成功返回 true，失败抛错并使 main 的 skynet.call 失败。
+-- 本函数执行 Socket I/O、修改 Service 私有启动状态，并在 skynet.wait 处 yield；不创建 OS Thread。
+-- 从 listen 返回到 wait 登记 token 之间必须保持 no-yield，避免未来重构引入丢失通知窗口。
 local function start_gateway(query_address)
     assert(query_service == nil, "navigation gateway already started")
     assert(config.max_frame_bytes > 0 and config.max_frame_bytes <= 0xffff,
@@ -296,8 +305,12 @@ local function start_gateway(query_address)
     query_service = assert(query_address, "query service address is required")
     codec.load_descriptor("protocol/generated/server/navigation_query.pb")
 
+    -- listen 只同步返回 Skynet Socket ID；bind/listen 的异步成功或失败分别由 init/error 报告。
     local fd = socketdriver.listen(config.host, config.port, config.backlog)
     assert(fd and fd >= 0, "cannot create navigation listen socket")
+
+    -- 当前消息协程在调用 wait 前不会 yield。同一 Service 即使已经收到 init 消息，也只会先把它排队；
+    -- skynet.wait 会先登记 sleep_session[token] 再 yield，之后 SOCKET.init/error 才可能执行并成功 wakeup。
     listen_fd = fd
     listen_context = {
         fd = fd,
@@ -305,6 +318,8 @@ local function start_gateway(query_address)
     }
 
     skynet.wait(listen_context.co)
+
+    -- 局部变量保留本次握手结果；清空共享上下文后，后续 error 将按运行期监听错误处理。
     local started = listen_context
     listen_context = nil
     if started.error ~= nil then
@@ -312,6 +327,7 @@ local function start_gateway(query_address)
         error("navigation listen failed: " .. tostring(started.error))
     end
 
+    -- 只有 bind/listen 已确认成功，才允许监听 Socket 开始上报新客户端的 open 事件。
     socketdriver.start(fd)
     skynet.error("NAV_TCP_READY ", started.address or config.host,
                  ":", started.port or config.port,
@@ -328,25 +344,44 @@ skynet.register_protocol {
     unpack = function(msg, sz)
         return netpack.filter(queue, msg, sz)
     end,
-    dispatch = function(_, _, updated_queue, event, ...)
+    dispatch = function(_session, _source, updated_queue, event, arg1, arg2, arg3)
+        -- filter 的第一个返回值是最新 userdata：可能仍是原对象，也可能因首次分配/扩容而替换。
+        -- 必须先写回再处理 more；赋值不会清空数据，ownership 迁移已经由 netpack C 模块完成。
         queue = updated_queue
-        if event ~= nil then
-            local handler = SOCKET[event]
-            if handler == nil then
-                error("unknown socket event: " .. tostring(event))
-            end
-            handler(...)
+        if event == nil then
+            return
+        end
+        if event == "init" then
+            SOCKET.init(arg1, arg2, arg3)
+        elseif event == "open" then
+            SOCKET.open(arg1, arg2)
+        elseif event == "data" then
+            SOCKET.data(arg1, arg2, arg3)
+        elseif event == "more" then
+            SOCKET.more()
+        elseif event == "close" then
+            SOCKET.close(arg1)
+        elseif event == "error" then
+            SOCKET.error(arg1, arg2)
+        elseif event == "warning" then
+            SOCKET.warning(arg1, arg2)
+        else
+            error("unknown socket event: " .. tostring(event))
         end
     end,
 }
 
 skynet.start(function()
-    skynet.dispatch("lua", function(_, _, command, ...)
+    -- Debug-only: normal start does nothing; LUA_PANDA_ENABLE=1 enables this Lua State target.
+    luapanda_debug.start("gateway")
+
+    skynet.dispatch("lua", function(_session, _source, command, argument)
         if command == "start" then
-            skynet.retpack(start_gateway(...))
+            skynet.retpack(start_gateway(argument))
             return
         end
         if command == "stop" then
+            assert(argument == nil, "stop does not accept an argument")
             skynet.retpack(stop_gateway())
             return
         end

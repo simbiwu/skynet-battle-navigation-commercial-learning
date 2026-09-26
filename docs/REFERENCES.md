@@ -64,7 +64,7 @@ https://docs.unity.cn/cn/tuanjiemanual/Manual/InstallingUnity.html
 
 ```text
 Tuanjie 1.10.0 / 2022.3.62t12
-G:\Tuanjie\Editors\2022.3.62t12
+<Tuanjie Editor 安装目录>
 ```
 
 ## Protobuf

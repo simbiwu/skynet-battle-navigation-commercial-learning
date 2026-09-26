@@ -3085,7 +3085,7 @@ server/native/grid_map/make_test.sh
 运行：
 
 ```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+cd "$(git rev-parse --show-toplevel)/server"
 ./native/grid_map/make_test.sh
 ```
 

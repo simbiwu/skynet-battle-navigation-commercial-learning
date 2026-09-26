@@ -3,7 +3,7 @@
 -- 输入/输出：descriptor 文件路径 -> 断言或 PROTO_DESCRIPTOR_OK。
 local pb = require "pb"
 
-local path = assert(..., "usage: lua check_descriptor.lua descriptor.pb")
+local path = assert(arg[1], "usage: lua check_descriptor.lua descriptor.pb")
 local data = assert(io.open(path, "rb")):read("*a")
 assert(pb.load(data))
 
