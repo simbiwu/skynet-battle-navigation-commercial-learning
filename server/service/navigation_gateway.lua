@@ -303,7 +303,8 @@ local function start_gateway(query_address)
            "max_inflight_per_connection must be positive")
 
     query_service = assert(query_address, "query service address is required")
-    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
+    -- descriptor 与协议源一起从 shared/ 发布，运行期不从 Unity 工作目录读取。
+    codec.load_descriptor(config.protocol_descriptor)
 
     -- listen 只同步返回 Skynet Socket ID；bind/listen 的异步成功或失败分别由 init/error 报告。
     local fd = socketdriver.listen(config.host, config.port, config.backlog)

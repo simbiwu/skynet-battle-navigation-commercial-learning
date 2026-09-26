@@ -1,21 +1,25 @@
 #!/usr/bin/env bash
 # 职责：统一管理 Battle Navigation Server 的依赖准备、构建、后台启动、状态和安全停止。
 # 边界：仓库级 Runtime/Build Launcher；只操作当前 server/ 下已知 build/run/log 目录和固定依赖脚本。
-# 输入/输出：源码、固定版本依赖、BMAP -> 可运行 Skynet 进程及 logs/run 状态文件。
+# 输入/输出：源码、固定版本依赖、shared/ 已发布资产 -> 可运行 Skynet 进程及 logs/run 状态文件。
 # 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
-# 不负责：不生成 Unity BMAP、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
+# 不负责：不生成 Unity BMAP、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
+SHARED_ROOT="$REPO_ROOT/shared"
 RUN_DIR="$SERVER_ROOT/run"
 LOG_DIR="$SERVER_ROOT/logs"
 PID_FILE="$RUN_DIR/server.pid"
 LOCK_FILE="$RUN_DIR/serverctl.lock"
 SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
 SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
-MAP_FILE="$SERVER_ROOT/maps/battle_1001.bmap"
-source "$SERVER_ROOT/protocol/VERSIONS.env"
+MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
+DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
+PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
+source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
@@ -45,7 +49,7 @@ Actions:
   stop        校验 PID 确实属于本仓库 Skynet 后发送 SIGTERM，并等待退出。
   restart     stop + start；可与 --rebuild 组合。
   status      显示 PID、运行状态和当前日志。
-  doctor      只检查系统工具、固定依赖、构建产物和地图，不修改文件。
+doctor      只检查系统工具、固定依赖、构建产物和已发布共享资产，不修改文件。
   prepare     修复/补齐固定版本项目依赖和生成物，并做增量 Native 构建。
   build       prepare 后运行 Native 单元测试。
   rebuild     清理本项目 build 目录并完整重编 Skynet/pb/descriptor/Native，再运行测试。
@@ -220,15 +224,21 @@ build_lua_protobuf_if_needed() {
     fi
 }
 
-build_descriptor_if_needed() {
-    local target="$SERVER_ROOT/protocol/generated/server/navigation_query.pb"
-    if [[ ! -s "$target" || "$SERVER_ROOT/protocol/navigation_query.proto" -nt "$target" ]]; then
-        log "building Protobuf descriptor"
-        "$SERVER_ROOT/protocol/build_server_descriptor.sh"
-    fi
+verify_descriptor_asset() {
+    local target="$DESCRIPTOR_FILE"
+    local source_checksum_file="$(dirname "$target")/navigation_query.source.sha256"
+    local expected_source_checksum actual_source_checksum
+    [[ -s "$target" ]] || fail "published server descriptor missing: $target"
+    [[ -s "$source_checksum_file" ]] || fail "published protocol source checksum missing: $source_checksum_file"
+    expected_source_checksum="$(tr -d '[:space:]' < "$source_checksum_file")"
+    actual_source_checksum="$(sha256sum "$PROTO_SOURCE" | awk '{print $1}')"
+    [[ "$actual_source_checksum" == "$expected_source_checksum" ]] || \
+        fail "published descriptor does not match protocol source; regenerate and commit both from a protocol development workspace"
     "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh" >/dev/null
     if [[ -s "$target.sha256" ]]; then
-        sha256sum -c "$target.sha256" >/dev/null
+        (cd "$(dirname "$target")" && sha256sum -c "$(basename "$target.sha256")" >/dev/null)
+    else
+        fail "published descriptor checksum missing: $target.sha256"
     fi
 }
 
@@ -247,7 +257,7 @@ prepare_runtime() {
     bootstrap_project_dependencies
     build_skynet_if_needed
     build_lua_protobuf_if_needed
-    build_descriptor_if_needed
+    verify_descriptor_asset
     build_native_incremental
 }
 
@@ -282,8 +292,7 @@ rebuild_all() {
     fi
     "$SERVER_ROOT/scripts/linux/build_skynet.sh"
     "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
-    "$SERVER_ROOT/protocol/build_server_descriptor.sh"
-    "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh"
+    verify_descriptor_asset
     run_lua_policy_checks
     run_native_tests
     build_native_incremental
@@ -294,8 +303,8 @@ check_runtime_assets() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing: $SKYNET_BIN"
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || fail "pb.so missing"
-    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || fail "server descriptor missing"
-    [[ -s "$MAP_FILE" ]] || fail "BMAP missing: $MAP_FILE; export/copy Battle_1001 from Unity first"
+    [[ -s "$DESCRIPTOR_FILE" ]] || fail "published server descriptor missing: $DESCRIPTOR_FILE"
+    [[ -s "$MAP_FILE" ]] || fail "published BMAP missing: $MAP_FILE; pull the matching repository release first"
 }
 
 doctor() {
@@ -306,12 +315,12 @@ doctor() {
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
-    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || { log "MISSING descriptor"; failed=1; }
+    [[ -s "$DESCRIPTOR_FILE" ]] || { log "MISSING published descriptor: $DESCRIPTOR_FILE"; failed=1; }
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }
     [[ -s "$MAP_FILE" ]] || { log "MISSING battle_1001.bmap"; failed=1; }
 
     if ((failed)); then
-        log "DOCTOR_FAILED: run './scripts/linux/run_server.sh prepare'; BMAP must still come from Unity export"
+        log "DOCTOR_FAILED: run './scripts/linux/run_server.sh prepare'; if shared assets are missing, pull the matching repository release"
         return 1
     fi
     log "DOCTOR_OK"

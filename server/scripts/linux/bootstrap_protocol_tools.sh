@@ -1,12 +1,13 @@
 #!/usr/bin/env bash
 # 职责：下载课程固定版本的 protoc 和 lua-protobuf 源码。
 # 边界：Server Build Bootstrap；不编译模块，不生成业务 descriptor。
-# 输入/输出：protocol/VERSIONS.env -> third_party 下的固定版本工具源码/二进制。
+# 输入/输出：shared/protocol/VERSIONS.env -> third_party 下的固定版本工具源码/二进制。
 # 失败约定：已有目录版本不符时明确失败，不删除或静默升级用户文件。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT/protocol/VERSIONS.env"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
+source "$REPO_ROOT/shared/protocol/VERSIONS.env"
 
 PROTOC_DIR="$ROOT/third_party/protoc-$PROTOC_VERSION"
 LUA_PROTOBUF_DIR="$ROOT/third_party/lua-protobuf"

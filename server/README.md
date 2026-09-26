@@ -5,17 +5,18 @@
 ```text
 unity/BattleNavigation/   Unity Authoring 与后续客户端表现
 server/                   C++、Lua、Skynet、协议与 Server 测试
+shared/                   Unity、Server 与离线工具共同消费的版本化合同和发布资产
 docs/                     课程正文、格式合同与架构说明
 ```
 
-`third_party/`、`build/`、生成的 Protobuf descriptor 和 Native 二进制不提交。依赖版本由 `protocol/VERSIONS.env` 与 `scripts/linux/` 下的 bootstrap/build 脚本固定。
+`third_party/`、`build/` 和 Native 二进制不提交。协议源、固定版本、Server descriptor 与已发布 BMAP 位于仓库根目录 `shared/`，必须作为同一个 Git 提交的一部分更新。Server 不读取 Unity 的实时 Bake 目录。
 
 Server 内部目录按运行身份划分：
 
 ```text
 service/   由 newservice/uniqueservice 启动的 Service 入口
 lualib/    Service Lua State 内通过 require 加载的普通模块
-protocol/  .proto 源、版本和生成物
+protocol/  Server 侧协议生成/验证脚本；协议唯一源位于仓库 shared/protocol/
 config/    Skynet 进程配置与只读业务配置
 native/    C++ Runtime 与 Lua C Binding
 run/       PID/控制锁等本机运行状态，不提交 Git
@@ -24,7 +25,7 @@ logs/      后台运行日志，不提交 Git
 
 ## 统一启动入口
 
-平时不需要手工按顺序执行 bootstrap/build 脚本。`run_server.sh` 会检查固定版本项目依赖、补齐缺失生成物并做增量 Native 构建：
+平时不需要手工按顺序执行 bootstrap/build 脚本。`run_server.sh` 会检查固定版本项目依赖和仓库已发布生成物，并做增量 Native 构建：
 
 ```bash
 cd server
@@ -50,10 +51,10 @@ cd server
 
 - `start` 默认后台运行，PID 写入 `run/server.pid`，当前日志由 `logs/server.log` 软链接指向；
 - `foreground` 适合 gdb/LuaPanda/直接观察日志；
-- `prepare` 自动补齐仓库固定的 Skynet/protoc/lua-protobuf 依赖和缺失构建产物；
+- `prepare` 自动补齐仓库固定的 Skynet/protoc/lua-protobuf 依赖和本机构建产物；共享协议与地图缺失时明确失败，不能在部署端临时生成另一版本；
 - `build` 与 `rebuild` 会执行项目 Lua 可变参数策略检查；项目自有稳定接口和业务调用必须使用具名参数；
 - 系统级编译工具缺失时只给出明确安装命令，不在启动脚本里静默执行 `sudo apt`；
-- `rebuild` 只清理 `server/build/*` 和 Skynet 编译产物，不删除 `maps/`、源码或 third_party 固定源码；
+- `rebuild` 只清理 `server/build/*` 和 Skynet 编译产物，不删除 `shared/`、源码或 third_party 固定源码；
 - `stop` 先验证 PID 的 `/proc/<pid>/exe` 确实指向本仓库 Skynet，再发送 SIGTERM；默认不会直接 `kill -9`；
 - 只有显式执行 `stop --force`，且 SIGTERM 超时后，才允许 SIGKILL。
 
@@ -79,22 +80,20 @@ socketdriver
 
 `skynet.netpack` 固定使用 `uint16 Big Endian length + payload`，因此单个 Envelope 最大 `65535` bytes。Protobuf Envelope/command/request_id 本身没有变化。
 
-本目录不提交 Unity 导出的临时 BMAP。需要联调时，按第一课实操文档把指定版本的 BMAP 发布到 `maps/`，再由 `BMapReader` 在加载阶段校验格式和 CRC。
+Unity 验证通过的 BMAP 与 manifest 发布到仓库根目录 `shared/navigation/battle_1001/`。Unity Bake 只改变当前工作区；提交、推送并由 Server 机器拉取相同提交后，Server 才会看到新版本。`BMapReader` 仍会在加载阶段校验格式和 CRC。
 
 ## 第一课最终准备与调试
 
-第一课最终验收不再手工串联构建命令。先从 Unity 导出 BMAP，然后：
+第一课最终验收不再手工串联构建命令。先拉取同时包含 `shared/navigation` 与 `shared/protocol` 的课程提交，停止当前 Server，再执行：
 
 ```bash
-BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
-  --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
 ```
 
-重复验收可复用已导入地图：
+需要清理本机构建产物后完整验证时：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
 ```
 
 LuaPanda 是 debug-only 工具链。安装/验证本地调试依赖：

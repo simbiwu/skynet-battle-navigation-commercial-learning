@@ -5,9 +5,10 @@
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 LUA="$ROOT/third_party/skynet/3rd/lua/lua"
 RUNTIME="$ROOT/third_party/lua-protobuf-runtime"
-DESCRIPTOR="$ROOT/protocol/generated/server/navigation_query.pb"
+DESCRIPTOR="$REPO_ROOT/shared/protocol/generated/server/navigation_query.pb"
 
 test -x "$LUA"
 test -s "$RUNTIME/pb.so"

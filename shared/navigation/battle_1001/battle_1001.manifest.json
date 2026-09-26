@@ -1,0 +1,17 @@
+{
+    "format_version": 1,
+    "map_id": 1001,
+    "map_version": 1,
+    "width": 60,
+    "height": 40,
+    "cell_size_mm": 500,
+    "origin_mm": [
+        -15000,
+        -10000
+    ],
+    "payload_crc32": "FE9E6F90",
+    "walkable_cells": 1508,
+    "blocked_cells": 892,
+    "min_height_mm": 83,
+    "max_height_mm": 1550
+}

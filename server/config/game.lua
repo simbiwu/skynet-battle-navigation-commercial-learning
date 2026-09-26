@@ -18,9 +18,13 @@ return {
     -- netpack.pack 对 payload >= 0x10000 直接报错，因此业务上限固定为 65535 bytes。
     max_frame_bytes = 0xffff,
 
+    -- 由 shared/protocol 发布的 Server descriptor；相对 server/ 运行目录解析。
+    protocol_descriptor = "../shared/protocol/generated/server/navigation_query.pb",
+
     map = {
         id = 1001,                       -- BMAP Header 和协议共用的 uint32 地图 ID。
         version = 1,                     -- 必须与 BMAP Header 一致。
-        bmap = "maps/battle_1001.bmap", -- 相对 Server 工作目录的地图资产路径。
+        -- 由 Unity Authoring 生成并经 Git 发布；Server 只消费已提交版本。
+        bmap = "../shared/navigation/battle_1001/battle_1001.bmap",
     },
 }
