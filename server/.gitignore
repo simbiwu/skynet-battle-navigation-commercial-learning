@@ -2,6 +2,8 @@
 /logs/
 /run/
 /tmp/
+/maps/
+/third_party/
 /third_party/skynet/
 /third_party/lua-protobuf/
 /third_party/lua-protobuf-runtime/
