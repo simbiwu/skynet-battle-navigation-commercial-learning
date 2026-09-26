@@ -3,6 +3,7 @@
 # 边界：Debug Tool Bootstrap；所有文件只写入 server/third_party，正常 Server 不依赖它。
 # 输入/输出：固定 LuaPanda commit + LuaSocket tag -> LuaPanda.lua + 本地 LuaSocket runtime。
 # 不负责：不启动 Server、不改系统 Lua、不 sudo 安装、不进入生产依赖链。
+# 生命周期：仅在 debug_luapanda.sh 启动前执行；产物与 Skynet bundled Lua 5.4 ABI 绑定。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
@@ -16,15 +17,19 @@ LUAPANDA_DIR="$SERVER_ROOT/third_party/luapanda"
 LUASOCKET_SRC="$SERVER_ROOT/third_party/luasocket"
 LUASOCKET_RUNTIME="$SERVER_ROOT/third_party/luasocket-runtime"
 
+# 日志函数让下载、编译和验证阶段在 CI/终端中可区分。
 log() { printf '[luapanda-bootstrap] %s\n' "$*"; }
+# 依赖或版本不满足时立即终止；调试器不可用时不能继续启动假调试环境。
 fail() { printf '[luapanda-bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# 这些工具分别用于下载、解压、编译、安装文件、创建临时目录和定位源码文件。
 for tool in curl tar make cc install mktemp find; do
     command -v "$tool" >/dev/null 2>&1 || fail "missing system tool: $tool"
 done
 
 mkdir -p "$SERVER_ROOT/third_party"
 
+# LuaSocket 的 C 模块必须使用实际宿主 Skynet Lua 的头文件和 ABI。
 if [[ ! -f "$SKYNET_LUA_HEADERS/lua.h" ]]; then
     log "Skynet source missing; bootstrap pinned Skynet first"
     "$SCRIPT_DIR/bootstrap_skynet.sh"
@@ -34,6 +39,7 @@ if [[ ! -x "$SKYNET_LUA" ]]; then
     "$SCRIPT_DIR/build_skynet.sh"
 fi
 
+# 下载 LuaPanda Lua 源码文件；目录中的 pin marker 表示它由本脚本准备。
 install_luapanda() (
     if [[ -f "$LUAPANDA_DIR/.pinned-commit" ]]; then
         local actual
@@ -51,6 +57,7 @@ install_luapanda() (
     trap 'rm -f "$archive"; rm -rf "$temp"' EXIT
 
     log "downloading LuaPanda $LUAPANDA_VERSION ($LUAPANDA_COMMIT)"
+    # 使用固定 commit 的源码快照；LuaPanda 是 debug-only 源码，不需要 Git 历史。
     curl -fL --retry 4 --retry-delay 2 \
         "https://codeload.github.com/Tencent/LuaPanda/tar.gz/$LUAPANDA_COMMIT" \
         -o "$archive"
@@ -63,6 +70,7 @@ install_luapanda() (
     printf '%s\n' "$LUAPANDA_COMMIT" > "$LUAPANDA_DIR/.pinned-commit"
 )
 
+# 下载 LuaSocket 源码；它最终会针对 Skynet bundled Lua 5.4 编译成 .so。
 install_luasocket_source() (
     if [[ -f "$LUASOCKET_SRC/.pinned-tag" ]]; then
         local actual
@@ -80,6 +88,7 @@ install_luasocket_source() (
     trap 'rm -f "$archive"; rm -rf "$temp"' EXIT
 
     log "downloading LuaSocket $LUASOCKET_VERSION"
+    # tag 固定在 URL 中；--strip-components=1 去掉 GitHub 压缩包外层目录。
     curl -fL --retry 4 --retry-delay 2 \
         "https://codeload.github.com/lunarmodules/luasocket/tar.gz/refs/tags/$LUASOCKET_TAG" \
         -o "$archive"
@@ -88,6 +97,7 @@ install_luasocket_source() (
     printf '%s\n' "$LUASOCKET_TAG" > "$LUASOCKET_SRC/.pinned-tag"
 )
 
+# 编译并安装到临时 staging，再一次性替换 runtime，避免留下半套 .so/.lua 文件。
 build_luasocket_runtime() {
     local staging="$SERVER_ROOT/third_party/.luasocket-runtime.tmp.$$"
     rm -rf -- "$staging"
@@ -105,10 +115,12 @@ build_luasocket_runtime() {
         CDIR="lib/lua/5.4" \
         LDIR="share/lua/5.4"
 
+    # 这里删除的只是脚本拥有的 third_party/luasocket-runtime，不涉及源码和系统目录。
     rm -rf -- "$LUASOCKET_RUNTIME"
     mv "$staging" "$LUASOCKET_RUNTIME"
 }
 
+# 用同一个 bundled Lua 进程同时加载 socket.core 和 LuaPanda，验证 ABI 与搜索路径。
 verify_runtime() {
     local lua_path lua_cpath
     lua_path="$LUASOCKET_RUNTIME/share/lua/5.4/?.lua;$LUASOCKET_RUNTIME/share/lua/5.4/?/init.lua;$LUAPANDA_DIR/?.lua;;"
@@ -116,9 +128,11 @@ verify_runtime() {
 
     LUA_PATH="$lua_path" LUA_CPATH="$lua_cpath" \
         "$SKYNET_LUA" -e '
+            -- socket.core 成功加载才说明 C ABI、动态库路径和 LuaSocket 安装完整。
             local core = assert(require("socket.core"))
             local tcp = assert(core.tcp())
             tcp:close()
+            -- LuaPanda 依赖 LuaSocket；两者都成功后才允许 debug_luapanda.sh 启动。
             local panda = assert(require("LuaPanda"))
             assert(type(panda.start) == "function")
             print("LUAPANDA_RUNTIME_OK")

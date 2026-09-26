@@ -30,6 +30,7 @@ FOREGROUND=0
 REBUILD=0
 FORCE_STOP=0
 
+# 打印所有动作和参数；不读取状态、不修改文件。
 usage() {
     cat <<'USAGE'
 Usage:
@@ -66,15 +67,18 @@ Environment:
 USAGE
 }
 
+# 统一输出带 serverctl 前缀的状态行，便于日志和教程验收匹配。
 log() {
     printf '[serverctl] %s\n' "$*"
 }
 
+# 输出错误并终止当前控制命令；不会自动停止一个身份不明的进程。
 fail() {
     printf '[serverctl] ERROR: %s\n' "$*" >&2
     exit 1
 }
 
+# 解析动作、重建、前台和强制停止选项；非法输入在任何副作用前失败。
 parse_args() {
     if [[ $# -gt 0 && "$1" != --* ]]; then
         ACTION="$1"
@@ -99,11 +103,13 @@ parse_args() {
     fi
 }
 
+# 创建本机运行目录和日志目录；这些状态不属于 Git 发布资产。
 ensure_runtime_dirs() {
     umask 027
     mkdir -p "$RUN_DIR" "$LOG_DIR"
 }
 
+# 检查构建/运行流程所需的系统命令，返回缺失工具而不是静默安装系统包。
 require_system_tools() {
     local missing=()
     local tool
@@ -121,6 +127,7 @@ require_system_tools() {
     fi
 }
 
+# 判断一个目标是否早于给定源码树，用于决定是否需要增量重建。
 file_newer_than() {
     local target="$1"
     shift
@@ -134,6 +141,7 @@ file_newer_than() {
     return 1
 }
 
+# 从 PID 文件读取一个格式合法的正整数；不代表该 PID 一定属于本项目。
 pid_from_file() {
     [[ -f "$PID_FILE" ]] || return 1
     local pid
@@ -142,6 +150,7 @@ pid_from_file() {
     printf '%s\n' "$pid"
 }
 
+# 同时比对可执行文件和命令行，防止 stale PID 文件误操作其他 Skynet 进程。
 pid_matches_this_server() {
     local pid="$1"
     kill -0 "$pid" 2>/dev/null || return 1
@@ -156,6 +165,7 @@ pid_matches_this_server() {
     [[ "$cmdline" == *"config/skynet.lua"* || "$cmdline" == *"$SKYNET_CONFIG"* ]]
 }
 
+# 返回当前项目 Server 的 PID；发现过期或身份不符时返回失败码。
 current_pid() {
     local pid
     if ! pid="$(pid_from_file)"; then
@@ -172,6 +182,7 @@ current_pid() {
     printf '%s\n' "$pid"
 }
 
+# 构建/重建前拒绝覆盖仍在运行的本项目进程。
 ensure_not_running() {
     local pid rc
     if pid="$(current_pid)"; then
@@ -184,11 +195,12 @@ ensure_not_running() {
     fi
 }
 
+# 准备 Skynet、protoc/lua-protobuf 和本地构建依赖；不生成另一份共享协议合同。
 bootstrap_project_dependencies() {
     require_system_tools || fail "system dependency check failed"
     cd "$SERVER_ROOT"
 
-    if [[ ! -d third_party/skynet/.git ]]; then
+    if [[ ! -f third_party/skynet/.pinned-tag ]]; then
         log "Skynet source missing; bootstrapping pinned v1.8.0"
         ./scripts/linux/bootstrap_skynet.sh
     else
@@ -203,6 +215,7 @@ bootstrap_project_dependencies() {
     fi
 }
 
+# 按源码时间戳决定是否构建 Skynet 可执行文件。
 build_skynet_if_needed() {
     cd "$SERVER_ROOT"
     if [[ ! -x "$SKYNET_BIN" ]] || \
@@ -216,6 +229,7 @@ build_skynet_if_needed() {
     fi
 }
 
+# 构建 Lua C protobuf runtime；它必须匹配 Skynet bundled Lua ABI。
 build_lua_protobuf_if_needed() {
     local target="$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so"
     if [[ ! -s "$target" ]] || file_newer_than "$target" "$SERVER_ROOT/third_party/lua-protobuf"; then
@@ -224,6 +238,7 @@ build_lua_protobuf_if_needed() {
     fi
 }
 
+# 校验已提交 descriptor、源协议哈希和 descriptor 哈希，不在 Server 启动时临时生成协议。
 verify_descriptor_asset() {
     local target="$DESCRIPTOR_FILE"
     local source_checksum_file="$(dirname "$target")/navigation_query.source.sha256"
@@ -242,6 +257,7 @@ verify_descriptor_asset() {
     fi
 }
 
+# 配置并编译 battle_nav.so；Native 产物写入 server/build，不进入共享资产目录。
 build_native_incremental() {
     log "configuring/building Native module ($BUILD_TYPE)"
     cmake \
@@ -253,6 +269,7 @@ build_native_incremental() {
         fail "battle_nav.so was not generated"
 }
 
+# 执行一次完整依赖和 Native 准备，供 start/prepare/build 复用。
 prepare_runtime() {
     bootstrap_project_dependencies
     build_skynet_if_needed
@@ -261,6 +278,7 @@ prepare_runtime() {
     build_native_incremental
 }
 
+# 执行 GridMap 原生单元测试；失败时由 set -e 传播给控制命令。
 run_native_tests() {
     log "running Native tests"
     "$SERVER_ROOT/native/grid_map/make_test.sh"
@@ -272,6 +290,7 @@ run_lua_policy_checks() {
     "$SERVER_ROOT/scripts/linux/check_lua_varargs.sh"
 }
 
+# 只允许删除 server/build 下的已知目录，防止路径计算错误扩大删除范围。
 safe_remove_build_dir() {
     local path="$1"
     case "$path" in
@@ -280,6 +299,7 @@ safe_remove_build_dir() {
     esac
 }
 
+# 停止校验通过后清理并完整重建 Skynet、Lua protobuf、Native 和测试产物。
 rebuild_all() {
     ensure_not_running
     bootstrap_project_dependencies
@@ -299,6 +319,7 @@ rebuild_all() {
     log "REBUILD_OK"
 }
 
+# start 前检查所有运行时文件；只检查共享发布资产，不读取 Unity 工程。
 check_runtime_assets() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing: $SKYNET_BIN"
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
@@ -307,11 +328,13 @@ check_runtime_assets() {
     [[ -s "$MAP_FILE" ]] || fail "published BMAP missing: $MAP_FILE; pull the matching repository release first"
 }
 
+# 只读诊断本机依赖、构建物、descriptor 和 BMAP 是否齐全。
 doctor() {
     local failed=0
     require_system_tools || failed=1
 
-    [[ -d "$SERVER_ROOT/third_party/skynet/.git" ]] || { log "MISSING skynet source"; failed=1; }
+    [[ -f "$SERVER_ROOT/third_party/skynet/.pinned-tag" &&
+       -f "$SERVER_ROOT/third_party/skynet/Makefile" ]] || { log "MISSING pinned skynet source"; failed=1; }
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
@@ -326,6 +349,7 @@ doctor() {
     log "DOCTOR_OK"
 }
 
+# 后台启动 Skynet，记录 PID，并等待应用层 NAV_SERVER_READY。
 start_background() {
     ensure_not_running
     check_runtime_assets
@@ -370,6 +394,7 @@ start_background() {
     fail "NAV_SERVER_READY not observed within ${STARTUP_TIMEOUT_SEC}s"
 }
 
+# 前台 exec Skynet，保留调试器和信号的直接控制权。
 start_foreground() {
     ensure_not_running
     check_runtime_assets
@@ -380,6 +405,7 @@ start_foreground() {
     exec "$SKYNET_BIN" "config/skynet.lua"
 }
 
+# 先验证 PID 身份，再发送 SIGTERM；只有 --force 且超时后才允许 SIGKILL。
 stop_server() {
     local pid deadline rc
     if pid="$(current_pid)"; then
@@ -417,6 +443,7 @@ stop_server() {
     fail "pid=$pid did not exit within ${STOP_TIMEOUT_SEC}s; inspect logs, then use 'stop --force' only if necessary"
 }
 
+# 输出当前 PID、运行状态和最近日志文件，不启动或停止进程。
 status_server() {
     local pid rc
     if pid="$(current_pid)"; then
@@ -436,6 +463,7 @@ status_server() {
     fi
 }
 
+# 根据动作调用唯一的生命周期入口，并在结束时返回准确退出码。
 main() {
     parse_args "$@"
     ensure_runtime_dirs
