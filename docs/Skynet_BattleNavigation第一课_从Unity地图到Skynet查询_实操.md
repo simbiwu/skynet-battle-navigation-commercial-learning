@@ -5858,6 +5858,51 @@ GOOGLE_PROTOBUF_NUMERICS_VECTORS_VERSION=4.4.0
 
 下面三个脚本分别解决工具下载、`pb.so` 构建和 descriptor 检查。它们属于构建工具，不要求逐行背诵；需要掌握输入、固定版本、产物路径和失败条件。
 
+### Shell 脚本的统一阅读规则
+
+本仓库 `server/` 下的自有 `.sh` 文件都按同一套注释规则编写。`server/third_party/` 内的第三方脚本属于外部源码，不在本课程维护范围内。
+
+每个自有脚本的文件头都会说明：它解决什么问题、属于哪个边界、输入和输出、生命周期以及明确不负责的事情。阅读脚本时先看这五项，再看命令细节。
+
+脚本中经常出现的 Bash 语法含义如下：
+
+```bash
+set -euo pipefail
+```
+
+- `-e`：未处理的命令失败立即退出，避免错误产物继续流入下一步。
+- `-u`：读取未定义变量立即失败，尽早发现变量名或环境配置错误。
+- `pipefail`：管道中任一命令失败都会让管道失败，避免只检查最后一条命令。
+
+```bash
+[[ $# -eq 0 ]] || {
+    echo "usage: $0 [--gdb]" >&2
+    exit 2
+}
+```
+
+`$#` 是位置参数数量，`-eq 0` 表示要求没有剩余参数；`||` 表示左侧条件失败时执行右侧命令组；`>&2` 把用法错误写到标准错误；`exit 2` 表示调用参数错误。脚本先用 `${1:-}` 读取可选参数，是为了在启用 `set -u` 时“没有第一个参数”也能安全处理。
+
+```bash
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+```
+
+`${BASH_SOURCE[0]}` 是当前脚本文件，`dirname` 取其目录，`cd` 后的 `pwd` 得到绝对路径。这样脚本从任意当前目录执行时，仍能找到自己的依赖脚本；它不把某台机器的盘符或用户名写死。
+
+```bash
+exec "$SCRIPT_DIR/run_server.sh" foreground
+```
+
+`exec` 会用目标进程替换当前 Shell 进程，使 Ctrl+C、信号和最终退出码直接到达真正的 Server。没有 `exec` 时，外层脚本可能吞掉信号或留下一个不准确的退出状态。
+
+```bash
+source "$REPO_ROOT/shared/protocol/VERSIONS.env"
+```
+
+`source` 在当前 Shell 中加载固定版本清单，后面的命令可以直接使用其中变量；它不是启动另一个进程，也不会创建 Service。`trap` 用于注册退出清理动作，`command -v` 用于检查外部工具是否存在，`test -f/-s/-x` 分别常用于检查文件存在、非空和可执行。
+
+因此，新增或修改 Shell 脚本时，必须先补齐文件头和关键语法说明，再写执行命令；教程中的脚本代码必须与 `server/` 中的实际文件保持一致。
+
 操作：新建协议工具初始化脚本，并粘贴下面的完整内容。
 
 新建文件：`scripts/linux/bootstrap_protocol_tools.sh`
@@ -9463,8 +9508,8 @@ server/lualib/debug/luapanda_debug.lua
 Gateway 和 Query 启动时都会调用：
 
 ```text
-luapanda_debug.start("gateway")
-luapanda_debug.start("query")
+luapanda_debug.start(8818)
+luapanda_debug.start(8819)
 ```
 
 但只有设置：
@@ -9523,16 +9568,6 @@ local skynet = require "skynet"
 local M = {}
 local started = false
 
-local DEFAULT_PORT = {
-    gateway = 8818,
-    query = 8819,
-}
-
-local PORT_ENV = {
-    gateway = "LUA_PANDA_GATEWAY_PORT",
-    query = "LUA_PANDA_QUERY_PORT",
-}
-
 local function enabled()
     local value = os.getenv("LUA_PANDA_ENABLE")
     return value == "1" or value == "true" or value == "TRUE"
@@ -9553,15 +9588,15 @@ local function prepend_debug_paths()
     }, ";")
 end
 
--- role 目前只允许 gateway/query，因为第一课核心运行链只需要跟踪这两个 Lua State。
+-- port 由 Service 启动入口显式传入；本模块不维护 Service 名称到端口的映射。
 -- LuaPanda.start 内部使用 LuaSocket；这是 debug-only 阻塞 socket，不属于业务 Gateway 网络模型。
-function M.start(role)
+-- port 只属于当前 Lua State；同时调试多个 Service 时必须各自使用不同端口。
+function M.start(port)
     if not enabled() then
         return false
     end
     assert(not started, "LuaPanda already started in this Lua State")
-    local default_port = assert(DEFAULT_PORT[role], "unsupported LuaPanda role: " .. tostring(role))
-    local port = tonumber(os.getenv(PORT_ENV[role]) or tostring(default_port))
+    port = tonumber(port)
     assert(port and port > 0 and port <= 65535, "invalid LuaPanda port")
     local host = os.getenv("LUA_PANDA_HOST") or "127.0.0.1"
 
@@ -9571,9 +9606,9 @@ function M.start(role)
 
     local panda = require "LuaPanda"
     started = true
-    skynet.error("LUA_PANDA_CONNECT role=", role, " host=", host, " port=", port)
+    skynet.error("LUA_PANDA_CONNECT host=", host, " port=", port)
     panda.start(host, port)
-    skynet.error("LUA_PANDA_READY role=", role, " port=", port)
+    skynet.error("LUA_PANDA_READY port=", port)
     return true
 end
 
@@ -9584,12 +9619,12 @@ return M
 
 ```text
 Service 启动
--> luapanda_debug.start(role)
+-> luapanda_debug.start(port)
 -> 检查 LUA_PANDA_ENABLE
 -> 为当前 Lua State 追加 LuaPanda/LuaSocket 路径
 -> require("socket.core") 验证 ABI 与搜索路径
 -> require("LuaPanda")
--> panda.start(host, role 对应端口)
+-> panda.start(host, Service 启动入口传入的端口)
 -> VS Code Adapter 接受连接
 ```
 
@@ -10025,41 +10060,63 @@ server/scripts/linux/debug_luapanda.sh
 ```bash
 #!/usr/bin/env bash
 # 职责：以 debug-only LuaPanda 环境启动 Lesson 1 Server；可选同时进入 gdb。
-# 使用前：VS Code 中先启动 Gateway(8818)+Query(8819) 两个 LuaPanda target。
+# 边界：Build/Debug；只负责本地调试启动编排，不属于生产启动入口。
+# 输入：可选 --gdb；LUA_PANDA_ENABLE/HOST 等调试环境变量。
+# 输出：前台运行的 Skynet 进程，或由 gdb 接管的同一 Skynet 进程。
+# 生命周期：仅用于本地 Debug；不会被普通 run_server.sh start 自动调用。
+# 不负责：不实现 LuaPanda 协议、不替代 run_server.sh 的 PID 管理、不修改生产配置。
 set -euo pipefail
+# -e：未处理的命令失败立即退出；-u：未定义变量立即失败；pipefail：管道任一命令失败都算失败。
 
+# BASH_SOURCE[0] 是本脚本路径；dirname/cd/pwd 得到稳定的绝对脚本目录。
+# 这样从任意当前目录执行都能找到同目录的 bootstrap 和 run_server。
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+# 脚本位于 server/scripts/linux/，向上两级就是 Server 根目录。
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+# 默认使用普通 LuaPanda 前台启动；--gdb 才切换到 C++ 调试路径。
 MODE="lua"
 
+# ${1:-}：没有第一个参数时使用空字符串，避免 set -u 直接失败。
+# shift：消费 --gdb，使后面的 $# 能准确检查未知参数。
 if [[ "${1:-}" == "--gdb" ]]; then
     MODE="gdb"
     shift
 fi
-[[ $# -eq 0 ]] || { echo "usage: $0 [--gdb]" >&2; exit 2; }
+# [[ $# -eq 0 ]] 要求没有剩余参数；|| 在条件失败时执行命令组。
+# >&2 写入标准错误；exit 2 表示命令行参数错误。
+[[ $# -eq 0 ]] || {
+    echo "usage: $0 [--gdb]" >&2
+    exit 2
+}
 
+# 先按 Skynet bundled Lua ABI 构建/准备 LuaSocket 和 LuaPanda 运行时。
+# 该命令失败时由 set -e 阻止继续启动 Service。
 "$SCRIPT_DIR/bootstrap_luapanda.sh"
 
+# export 让 main 创建的每个 Service Lua State 都能看到调试开关和主机地址。
+# 每个 Service 的端口由其启动入口显式传给 luapanda_debug.start(port)。
 export LUA_PANDA_ENABLE=1
 export LUA_PANDA_HOST="${LUA_PANDA_HOST:-127.0.0.1}"
-export LUA_PANDA_GATEWAY_PORT="${LUA_PANDA_GATEWAY_PORT:-8818}"
-export LUA_PANDA_QUERY_PORT="${LUA_PANDA_QUERY_PORT:-8819}"
-
-printf '[luapanda-debug] gateway=%s:%s query=%s:%s\n' \
-    "$LUA_PANDA_HOST" "$LUA_PANDA_GATEWAY_PORT" \
-    "$LUA_PANDA_HOST" "$LUA_PANDA_QUERY_PORT"
+printf '[luapanda-debug] host=%s; Service 端口由各 Service 启动入口显式传入\n' \
+    "$LUA_PANDA_HOST"
 
 if [[ "$MODE" == "gdb" ]]; then
+    # command -v 检查 gdb 是否在 PATH；找不到时输出安装提示并以 1 退出。
     command -v gdb >/dev/null 2>&1 || {
         echo "gdb is required: sudo apt-get install -y gdb" >&2
         exit 1
     }
+    # doctor 是启动前检查；失败时不会进入 gdb。
     "$SCRIPT_DIR/run_server.sh" doctor
+    # gdb 的相对路径按 Server 根目录解释，所以先切换目录。
     cd "$SERVER_ROOT"
+    # exec 用 gdb 替换当前 Shell，信号和退出码直接归 gdb/Skynet 所有。
+    # -x 加载 C++ 断点脚本；--args 后面是实际启动的 Skynet 命令。
     exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" \
         --args "$SERVER_ROOT/third_party/skynet/skynet" config/skynet.lua
 fi
 
+# exec 用前台 Skynet 替换当前 Shell，让 Ctrl+C 直接到达 Server。
 exec "$SCRIPT_DIR/run_server.sh" foreground
 ```
 
@@ -10097,7 +10154,7 @@ cd "$(git rev-parse --show-toplevel)/server"
 日志应出现：
 
 ```text
-LUA_PANDA_CONNECT role=query ... port=8819
+LUA_PANDA_CONNECT host=127.0.0.1 port=8819
 LUA_PANDA_READY role=query ... port=8819
 LUA_PANDA_CONNECT role=gateway ... port=8818
 LUA_PANDA_READY role=gateway ... port=8818
