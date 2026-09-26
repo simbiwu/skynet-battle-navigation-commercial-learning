@@ -29,7 +29,7 @@ namespace BattleNavigation.Editor
         // 最近一次响应或异常的可读显示文本。
         private string result = "not queried";
 
-        [MenuItem("Tools/Battle Navigation/Server Query")]
+        [MenuItem("Tools/战斗导航/调试/12 查询 Skynet Server", false, 112)]
         private static void Open() => GetWindow<ServerQueryWindow>("Server Query");
 
         private void OnGUI()

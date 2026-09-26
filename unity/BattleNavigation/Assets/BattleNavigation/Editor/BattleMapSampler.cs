@@ -15,7 +15,7 @@ namespace BattleNavigation.Editor
     public static class BattleMapSampler
     {
 #if UNITY_EDITOR
-[UnityEditor.MenuItem("Tools/Battle Navigation/Debug Sample Snapshot")]
+[UnityEditor.MenuItem("Tools/战斗导航/调试/10 仅采样当前 Snapshot", false, 110)]
 private static void DebugSampleSnapshot()
 {
     // 当前 Scene 中唯一的地图合同；缺失时 Sample 会明确失败。

@@ -22,7 +22,7 @@ namespace BattleNavigation.Editor
         // 课程战斗场景在 Unity Assets 下的唯一保存路径。
         public const string ScenePath = "Assets/BattleNavigation/Scenes/Battle_1001.unity";
 
-        [MenuItem("Tools/Battle Navigation/Create or Rebuild Battle_1001 Scene")]
+        [MenuItem("Tools/战斗导航/示例/90 重建 Battle_1001 示例场景", false, 190)]
         public static void CreateOrRebuild()
         {
             // CI/batch 模式不能弹窗；人工运行时必须明确确认覆盖行为。

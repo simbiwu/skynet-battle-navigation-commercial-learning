@@ -77,11 +77,11 @@ namespace BattleNavigation.Client
 
         private byte[] ReadFrame()
         {
-            // header 是固定 4-byte Big Endian payload 长度。
-            var header = ReadExact(4);
+            // header 是与 Skynet netpack 一致的固定 2-byte Big Endian payload 长度。
+            var header = ReadExact(LengthFrame.HeaderSize);
             // length 是从网络字节序解码出的响应 Envelope 字节数。
-            var length = (header[0] << 24) | (header[1] << 16) | (header[2] << 8) | header[3];
-            if (length < 0 || length > LengthFrame.MaxFrameBytes)
+            var length = (header[0] << 8) | header[1];
+            if (length <= 0 || length > LengthFrame.MaxFrameBytes)
                 throw new InvalidDataException("invalid frame length");
             return ReadExact(length);
         }

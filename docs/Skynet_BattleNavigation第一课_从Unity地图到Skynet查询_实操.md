@@ -67,7 +67,7 @@ Detour
 -> 运行 Grid Sampling / Validator
 -> Export BMAP
 -> 检查 manifest / CRC
--> 导入 Server
+-> 发布给 Server
 -> 编译、运行、调试和测试
 ```
 
@@ -232,7 +232,7 @@ repo_root="$(git rev-parse --show-toplevel)"
 
 后文的 `<仓库根目录>` 只用于展示文件身份；可执行命令会使用这两个动态结果或脚本自身位置推导路径。
 
-Server 运行时也不直接读取 Unity Project。BMAP 从 Windows 产物目录显式导入到 Server 的 `maps/`，这一步就是课程里的最小资产发布动作。
+Server 运行时也不直接读取 Unity Project。Unity 把候选 BMAP 写入仓库 `shared/navigation/`；验证后提交和推送，Server 所在机器再拉取同一个 Git 提交。这是课程里的最小跨机器资产发布动作。
 
 ### 3.1 先只认识 Bake 需要的 Unity 对象
 
@@ -547,15 +547,19 @@ mkdir -p \
   lualib/navigation \
   lualib/network \
   lualib/protocol \
-  maps \
   native/grid_map/include \
   native/grid_map/src \
   native/grid_map/tests \
-  protocol/generated \
+  protocol \
   scripts/linux \
   service \
   tests/protocol \
   tests/skynet
+
+mkdir -p \
+  ../shared/protocol/generated/server \
+  ../shared/protocol/generated/unity \
+  ../shared/navigation/battle_1001
 ```
 
 完整替换 `<仓库根目录>/server/.gitignore`：
@@ -565,10 +569,10 @@ mkdir -p \
 /logs/
 /run/
 /tmp/
+/maps/
 /third_party/skynet/
 /third_party/lua-protobuf/
 /third_party/lua-protobuf-runtime/
-/protocol/generated/
 *.orig
 *.so
 *.o
@@ -690,12 +694,12 @@ Team1/2 Spawn 空 GameObject，只作为 Golden Point 标记
 需要重建场景时使用：
 
 ```text
-Tools -> Battle Navigation -> Create or Rebuild Battle_1001 Scene
+Tools -> 战斗导航 -> 示例 -> 90 重建 Battle_1001 示例场景
 ```
 
-该菜单会覆盖场景里的手工调整，交互模式下会先询问。先执行 `Validate Current Battle Scene`，确认地图身份、网格范围、Collider 和双方出生点都正确。
+该菜单会覆盖场景里的手工调整，交互模式下会先询问。先执行 `01 校验当前战斗场景`，确认地图身份、网格范围、Collider 和双方出生点都正确。
 
-从这里开始，地图转换必须由学习者亲自操作：安装/确认 AI Navigation Package、配置 NavMeshSurface、点击 Bake、检查 2.5D 限制、运行 Grid Sampling/Validator、执行 BMAP Export、核对 manifest/CRC，最后再导入 Server。自动化脚本不会替你完成这条生产链。
+从这里开始，地图转换必须由学习者亲自操作：安装/确认 AI Navigation Package、配置 NavMeshSurface、点击 Bake、检查 2.5D 限制、运行 Grid Sampling/Validator、执行 BMAP Export、核对 manifest/CRC，最后再通过 Git 发布给 Server。自动化脚本不会替你完成这条生产链。
 
 ### 6.1 打开已经生成的场景
 
@@ -723,7 +727,7 @@ Assets
 点击：
 
 ```text
-Tools -> Battle Navigation -> Validate Current Battle Scene
+Tools -> 战斗导航 -> 01 校验当前战斗场景
 ```
 
 打开 Console，预期日志类似：
@@ -736,7 +740,7 @@ BATTLE_MAP_AUTHORING_OK map=1001 version=1 grid=60x40 cell_mm=500 colliders=12 s
 
 这一步还没有检查 NavMesh，也没有生成 BMAP。它只证明：地图身份、网格范围、基础 Collider 和双方出生点存在。将验证拆层后，未来出现错误时才能判断是 Scene Authoring、Bake、Sampling 还是 Export 出错。
 
-另一个 `Create or Rebuild Battle_1001 Scene` 菜单只用于重建课程示例场景，它不是新地图创建器。不要用它创建其他地图，也不要把“示例场景生成器”和这里的“通用当前场景检查器”当成同一个工具。
+另一个 `示例 -> 90 重建 Battle_1001 示例场景` 菜单只用于重建课程示例场景，它不是新地图创建器。不要用它创建其他地图，也不要把“示例场景生成器”和这里的“通用当前场景检查器”当成同一个工具。
 
 ### 6.3 亲自检查 Collider
 
@@ -1331,15 +1335,161 @@ BattleMapRoot（地图合同）
 
 Scene 文件只保存场景对象和组件配置；不会把本课的 C# 工具一起带过去。要让另一套 U3D 工程使用这条导出链，先把工具带入那个工程，再处理 Scene：
 
-1. 在源工程使用 `Assets -> Export Package`，导出 `Assets/BattleNavigation/Runtime` 和 `Assets/BattleNavigation/Editor`；在目标工程使用 `Assets -> Import Package -> Custom Package` 导入。不要用文件管理器跨工程硬拷贝加密或已绑定项目的 `.meta` GUID。`Scenes` 是课程示例，可不导入；`Tests/EditMode` 也是可选项，导入它时目标工程还要解析 Test Framework `1.1.33`。
+1. 最快的一次性迁移方式是在源工程使用 `Assets -> Export Package`，只选择 `Assets/BattleNavigation/Runtime` 和 `Assets/BattleNavigation/Editor`；取消 `Include dependencies`，或在导出列表中逐项复核没有带入网络目录，再在目标工程使用 `Assets -> Import Package -> Custom Package` 导入。不要勾选 `Scripts`、`Plugins` 或协议生成物，它们属于网络调试链；`Google.Protobuf` 也不是地图导出前置条件。不要用文件管理器跨工程硬拷贝后任意重建 `.meta` GUID。`Scenes` 是课程示例，可不导入；`Tests/EditMode` 也是可选项，导入它时目标工程还要解析 Test Framework `1.1.33`。
 2. 在目标工程安装与当前工程一致的 AI Navigation `1.1.7`。本课代码以 Tuanjie `2022.3.62t12` 为验证基线；其他 Unity/Tuanjie 版本先确认 API 和 Package 兼容并编译通过。不要覆盖目标工程原有的 `manifest.json` 或 `packages-lock.json`。
 3. 打开或导入目标 Scene，确认地面/障碍物有参与 Bake 的 Collider。给不可登上的墙、建筑和柱子添加 `Nav Mesh Modifier`，设置为 `Not Walkable`；坡道和设计中可达的台地保持可走。然后配置一个 `NavMeshSurface` 并 Bake。导入已 Bake 的 Scene 时，也要确认它引用的 NavMeshData 资产一并导入且有效；否则重新 Bake。
 4. 在该 Scene 创建一个空的 `BattleMapRoot` GameObject，添加 `BattleMapRoot` Component，填写唯一的 `mapId`、`mapVersion`、Grid 的世界坐标范围和 Cell Size。再给双方至少各放一个 `BattleSpawnPoint`，因为当前通用 Authoring Validator 会检查双方出生点。
-5. 运行 `Validate Current Battle Scene`，再运行 `Export BMAP`。成功产物位于目标工程的 `BuildArtifacts/Navigation`；按第 18 节把对应地图文件导入 Server 的 `maps/`，并让 Server 查询使用同一 `mapId/mapVersion`。
+5. 推荐运行 `Tools -> 战斗导航 -> 00 一键执行：校验 -> 烘焙 -> 导出（推荐）`。需要排错时再分别运行编号 01、02、03。成功产物位于仓库 `shared/navigation/battle_<mapId>/`；按第 18 节验证、提交并发布，让 Server 在自己的机器拉取同一 `mapId/mapVersion`。
 
 `Battle1001SceneBuilder` 只生成本课示例场景，不是复用工具链的前置条件。新工程只需要导入工具目录、解决 Package 依赖，并给自己的 Scene 配置 Authoring 对象；不需要复制或改写采样器、Writer 等工具代码。
 
+Prefab 不能替代这次工具迁移。Prefab 可以在工具导入后保存一套 `BattleMapRoot + Navigation/NavMeshSurface + SpawnPoints` 的默认层级，减少每张地图的重复点击；它不会携带 Editor 导出器和程序集定义，而且不应携带另一张地图已经 Bake 的 NavMeshData。少量工程用 `.unitypackage` 最快；需要给多个工程长期发布和升级时，再把同一组地图工具整理成带版本号的私有 UPM Package。
+
 每完成一段，先等 Unity 编译结束，处理 Console 第一条红色错误，再运行当前场景的 Validate 和 Export。这条复用流程只添加场景配置，不要为每张地图复制采样器或 Writer。
+
+#### 在当前工程新增一张 Battle Scene：完整接入顺序
+
+这一小节解决“新增 Scene 后，怎样让它进入同一条导航资产生产链”。Scene 文件只保存这一张地图的几何、Authoring 参数和 Bake 结果；通用的采样、校验和写出代码继续复用现有 `Runtime/` 与 `Editor/`。
+
+先明确当前边界：
+
+```text
+新 Scene
+-> Collider / NavMesh Modifier
+-> NavMeshSurface Bake
+-> BattleMapRoot + BattleSpawnPoint
+-> 01 校验当前战斗场景
+-> 02 烘焙当前场景 NavMesh
+-> 03 导出当前场景 BMAP
+-> battle_<mapId>.bmap + manifest
+```
+
+当前 `lesson1_prepare.sh` 是 `Battle_1001` 的课程验收脚本，固定校验 `map_id=1001`、`map_version=1` 和 `cell_size_mm=500`。新 Scene 的 Unity 导出链是通用的，但 `shared/navigation/battle_1002/` 不会自动替换 Server 当前加载的 `battle_1001`。接入 Server 时还要显式增加对应地图配置和发布规则；不能只改文件名让旧配置误加载新地图。
+
+##### Step 0：先通过编译门禁
+
+打开 `Window -> General -> Console`，确认没有红色编译错误。C# 编译失败时，`Tools -> 战斗导航` 菜单可能不出现，此时场景配置还不是排错对象。
+
+常见根因：
+
+```text
+CS0101 / CS0111
+  检查 Assets 下是否意外出现 Foo 1.cs、Foo 2.cs 等同名脚本副本。
+
+The .meta file ... does not have a valid GUID
+  可能是 meta 内容损坏，也可能是资产由不兼容的团结引擎许可证生成了受保护 GUID。
+  先停止保存 Scene，核对生成资产时使用的团结引擎版本和许可证，再从 Git 或可信包恢复整组资产与 meta。
+  不要给单个 meta 随意填写新 GUID，否则 Scene、Prefab 和 Script 引用仍会断开。
+
+Assembly ... will not be loaded / Unable to resolve reference
+  先修复 DLL、asmdef 和平台兼容性；不要用关闭 Reference Validation 掩盖问题。
+```
+
+团结引擎的 `.meta` 保存资产唯一标识与导入设置，Scene、Prefab 等资产通过该标识维持引用，详见[资源管理：Metadata Files](https://docs.unity.cn/cn/tuanjiemanual/Manual/AssetMetadata.html)。团结开发者社区也记录了 Pro 与 PE 等许可证环境混用后，较长的受保护 GUID 在另一环境无法识别的案例，详见[不同许可证生成的 meta 文件兼容问题](https://developer.unity.cn/ask/question/6768eb54edbc2a001e1afe36)。课程仓库提交可移植的标准 GUID；新增资产仍由 Editor 创建 `.meta`，不要求学习者日常手工维护。
+
+##### Step 1：新建并立即保存 Scene
+
+操作类型：新建 Scene 资产。
+
+在 Project 窗口的 `Assets/BattleNavigation/Scenes` 下创建并保存，例如：
+
+```text
+Assets/BattleNavigation/Scenes/Battle_1002.unity
+```
+
+Scene 文件名方便人查找，真正进入 BMAP Header 和网络查询的是 `BattleMapRoot.mapId/mapVersion`。二者应保持易于对应，但 Exporter 不靠文件名猜 mapId。
+
+可以复制 `Battle_1001.unity` 作为 Authoring 起点，但复制后必须为新地图重新 Bake 并确认 NavMeshData 属于新 Scene；不要让两张地图长期共享一个可被覆盖的 Bake 资产。`示例 -> 90 重建 Battle_1001 示例场景` 只服务示例地图，不能用它生成 1002。
+
+##### Step 2：放入几何并明确 Bake 输入
+
+给地面、坡道、台地和障碍物放置 Collider，并确认它们所在 Layer 被 `NavMeshSurface.Layer Mask` 收集。不可站立的墙顶、建筑顶和柱体使用 `NavMeshModifier -> Not Walkable`；真正可达的坡道和台地保留 Walkable。
+
+当前格式遵守 `one XZ -> one walkable height`。同一 XZ 上若同时存在桥面和桥下、楼上和楼下，Exporter 必须失败；不能让采样器任意挑一层。
+
+##### Step 3：配置唯一 BattleMapRoot
+
+操作类型：在当前 Scene 新建一个空 GameObject，并添加已有 Component。
+
+```text
+GameObject: BattleMapRoot
+Component:  BattleNavigation.BattleMapRoot
+```
+
+每张 Battle Scene 必须恰好一个。以 1002 为例：
+
+```text
+mapId                         1002
+mapVersion                    1
+originMeters                  Grid 的世界 XZ 左下角，单位米
+sizeXMeters / sizeZMeters     Grid 覆盖长度，单位米
+cellSizeMeters                Cell 边长，必须严格整除两个 size
+multiLayerSeparationMeters    只合并同一表面的浮点误差
+```
+
+`mapVersion` 是资产合同版本。任何会改变 Walkable、Height、Area、Clearance 或 Grid 范围的修改，在对外发布后都要递增版本。
+
+##### Step 4：配置 NavMeshSurface 与出生点
+
+在独立的 `Navigation` GameObject 上添加一个 `NavMeshSurface`：
+
+```text
+Collect Objects = Volume
+Volume Center/Size 覆盖 BattleMapRoot 的完整 Grid 和合理高度
+Layer Mask 只包含 Authoring 几何层
+Use Geometry 与当前课程示例保持一致
+```
+
+再为双方至少各放一个 `BattleSpawnPoint`，填写从 1 开始的 `team/index`。出生点 Transform 必须位于 Grid 范围内并落在可走表面；该组件只参与 Authoring 校验，不写入当前 BMAP Cell Payload。
+
+##### Step 5：Bake、保存、校验、导出
+
+日常推荐直接执行：
+
+```text
+Tools -> 战斗导航 -> 00 一键执行：校验 -> 烘焙 -> 导出（推荐）
+```
+
+该命令先做 Authoring 校验，再调用 AI Navigation 1.1.7 的异步 Bake。Bake 完成并生成 Scene 专属 NavMeshData 后，它保存 Scene，再调用同一个正式 Exporter。任何阶段失败都会停止；Git Review、提交、推送和 Server 更新不在这个 Unity 命令内。
+
+定位问题时使用保留的单步入口：
+
+```text
+Tools -> 战斗导航 -> 01 校验当前战斗场景
+Tools -> 战斗导航 -> 02 烘焙当前场景 NavMesh
+Scene 视图确认蓝色可走面
+Tools -> 战斗导航 -> 03 导出当前场景 BMAP
+```
+
+若 `mapId=1002`，预期输出：
+
+```text
+shared/navigation/battle_1002/battle_1002.bmap
+shared/navigation/battle_1002/battle_1002.manifest.json
+```
+
+Console 应先出现：
+
+```text
+BATTLE_MAP_AUTHORING_OK map=1002 ...
+BATTLE_MAP_BAKE_OK scene=... navmesh=...
+```
+
+导出成功后再出现：
+
+```text
+BMAP_EXPORT_OK ... map=1002 version=1 ...
+BATTLE_MAP_PIPELINE_OK scene=...
+```
+
+谁会使用这些结果：Unity Overlay 使用本次内存 Snapshot 做可视化；Server 只读取导出的 BMAP，不加载 Scene、GameObject、Collider 或 NavMeshSurface。
+
+理解自测：
+
+1. 为什么复制 Scene 后仍要为新地图重新 Bake？
+2. 为什么 Scene 名称不是 Server 地图身份？
+3. 为什么 Console 有编译错误时不能先排查 BattleMapRoot？
+4. 为什么成功导出 `battle_1002.bmap` 仍不等于当前 Lesson 1 Server 已经加载 1002？
 
 ### 本课程代码注释约定
 
@@ -1644,7 +1794,7 @@ cell count = 2400
 运行：
 
 ```text
-Tools -> Battle Navigation -> Validate Current Battle Scene
+Tools -> 战斗导航 -> 01 校验当前战斗场景
 ```
 
 预期 Console 出现 `BATTLE_MAP_AUTHORING_OK`，且打印 `grid=60x40 cell_mm=500`。
@@ -2302,7 +2452,7 @@ namespace BattleNavigation.Editor
 
 ```csharp
 #if UNITY_EDITOR
-[UnityEditor.MenuItem("Tools/Battle Navigation/Debug Sample Snapshot")]
+[UnityEditor.MenuItem("Tools/战斗导航/调试/10 仅采样当前 Snapshot", false, 110)]
 private static void DebugSampleSnapshot()
 {
     // 当前 Scene 中唯一的地图合同；缺失时 Sample 会明确失败。
@@ -2327,7 +2477,7 @@ private static void DebugSampleSnapshot()
 运行前确认已经保存并 Bake `Battle_1001`，然后点击：
 
 ```text
-Tools -> Battle Navigation -> Debug Sample Snapshot
+Tools -> 战斗导航 -> 调试 -> 10 仅采样当前 Snapshot
 ```
 
 预期输出包含：
@@ -3613,7 +3763,7 @@ Exporter 是 orchestration，不应该包含采样算法或二进制编码细节
 
 Exporter 负责 orchestration：决定调用顺序、输出目录和统一错误日志，但不把各阶段实现重新复制进来。这与 Server 中 command handler 调用领域服务相似：handler 编排，算法留在各自模块。
 
-`Application.dataPath` 指向当前 Unity 工程的 `Assets` 绝对路径。代码通过 `..` 把输出放到工程级 `BuildArtifacts/Navigation`，避免 `.bmap` 被 Unity 当普通 Asset 再导入。
+`Application.dataPath` 指向当前 Unity 工程的 `Assets` 绝对路径。Exporter 从 Unity 工程目录向上查找 `.git`，得到仓库根目录，再把候选发布资产写入 `shared/navigation/battle_<mapId>/`。这个目录不在 `Assets` 下，不会被 Unity 当普通 Asset 导入；它也不依赖 Windows 盘符或开发机绝对路径。
 
 `LastSnapshot` 是当前 Editor 进程内“最近一次成功结果”的引用：
 
@@ -3631,11 +3781,11 @@ Exporter 负责 orchestration：决定调用顺序、输出目录和统一错误
 
 ```text
 必须精读：唯一 BattleMapRoot 检查、阶段顺序、LastSnapshot 赋值时机
-必须精读：outputDirectory/bmapPath 怎样从当前工程推导
+必须精读：怎样定位仓库根目录，以及 outputDirectory/bmapPath 怎样按 mapId 推导
 可以略读：MenuItem 特性、SceneView.RepaintAll、日志字符串格式
 输入：当前 Scene + 已 Bake NavMesh
-输出：BMAP、Manifest、成功时的 LastSnapshot
-失败：任一上游异常；失败时不能伪装成功或发布新的 LastSnapshot
+输出：shared/ 下的 BMAP、Manifest，以及成功时的 LastSnapshot
+失败：任一上游异常或找不到仓库根目录；失败时不能伪装成功或发布新的 LastSnapshot
 不负责：实现采样、Clearance、验证规则或二进制字段编码
 ```
 
@@ -3654,7 +3804,8 @@ Assets/BattleNavigation/Editor/BattleMapExporter.cs
 ```csharp
 // 职责：按 Sample -> Clearance -> Validate -> Write -> Manifest 编排唯一正式导出入口。
 // 边界：Unity Editor Tool；由菜单触发，不进入 Player Runtime。
-// 输入/输出：当前 Battle Scene -> BMAP、Manifest 和可供 Overlay 观察的 Snapshot。
+// 输入/输出：当前 Battle Scene -> 仓库 shared/navigation 下的 BMAP、Manifest 和 Overlay Snapshot。
+// 生命周期：开发者在 Editor 菜单显式触发；输出只是待验证、待提交的发布候选资产。
 // 不负责：各阶段算法由对应组件实现，本文件只负责顺序和失败传播。
 using System;
 using System.IO;
@@ -3669,7 +3820,12 @@ namespace BattleNavigation.Editor
         // 最近一次成功导出的内存结果；仅供当前 Editor Session 的 Overlay 使用。
         public static BattleMapSnapshot LastSnapshot { get; private set; }
 
-        [MenuItem("Tools/Battle Navigation/Export BMAP")]
+        /// <summary>采样并验证当前场景，把地图资产写入仓库共享发布目录。</summary>
+        /// <exception cref="InvalidOperationException">
+        /// 当前场景没有唯一 BattleMapRoot，或 Unity 工程不位于 Git 仓库中时抛出。
+        /// </exception>
+        /// <remarks>执行磁盘 I/O；不提交 Git，也不通知运行中的 Server。</remarks>
+        [MenuItem("Tools/战斗导航/03 导出当前场景 BMAP", false, 103)]
         public static void Export()
         {
             try
@@ -3687,13 +3843,14 @@ namespace BattleNavigation.Editor
                 BattleMapSnapshot snapshot = BattleMapSampler.Sample(roots[0]);
                 BattleMapClearance.Compute(snapshot);
                 BattleMapValidator.ValidateSnapshot(roots[0], snapshot);
-                // outputDirectory 位于 Unity 工程的 BuildArtifacts，不进入 Assets 导入管线。
-                string outputDirectory = Path.GetFullPath(Path.Combine(
-                    Application.dataPath,
-                    "..",
-                    "BuildArtifacts",
-                    "Navigation"));
-                // bmapPath 是 mapId 决定的正式资产路径。
+                // shared/ 是跨机器发布合同。Bake 只更新本地候选文件，提交并拉取后 Server 才会消费。
+                string repositoryRoot = ResolveRepositoryRoot();
+                string outputDirectory = Path.Combine(
+                    repositoryRoot,
+                    "shared",
+                    "navigation",
+                    string.Format("battle_{0}", snapshot.mapId));
+                // bmapPath 的目录和文件名都由 mapId 决定，避免多张地图互相覆盖。
                 string bmapPath = Path.Combine(
                     outputDirectory,
                     string.Format("battle_{0}.bmap", snapshot.mapId));
@@ -3717,6 +3874,30 @@ namespace BattleNavigation.Editor
                 throw;
             }
         }
+
+        /// <summary>从 Unity 工程根目录向上定位包含 .git 的仓库根目录。</summary>
+        /// <returns>规范化绝对路径；调用方只在其下写入 shared/。</returns>
+        /// <exception cref="InvalidOperationException">找不到 Git 仓库边界时抛出。</exception>
+        private static string ResolveRepositoryRoot()
+        {
+            DirectoryInfo directory = new DirectoryInfo(Path.GetFullPath(Path.Combine(
+                Application.dataPath,
+                "..")));
+            while (directory != null)
+            {
+                // 普通 clone 的 .git 是目录；Git worktree 的 .git 是文本文件。
+                string marker = Path.Combine(directory.FullName, ".git");
+                if (Directory.Exists(marker) || File.Exists(marker))
+                {
+                    return directory.FullName;
+                }
+
+                directory = directory.Parent;
+            }
+
+            throw new InvalidOperationException(
+                "REPOSITORY_ROOT_NOT_FOUND Unity 工程必须位于包含 .git 的课程仓库中");
+        }
     }
 }
 ```
@@ -3736,21 +3917,21 @@ Validator 破坏测试已恢复
 然后执行：
 
 ```text
-Tools -> Battle Navigation -> Export BMAP
+Tools -> 战斗导航 -> 03 导出当前场景 BMAP
 ```
 
 预期输出：
 
 ```text
-<仓库根目录>\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.bmap
-<仓库根目录>\unity\BattleNavigation\BuildArtifacts\Navigation\battle_1001.manifest.json
+<仓库根目录>\shared\navigation\battle_1001\battle_1001.bmap
+<仓库根目录>\shared\navigation\battle_1001\battle_1001.manifest.json
 ```
 
 PowerShell 检查大小和 Hash：
 
 ```powershell
 $repoRoot = (git rev-parse --show-toplevel).Trim()
-$dir = Join-Path $repoRoot 'unity\BattleNavigation\BuildArtifacts\Navigation'
+$dir = Join-Path $repoRoot 'shared\navigation\battle_1001'
 Get-Item -LiteralPath "$dir\battle_1001.bmap"
 Get-Content -LiteralPath "$dir\battle_1001.manifest.json" -Raw
 Get-FileHash -LiteralPath "$dir\battle_1001.bmap" -Algorithm SHA256
@@ -3764,7 +3945,7 @@ Get-FileHash -LiteralPath "$dir\battle_1001.bmap" -Algorithm SHA256
 
 若不是这个值，先检查 width、height 和 cell_stride，不要直接改测试期望。
 
-接着做一次确定性检查：不改 Scene、不改 Bake 结果，连续导出两次并记录 SHA-256。两个 Hash 必须相同。如果不同，先停止 Server 导入，查找未排序输入、时间戳或未初始化字段，不能把不确定资产交给运行时。
+接着做一次确定性检查：不改 Scene、不改 Bake 结果，连续导出两次并记录 SHA-256。两个 Hash 必须相同。如果不同，先停止发布，查找未排序输入、时间戳或未初始化字段，不能把不确定资产交给运行时。
 
 最后用十六进制查看器或 PowerShell 检查文件开头应是：
 
@@ -3850,7 +4031,7 @@ namespace BattleNavigation.Editor
             SceneView.duringSceneGui += Draw;
         }
 
-        [MenuItem("Tools/Battle Navigation/Toggle Overlay")]
+        [MenuItem("Tools/战斗导航/调试/11 切换 Grid Overlay", false, 111)]
         private static void Toggle()
         {
             enabled = !enabled;
@@ -3916,7 +4097,7 @@ namespace BattleNavigation.Editor
 
 ### 16.3 使用和排错
 
-重新执行一次 `Export BMAP`，然后在 Scene View 对照：
+重新执行一次 `03 导出当前场景 BMAP`，然后在 Scene View 对照：
 
 ```text
 主地面大部分格子为绿色
@@ -3928,7 +4109,7 @@ Grid 边界外没有 Overlay
 通过下面菜单开关显示：
 
 ```text
-Tools -> Battle Navigation -> Toggle Overlay
+Tools -> 战斗导航 -> 调试 -> 11 切换 Grid Overlay
 ```
 
 Overlay 只显示 `LastSnapshot`，不重新调用 NavMesh API。重新打开 Unity 后 `LastSnapshot` 为空，需要重新导出，这是正常现象。需要检查单格详细值时，用测试或有针对性的日志打印，不要给 2400 格同时绘制文字导致 Scene View 卡顿。
@@ -4044,7 +4225,11 @@ Assets/BattleNavigation/Editor/BattleNavigation.Editor.asmdef
 {
   "name": "BattleNavigation.Editor",
   "rootNamespace": "BattleNavigation.Editor",
-  "references": ["BattleNavigation.Runtime", "Unity.AI.Navigation"],
+  "references": [
+    "BattleNavigation.Runtime",
+    "Unity.AI.Navigation",
+    "Unity.AI.Navigation.Editor"
+  ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
@@ -4281,7 +4466,7 @@ Window -> General -> Test Runner -> EditMode -> Run All
 
 ### 17.6 Unity 工具链阶段验收
 
-进入 Server 导入前，必须同时满足：
+进入 Server 发布前，必须同时满足：
 
 ```text
 [ ] 第 7 节地图范围和负配置测试通过
@@ -4298,34 +4483,42 @@ Window -> General -> Test Runner -> EditMode -> Run All
 
 这一步证明文件字节、CRC、坐标、Clearance 和真实 Scene 生产链分别受控。两类失败不要混成一个 Test，也不要在其中任何一项未完成时进入第 18 节。
 
-## 18. 导入 BMAP，而不是让 Server 读取 Unity Project
+## 18. 发布 BMAP，而不是让 Server 读取 Unity Project
 
-这一节只完成资产交接，不引入新类型或导入脚本。Unity Exporter 的输出与 Server 的输入固定为：
+这一节完成资产发布边界。Unity、构建机和 Server 可以位于三台不同机器；它们共同认同的是 Git 提交、地图业务版本和内容哈希，不是某个盘符或实时共享目录。
 
 ```text
-Unity 输出：<unity-project>/BuildArtifacts/Navigation/battle_1001.bmap
-Server 输入：<仓库根目录>/server/maps/battle_1001.bmap
-Review 旁路：battle_1001.manifest.json
+Unity Bake 候选输出：<仓库根目录>/shared/navigation/battle_1001/battle_1001.bmap
+人工/CI 审查旁路：<同目录>/battle_1001.manifest.json
+Server 已发布输入：拉取同一 Git 提交后得到的上述两个文件
 ```
 
-操作类型：执行命令，不新建源码文件。先在 Unity Console 确认有 `BMAP_EXPORT_OK`，再在 WSL 中复制导出产物：
+Exporter 写入 `shared/` 只表示当前工作区产生了候选版本。正在运行的本机 Server 不会自动重载，另一台 Server 更不可能看到这次 Bake。正确发布链是：
+
+```text
+Unity Bake
+-> Overlay、Validator、EditMode Test 和 manifest 审查
+-> 提交 BMAP + manifest
+-> 推送
+-> Server 机器拉取同一提交或安装由该提交构建的发布包
+-> 启动阶段由 BMapReader 再校验 Magic、长度、CRC、mapId、mapVersion
+```
+
+操作类型：执行只读检查，然后正常 Git Review/提交；不再手工复制到 `server/maps/`。
 
 ```bash
-cd "$(git rev-parse --show-toplevel)/server"
-unity_output="$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
-
-test -s "$unity_output/battle_1001.bmap"
-test -s "$unity_output/battle_1001.manifest.json"
-install -m 0644 "$unity_output/battle_1001.bmap" maps/battle_1001.bmap
-install -m 0644 "$unity_output/battle_1001.manifest.json" maps/battle_1001.manifest.json
-sha256sum maps/battle_1001.bmap
+cd "$(git rev-parse --show-toplevel)"
+test -s shared/navigation/battle_1001/battle_1001.bmap
+test -s shared/navigation/battle_1001/battle_1001.manifest.json
+sha256sum shared/navigation/battle_1001/battle_1001.bmap
+git diff -- shared/navigation/battle_1001
 ```
 
-这里的复制只负责把产物交给 Server 工程。第 21 节的 `BMapReader` 会独立检查 Magic、长度、CRC、`mapId` 和 `mapVersion`；Manifest 便于人和 CI 审查，Runtime Loader 不依赖它。
+Manifest 便于人和 CI 审查，Runtime Loader 不依赖它。BMAP 才是 Server 权威输入，但两者必须成对提交，避免 Reviewer 看见的版本说明与二进制不一致。
 
-新 Scene 的 `mapId=1002` 时，Exporter 生成 `battle_1002.bmap`，Server 也以同名文件导入。Server 不加载 `.unity`、GameObject、NavMeshAgent、Rigidbody 或 Animator。
+新 Scene 的 `mapId=1002` 时，Exporter 写入独立的 `shared/navigation/battle_1002/`。Server 还必须显式增加对应地图配置，不能让新文件名悄悄替换 `battle_1001`。Server 不加载 `.unity`、GameObject、NavMeshAgent、Rigidbody 或 Animator。
 
-本节验收：`maps/battle_1001.bmap` 和 Manifest 存在且非空。到这里，Unity 侧的地图生产链已结束；第 19 节开始实现 Server 读取端。
+本节验收：`shared/navigation/battle_1001/` 中 BMAP 与 Manifest 存在、差异已审查，并能作为同一提交发布。到这里，Unity 侧的地图生产链已结束；第 19 节开始实现 Server 读取端。
 
 ## 19. Native 数据类型和错误契约
 
@@ -5349,14 +5542,15 @@ GRID_MAP_TEST_OK
 理解自测：能用“固定包头 + 包体”解释 length、Envelope 和 body 分别位于哪一层
 ```
 
-操作：在 Server 工程中新建协议文件，并粘贴下面的完整内容。
+操作：在仓库共享合同目录中新建协议文件，并粘贴下面的完整内容。`.proto` 不能分别在 Unity 和 Server 下维护两份。
 
-新建文件：`<仓库根目录>/server/protocol/navigation_query.proto`
+新建文件：`<仓库根目录>/shared/protocol/navigation_query.proto`
 
 ```proto
 // 职责：定义 Unity 与 Skynet 之间 QueryCell 请求、响应和 Envelope 合同。
 // 边界：跨进程 Runtime Message Contract；生成 C# 类型并由 Lua descriptor 动态加载。
 // 输入/输出：WorldPosition(mm) 查询 -> Cell 静态信息或明确 ResultCode。
+// 生命周期：作为协议唯一源随 Git 发布；生成物必须与本文件处于同一提交。
 // 不负责：不表达路径、动态占位或战斗状态。
 syntax = "proto3";
 
@@ -5588,14 +5782,19 @@ RESULT_UNSPECIFIED = 0;
 
 操作：新建版本锁定文件，并粘贴下面的完整内容。
 
-新建文件：`protocol/VERSIONS.env`
+新建文件：`<仓库根目录>/shared/protocol/VERSIONS.env`
 
 ```bash
-# 职责：锁定协议生成链使用的工具和 Runtime 版本。
-# 边界：Build 配置；只声明版本，不自动安装或升级工具。
+# 职责：锁定跨 Unity/Server 协议生成链使用的合同与工具版本。
+# 边界：共享 Build 配置；只声明版本，不自动安装、升级或加载 Runtime。
+NAVIGATION_PROTOCOL_VERSION=1
 PROTOC_VERSION=36.2
 LUA_PROTOBUF_COMMIT=ee4beb3865e2b82ea94b8a4314d78875c550ce20
 GOOGLE_PROTOBUF_VERSION=3.36.2
+GOOGLE_PROTOBUF_SYSTEM_MEMORY_VERSION=4.5.3
+GOOGLE_PROTOBUF_UNSAFE_VERSION=4.5.3
+GOOGLE_PROTOBUF_SYSTEM_BUFFERS_VERSION=4.5.1
+GOOGLE_PROTOBUF_NUMERICS_VECTORS_VERSION=4.4.0
 ```
 
 下载或升级工具前先查看 `docs/ENGINEERING_DECISIONS.md` 的 D029。Server 使用项目目录内固定 commit 的 lua-protobuf 0.5.3 和 Skynet 自带 Lua 5.4，不依赖系统 `lua` 命令；Unity C# 使用 `Google.Protobuf` 3.36.2。本课不允许某台机器自动使用“当前最新版”。
@@ -5610,12 +5809,13 @@ GOOGLE_PROTOBUF_VERSION=3.36.2
 #!/usr/bin/env bash
 # 职责：下载课程固定版本的 protoc 和 lua-protobuf 源码。
 # 边界：Server Build Bootstrap；不编译模块，不生成业务 descriptor。
-# 输入/输出：protocol/VERSIONS.env -> third_party 下的固定版本工具源码/二进制。
+# 输入/输出：shared/protocol/VERSIONS.env -> third_party 下的固定版本工具源码/二进制。
 # 失败约定：已有目录版本不符时明确失败，不删除或静默升级用户文件。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-source "$ROOT/protocol/VERSIONS.env"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
+source "$REPO_ROOT/shared/protocol/VERSIONS.env"
 
 PROTOC_DIR="$ROOT/third_party/protoc-$PROTOC_VERSION"
 LUA_PROTOBUF_DIR="$ROOT/third_party/lua-protobuf"
@@ -5715,9 +5915,10 @@ echo "LUA_PROTOBUF_BUILD_OK $OUTPUT/pb.so"
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$ROOT/.." && pwd)"
 LUA="$ROOT/third_party/skynet/3rd/lua/lua"
 RUNTIME="$ROOT/third_party/lua-protobuf-runtime"
-DESCRIPTOR="$ROOT/protocol/generated/server/navigation_query.pb"
+DESCRIPTOR="$REPO_ROOT/shared/protocol/generated/server/navigation_query.pb"
 
 test -x "$LUA"
 test -s "$RUNTIME/pb.so"
@@ -5753,15 +5954,19 @@ LUA_PROTOBUF_BUILD_OK .../pb.so
 
 ```bash
 #!/usr/bin/env bash
-# 职责：把 navigation_query.proto 编译成 Server 使用的 descriptor set。
-# 边界：离线 Build Script；输出构建资产，不启动 Skynet。
-# 输入/输出：protocol/navigation_query.proto -> descriptor 和 SHA-256 文件。
+# 职责：把仓库共享的 navigation_query.proto 编译成 Server 使用的 descriptor set。
+# 边界：离线 Build Script；只更新 shared/protocol 下可提交的协议生成物，不启动 Skynet。
+# 输入/输出：shared/protocol/navigation_query.proto -> descriptor 和稳定 SHA-256 文件。
+# 生命周期：协议源变更后由开发者显式执行；生成物随同协议源提交并由各部署端拉取。
+# 不负责：不生成 Unity C#、不启动 Server、不从另一台机器复制运行时文件。
 set -euo pipefail
 
-ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-source "$ROOT/protocol/VERSIONS.env"
-PROTOC="${PROTOC:-$ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc}"
-OUT="$ROOT/protocol/generated/server"
+SERVER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
+PROTO_ROOT="$REPO_ROOT/shared/protocol"
+source "$PROTO_ROOT/VERSIONS.env"
+PROTOC="${PROTOC:-$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc}"
+OUT="$PROTO_ROOT/generated/server"
 mkdir -p "$OUT"
 
 test -x "$PROTOC"
@@ -5770,41 +5975,89 @@ rm -f "$OUT/navigation_query.pb"
 "$PROTOC" \
   --descriptor_set_out="$OUT/navigation_query.pb" \
   --include_imports \
-  -I "$ROOT/protocol" \
-  "$ROOT/protocol/navigation_query.proto"
+  -I "$PROTO_ROOT" \
+  "$PROTO_ROOT/navigation_query.proto"
 
 test -s "$OUT/navigation_query.pb"
-sha256sum "$OUT/navigation_query.pb" > "$OUT/navigation_query.pb.sha256"
+# 校验清单只记录文件名，避免把开发机绝对路径写入可提交资产。
+(cd "$OUT" && sha256sum navigation_query.pb > navigation_query.pb.sha256)
+sha256sum "$PROTO_ROOT/navigation_query.proto" | awk '{print $1}' > "$OUT/navigation_query.source.sha256"
 echo "SERVER_DESCRIPTOR_OK $OUT/navigation_query.pb"
 ```
 
 操作：新建 Unity C# 协议生成脚本，并粘贴下面的完整内容。
 
-新建文件：`protocol/build_unity_cs.ps1`
+新建文件：`<仓库根目录>/shared/protocol/build_unity_cs.ps1`
 
 ```powershell
-# 职责：把 navigation_query.proto 生成 Unity 编译所需的 C# 类型。
-# 边界：离线 Build Script；不修改协议，不运行 Unity。
-# 输入/输出：协议源文件 -> Unity Generated 目录中的 C# 文件。
+# 职责：从共享 navigation_query.proto 生成 Unity 编译使用的 C# 类型和稳定校验文件。
+# 边界：离线 Build Script；读取 shared/protocol，写入 Unity 客户端生成代码与 shared 校验信息。
+# 输入/输出：唯一协议源和固定 protoc -> NavigationQuery.cs 与其 SHA-256。
+# 生命周期：协议源变更后由协议维护者显式执行；输出必须与协议源同一次提交。
+# 不负责：不启动 Unity/Server、不修改 .meta、不从系统目录挑选任意 DLL。
 param(
-    [string]$Protoc = "protoc.exe",
-    [string]$Root = (Resolve-Path (Join-Path $PSScriptRoot "..")),
-    [string]$UnityGenerated = "Assets/Generated/Protocol"
+    [string]$Protoc = "",
+    [string]$UnityOutput = ""
 )
 
 $ErrorActionPreference = "Stop"
-$protoDir = Join-Path $Root "protocol"
-$outDir = Join-Path $Root $UnityGenerated
-New-Item -ItemType Directory -Force -Path $outDir | Out-Null
+$repoRoot = (Resolve-Path (Join-Path $PSScriptRoot "../..")).Path
+$versionsFile = Join-Path $PSScriptRoot "VERSIONS.env"
+$protoFile = Join-Path $PSScriptRoot "navigation_query.proto"
+$checksumDir = Join-Path $PSScriptRoot "generated/unity"
+
+# 从 KEY=VALUE 版本清单读取一个必需值；缺失时明确失败。
+function Get-PinnedVersion {
+    param([Parameter(Mandatory = $true)][string]$Name)
+    $entry = Get-Content -LiteralPath $versionsFile -Encoding utf8 |
+        Where-Object { $_ -match "^$([regex]::Escape($Name))=(.+)$" } |
+        Select-Object -First 1
+    if (-not $entry) { throw "版本清单缺少 $Name：$versionsFile" }
+    return ($entry -split "=", 2)[1].Trim()
+}
+
+if ([string]::IsNullOrWhiteSpace($Protoc)) {
+    $protocVersion = Get-PinnedVersion -Name "PROTOC_VERSION"
+    $repositoryProtoc = Join-Path $repoRoot "server/third_party/protoc-$protocVersion/bin/protoc.exe"
+    if (Test-Path -LiteralPath $repositoryProtoc -PathType Leaf) {
+        $Protoc = $repositoryProtoc
+    }
+    else {
+        $pathProtoc = Get-Command "protoc.exe" -ErrorAction SilentlyContinue
+        if ($pathProtoc) { $Protoc = $pathProtoc.Source }
+    }
+}
+if ([string]::IsNullOrWhiteSpace($UnityOutput)) {
+    $UnityOutput = Join-Path $repoRoot "unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol"
+}
+if (-not (Test-Path -LiteralPath $Protoc -PathType Leaf)) {
+    throw "找不到固定版本 protoc：$Protoc；可用 -Protoc 显式传入同版本可执行文件"
+}
+
+New-Item -ItemType Directory -Force -Path $UnityOutput | Out-Null
+New-Item -ItemType Directory -Force -Path $checksumDir | Out-Null
+$expectedProtocVersion = Get-PinnedVersion -Name "PROTOC_VERSION"
+$actualProtocVersion = (& $Protoc --version).Trim()
+if ($LASTEXITCODE -ne 0 -or $actualProtocVersion -ne "libprotoc $expectedProtocVersion") {
+    throw "protoc 版本不匹配：expected=libprotoc $expectedProtocVersion actual=$actualProtocVersion"
+}
 & $Protoc `
-  "--csharp_out=$outDir" `
-  "-I$protoDir" `
-  (Join-Path $protoDir "navigation_query.proto")
-if ($LASTEXITCODE -ne 0) { throw "protoc failed: $LASTEXITCODE" }
-Write-Output "UNITY_PROTOBUF_CS_OK $outDir"
+    "--csharp_out=$UnityOutput" `
+    "-I$PSScriptRoot" `
+    $protoFile
+if ($LASTEXITCODE -ne 0) { throw "protoc 生成 Unity C# 失败，退出码：$LASTEXITCODE" }
+
+$generatedFile = Join-Path $UnityOutput "NavigationQuery.cs"
+if (-not (Test-Path -LiteralPath $generatedFile -PathType Leaf)) {
+    throw "protoc 未生成预期文件：$generatedFile"
+}
+$hash = (Get-FileHash -Algorithm SHA256 -LiteralPath $generatedFile).Hash.ToLowerInvariant()
+$checksumFile = Join-Path $checksumDir "NavigationQuery.cs.sha256"
+[IO.File]::WriteAllText($checksumFile, "$hash  NavigationQuery.cs`n", [Text.UTF8Encoding]::new($false))
+Write-Output "UNITY_PROTOBUF_CS_OK file=$generatedFile sha256=$hash"
 ```
 
-PowerShell 生成出来的 C# 文件必须提交到 Unity 工程，Server descriptor 则由构建脚本生成到 `protocol/generated/server`。这样 Unity 编辑器没有安装 protoc 时也可以打开工程，Server 仍然能在 Linux 上检查 descriptor 是否和提交内容一致。
+PowerShell 生成出来的 C# 文件必须提交到 Unity 工程；Server descriptor、descriptor SHA-256 和协议源 SHA-256 提交到 `shared/protocol/generated/server/`。协议源、两端生成物和校验文件属于一个原子变更。Unity 编辑器和 Server 部署机不需要在启动时安装 protoc，也不会各自生成一份可能漂移的合同。
 
 ### 24.3 给协议写一个可观察的 descriptor 检查
 
@@ -6309,10 +6562,14 @@ return {
     -- netpack.pack 对 payload >= 0x10000 直接报错，因此业务上限固定为 65535 bytes。
     max_frame_bytes = 0xffff,
 
+    -- 由 shared/protocol 发布的 Server descriptor；相对 server/ 运行目录解析。
+    protocol_descriptor = "../shared/protocol/generated/server/navigation_query.pb",
+
     map = {
         id = 1001,                       -- BMAP Header 和协议共用的 uint32 地图 ID。
         version = 1,                     -- 必须与 BMAP Header 一致。
-        bmap = "maps/battle_1001.bmap", -- 相对 Server 工作目录的地图资产路径。
+        -- 由 Unity Authoring 生成并经 Git 发布；Server 只消费已提交版本。
+        bmap = "../shared/navigation/battle_1001/battle_1001.bmap",
     },
 }
 ```
@@ -7139,7 +7396,8 @@ local function start_gateway(query_address)
            "max_inflight_per_connection must be positive")
 
     query_service = assert(query_address, "query service address is required")
-    codec.load_descriptor("protocol/generated/server/navigation_query.pb")
+    -- descriptor 与协议源一起从 shared/ 发布，运行期不从 Unity 工作目录读取。
+    codec.load_descriptor(config.protocol_descriptor)
 
     -- listen 只同步返回 Skynet Socket ID；bind/listen 的异步成功或失败分别由 init/error 报告。
     local fd = socketdriver.listen(config.host, config.port, config.backlog)
@@ -7564,21 +7822,25 @@ main "$@"
 #!/usr/bin/env bash
 # 职责：统一管理 Battle Navigation Server 的依赖准备、构建、后台启动、状态和安全停止。
 # 边界：仓库级 Runtime/Build Launcher；只操作当前 server/ 下已知 build/run/log 目录和固定依赖脚本。
-# 输入/输出：源码、固定版本依赖、BMAP -> 可运行 Skynet 进程及 logs/run 状态文件。
+# 输入/输出：源码、固定版本依赖、shared/ 已发布资产 -> 可运行 Skynet 进程及 logs/run 状态文件。
 # 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
-# 不负责：不生成 Unity BMAP、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
+# 不负责：不生成 Unity BMAP、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
+SHARED_ROOT="$REPO_ROOT/shared"
 RUN_DIR="$SERVER_ROOT/run"
 LOG_DIR="$SERVER_ROOT/logs"
 PID_FILE="$RUN_DIR/server.pid"
 LOCK_FILE="$RUN_DIR/serverctl.lock"
 SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
 SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
-MAP_FILE="$SERVER_ROOT/maps/battle_1001.bmap"
-source "$SERVER_ROOT/protocol/VERSIONS.env"
+MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
+DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
+PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
+source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
@@ -7783,15 +8045,21 @@ build_lua_protobuf_if_needed() {
     fi
 }
 
-build_descriptor_if_needed() {
-    local target="$SERVER_ROOT/protocol/generated/server/navigation_query.pb"
-    if [[ ! -s "$target" || "$SERVER_ROOT/protocol/navigation_query.proto" -nt "$target" ]]; then
-        log "building Protobuf descriptor"
-        "$SERVER_ROOT/protocol/build_server_descriptor.sh"
-    fi
+verify_descriptor_asset() {
+    local target="$DESCRIPTOR_FILE"
+    local source_checksum_file="$(dirname "$target")/navigation_query.source.sha256"
+    local expected_source_checksum actual_source_checksum
+    [[ -s "$target" ]] || fail "published server descriptor missing: $target"
+    [[ -s "$source_checksum_file" ]] || fail "published protocol source checksum missing: $source_checksum_file"
+    expected_source_checksum="$(tr -d '[:space:]' < "$source_checksum_file")"
+    actual_source_checksum="$(sha256sum "$PROTO_SOURCE" | awk '{print $1}')"
+    [[ "$actual_source_checksum" == "$expected_source_checksum" ]] || \
+        fail "published descriptor does not match protocol source; regenerate and commit both"
     "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh" >/dev/null
     if [[ -s "$target.sha256" ]]; then
-        sha256sum -c "$target.sha256" >/dev/null
+        (cd "$(dirname "$target")" && sha256sum -c "$(basename "$target.sha256")" >/dev/null)
+    else
+        fail "published descriptor checksum missing: $target.sha256"
     fi
 }
 
@@ -7810,7 +8078,7 @@ prepare_runtime() {
     bootstrap_project_dependencies
     build_skynet_if_needed
     build_lua_protobuf_if_needed
-    build_descriptor_if_needed
+    verify_descriptor_asset
     build_native_incremental
 }
 
@@ -7845,8 +8113,7 @@ rebuild_all() {
     fi
     "$SERVER_ROOT/scripts/linux/build_skynet.sh"
     "$SERVER_ROOT/scripts/linux/build_lua_protobuf.sh"
-    "$SERVER_ROOT/protocol/build_server_descriptor.sh"
-    "$SERVER_ROOT/scripts/linux/check_server_descriptor.sh"
+    verify_descriptor_asset
     run_lua_policy_checks
     run_native_tests
     build_native_incremental
@@ -7857,8 +8124,8 @@ check_runtime_assets() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing: $SKYNET_BIN"
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || fail "pb.so missing"
-    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || fail "server descriptor missing"
-    [[ -s "$MAP_FILE" ]] || fail "BMAP missing: $MAP_FILE; export/copy Battle_1001 from Unity first"
+    [[ -s "$DESCRIPTOR_FILE" ]] || fail "published server descriptor missing: $DESCRIPTOR_FILE"
+    [[ -s "$MAP_FILE" ]] || fail "published BMAP missing: $MAP_FILE; pull the matching repository release first"
 }
 
 doctor() {
@@ -7869,12 +8136,12 @@ doctor() {
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
-    [[ -s "$SERVER_ROOT/protocol/generated/server/navigation_query.pb" ]] || { log "MISSING descriptor"; failed=1; }
+    [[ -s "$DESCRIPTOR_FILE" ]] || { log "MISSING published descriptor: $DESCRIPTOR_FILE"; failed=1; }
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }
     [[ -s "$MAP_FILE" ]] || { log "MISSING battle_1001.bmap"; failed=1; }
 
     if ((failed)); then
-        log "DOCTOR_FAILED: run './scripts/linux/run_server.sh prepare'; BMAP must still come from Unity export"
+        log "DOCTOR_FAILED: run './scripts/linux/run_server.sh prepare'; if shared assets are missing, pull the matching repository release"
         return 1
     fi
     log "DOCTOR_OK"
@@ -8097,7 +8364,7 @@ chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh scripts/
 ./scripts/linux/run_server.sh start --rebuild
 ```
 
-`rebuild` 只允许清理当前工程的 `server/build/*`，并执行 Skynet `make clean` 后重编；不会删除 `maps/`、Unity 导出的 BMAP、Git 源码或 third_party pinned 源码。
+`rebuild` 只允许清理当前工程的 `server/build/*`，并执行 Skynet `make clean` 后重编；不会删除 `shared/` 发布资产、Git 源码或 third_party pinned 源码。
 
 前台调试：
 
@@ -8147,7 +8414,7 @@ NAV_SERVER_READY query=:... gateway=:...
 
 ### 29.0 生成 Unity C# 协议类型
 
-`ServerQueryClient.cs` 需要 `Envelope`、`WorldPosition`、`QueryCellRequest` 和 `QueryCellResponse` 这些 C# 类型。它们不是 `Google.Protobuf.dll` 自带的类型，而是由当前工程的 `server/protocol/navigation_query.proto` 生成的协议产物。
+`ServerQueryClient.cs` 需要 `Envelope`、`WorldPosition`、`QueryCellRequest` 和 `QueryCellResponse` 这些 C# 类型。它们不是 `Google.Protobuf.dll` 自带的类型，而是由当前工程唯一的 `shared/protocol/navigation_query.proto` 生成并随同协议提交的客户端产物。
 
 操作：完整生成协议 C# 文件。输入是已经提交的 `.proto`，输出是 Unity `Protocol` 目录中的新文件；不要手写或局部修改生成文件。
 
@@ -8161,16 +8428,8 @@ NAV_SERVER_READY query=:... gateway=:...
 
 ```powershell
 $root = (git rev-parse --show-toplevel).Trim()
-$protoc = Join-Path $root 'server\third_party\protoc-36.2\bin\protoc.exe'
-$proto = Join-Path $root 'server\protocol\navigation_query.proto'
-$out = Join-Path $root 'unity\BattleNavigation\Assets\BattleNavigation\Scripts\Protocol'
-
-if (!(Test-Path -LiteralPath $protoc)) {
-    throw "缺少固定 protoc 36.2：$protoc。先按 server/scripts/linux/bootstrap_protocol_tools.sh 准备工具，或使用同版本 Windows protoc。"
-}
-& $protoc --version
-& $protoc -I (Split-Path $proto) --csharp_out=$out $proto
-if ($LASTEXITCODE -ne 0) { throw 'C# Protobuf generation failed' }
+$protoc = 'C:\tools\protoc-36.2-win64\bin\protoc.exe' # 改成你解压的固定 36.2 路径
+& (Join-Path $root 'shared\protocol\build_unity_cs.ps1') -Protoc $protoc
 ```
 
 验证：打开 `NavigationQuery.cs`，应看到命名空间 `Battle.Navigation.V1`，并包含四个消息类型。Unity 重新导入后，`ServerQueryClient.cs` 的 `using Battle.Navigation.V1;` 才能解析。协议源或 protoc 版本变化后必须重新生成，不能继续使用旧生成物。
@@ -8183,7 +8442,7 @@ if ($LASTEXITCODE -ne 0) { throw 'C# Protobuf generation failed' }
 <仓库根目录>\unity\BattleNavigation\Assets\Plugins\Google.Protobuf.dll
 ```
 
-不要把 `Google.Protobuf.dll` 从系统中随意复制一个“能加载”的版本。版本必须和 `protocol/VERSIONS.env`、`docs/ENGINEERING_DECISIONS.md` 一致。NuGet 的 `netstandard2.0` 资产还需要运行时依赖，至少要把同一依赖图中的 DLL 一起放入 `Assets/Plugins/`：
+不要把 `Google.Protobuf.dll` 从系统中随意复制一个“能加载”的版本。版本必须和 `shared/protocol/VERSIONS.env`、`docs/ENGINEERING_DECISIONS.md` 一致。NuGet 的 `netstandard2.0` 资产还需要运行时依赖，至少要把同一依赖图中的 DLL 一起放入 `Assets/Plugins/`：
 
 ```text
 Google.Protobuf 3.36.2
@@ -8244,6 +8503,76 @@ foreach ($asset in $assets) {
 
 如果控制台仍提示 `Unable to resolve reference 'System.Runtime.CompilerServices.Unsafe'`，先确认五个 DLL 位于同一个 `Assets/Plugins/` 目录，并删除同名旧 DLL 后重新导入。不要关闭 `Reference validation`；那只会把缺依赖推迟到编译或运行时。
 
+#### 29.1.1 把协议客户端与地图 Authoring 分成两个程序集边界
+
+协议生成代码和 `ServerQueryClient` 位于 `Assets/BattleNavigation/Scripts`。如果不放 asmdef，它们会落入默认 `Assembly-CSharp`；命名的 `BattleNavigation.Editor` 不能可靠地反向引用默认程序集中的 `BattleNavigation.Client`。同时，也不应让地图 Exporter 因为一个调试窗口而依赖 Protobuf。
+
+工程采用下面的依赖方向：
+
+```text
+BattleNavigation.Client
+  拥有 Protocol 生成物、LengthFrame、ServerQueryClient
+  可引用 Google.Protobuf 预编译 DLL
+
+BattleNavigation.Client.Editor
+  只拥有 ServerQueryWindow
+  -> BattleNavigation.Client
+
+BattleNavigation.Editor
+  继续只负责地图 Authoring/Export
+  -> BattleNavigation.Runtime + Unity.AI.Navigation
+```
+
+操作类型：只读已有 Assembly Definition；不要把 `ServerQueryWindow` 搬回地图 `Editor/` 目录。
+
+完整路径：
+
+```text
+Assets/BattleNavigation/Scripts/BattleNavigation.Client.asmdef
+```
+
+```json
+{
+  "name": "BattleNavigation.Client",
+  "rootNamespace": "BattleNavigation.Client",
+  "references": [],
+  "includePlatforms": [],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
+```
+
+完整路径：
+
+```text
+Assets/BattleNavigation/Scripts/Editor/BattleNavigation.Client.Editor.asmdef
+```
+
+```json
+{
+  "name": "BattleNavigation.Client.Editor",
+  "rootNamespace": "BattleNavigation.Client.Editor",
+  "references": ["BattleNavigation.Client"],
+  "includePlatforms": ["Editor"],
+  "excludePlatforms": [],
+  "allowUnsafeCode": false,
+  "overrideReferences": false,
+  "precompiledReferences": [],
+  "autoReferenced": true,
+  "defineConstraints": [],
+  "versionDefines": [],
+  "noEngineReferences": false
+}
+```
+
+验证：Unity 编译日志中应分别生成 `BattleNavigation.Client.dll`、`BattleNavigation.Client.Editor.dll` 和 `BattleNavigation.Editor.dll`。若只有默认 `Assembly-CSharp-Editor.dll`，先检查 asmdef 的 `.meta` 是否含 32 位十六进制 GUID，以及 Console 第一条错误。
+
 ### 29.2 TCP framing
 
 TCP 仍然只是有序 byte stream，不保留消息边界。现在 Server 由 `skynet.netpack` 负责 framing，所以 Unity 必须使用同一线协议：
@@ -8270,7 +8599,7 @@ BMAP 继续是 Little Endian 离线资产；TCP frame 是 Big Endian 运行时�
 
 操作：把第一课 Unity framing 示例完整替换成下面版本。
 
-完整替换：`unity/BattleNavigation/Assets/Scripts/Protocol/LengthFrame.cs`
+完整替换：`unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/LengthFrame.cs`
 
 ```csharp
 // 职责：实现与 Skynet netpack 一致的 2-byte Big Endian TCP 长度帧。
@@ -8337,7 +8666,7 @@ QueryCellRequest
 
 同步短连接仍只用于 Editor 调试。需要修改的是读写 frame 的 header 长度。
 
-完整替换：`unity/BattleNavigation/Assets/Scripts/Protocol/ServerQueryClient.cs`
+完整替换：`unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/ServerQueryClient.cs`
 
 ```csharp
 // 职责：供 Unity Editor 调试时同步发送一次 QueryCell 并校验对应响应。
@@ -8446,9 +8775,9 @@ namespace BattleNavigation.Client
 不负责：运行时 UI、自动寻路、持续轮询、修改 Server 结果
 ```
 
-操作：在 Unity 工程中新建 Editor C# 文件，并粘贴下面的完整代码。
+操作：完整替换客户端调试程序集中的 Editor C# 文件。
 
-新建文件：`unity/BattleNavigation/Assets/Editor/ServerQueryWindow.cs`
+完整替换：`unity/BattleNavigation/Assets/BattleNavigation/Scripts/Editor/ServerQueryWindow.cs`
 
 ```csharp
 // 职责：提供人工输入 WorldPosition 并观察 Skynet QueryCell 响应的 Editor 窗口。
@@ -8482,7 +8811,7 @@ namespace BattleNavigation.Editor
         // 最近一次响应或异常的可读显示文本。
         private string result = "not queried";
 
-        [MenuItem("Tools/Battle Navigation/Server Query")]
+        [MenuItem("Tools/战斗导航/调试/12 查询 Skynet Server", false, 112)]
         private static void Open() => GetWindow<ServerQueryWindow>("Server Query");
 
         private void OnGUI()
@@ -8525,6 +8854,17 @@ namespace BattleNavigation.Editor
 ### 30.1 C# framing tests
 
 这组测试锁定 Unity 与 `skynet.netpack` 完全一致的 2-byte Big Endian framing：
+
+操作类型：已提供文件，只读并通过 Unity Test Runner 运行。
+
+地图 Authoring 测试与网络协议测试属于不同边界。协议测试放在独立目录和程序集，避免第 17 节的 `BattleNavigation.EditorTests` 反向依赖客户端网络代码：
+
+```text
+Assets/BattleNavigation/Tests/Client/BattleNavigation.ClientTests.asmdef
+Assets/BattleNavigation/Tests/Client/LengthFrameTests.cs
+```
+
+`BattleNavigation.ClientTests` 只引用 `BattleNavigation.Client`，只在 Editor/Test 环境编译。它不打开 Socket，不要求 Server 在线，只验证 TCP framing 的纯字节合同。
 
 ```text
 BigEndianRoundTrip：header 为 00 04，payload 完整消费
@@ -8625,12 +8965,13 @@ Unity Battle_1001 Scene
         v
 battle_1001.bmap + manifest
         |
-        | lesson1_prepare.sh
+        | validate -> commit -> push -> Server pull
         v
-Server maps/
+shared/navigation/battle_1001/
         |
+        | lesson1_prepare.sh
         +-> pinned Skynet / protoc / lua-protobuf
-        +-> descriptor
+        +-> published descriptor/hash check
         +-> grid_map tests
         +-> battle_nav.so
         +-> doctor
@@ -8740,9 +9081,11 @@ battle_nav.so
 
 ---
 
-### 31.2 用一个总脚本完成 Server 构建与资产导入
+### 31.2 用一个总脚本验证已发布资产并完成 Server 构建
 
-前面的章节为了教学，把依赖、descriptor、CMake、测试、BMAP 导入拆开执行。进入最终验收后，不应该再靠人工记住十几条命令的顺序。脚本还会先确认 Server 没有处于运行状态，避免一边运行旧的 `battle_nav.so`，一边覆盖新的构建产物造成验收混淆。
+前面的章节为了教学，把依赖、协议生成、CMake、测试和 BMAP 发布拆开说明。进入最终验收后，不应该再靠人工记住十几条命令的顺序。脚本会验证当前 Git 工作区中的 `shared/` 发布资产，再执行 Server 构建。它还会先确认 Server 没有处于运行状态，避免一边运行旧的 `battle_nav.so`，一边覆盖新的本机构建产物造成验收混淆。
+
+Unity Bake 本身不会影响运行中的 Server。要求先停止 Server 的原因是后续要重新构建 Native/Skynet 产物，与 Bake 或跨端复制无关。
 
 本仓库新增：
 
@@ -8753,15 +9096,15 @@ server/scripts/linux/lesson1_prepare.sh
 它是第一课的 orchestration 入口。它不会复制 `run_server.sh` 的底层构建逻辑，而是把已经存在的商业化脚本组合成一次可重复的最终准备流程：
 
 ```text
-Unity Export
--> 检查 BMAP / manifest
+Git pull / 安装同一提交的发布包
+-> 检查 shared/ 中 BMAP / manifest
 -> 校验 manifest map_id / map_version / cell_size
--> 原子复制到 server/maps
+-> 校验共享协议源、descriptor 和 SHA-256
 -> run_server.sh build 或 rebuild
      -> pinned dependency bootstrap
      -> Skynet build
      -> lua-protobuf runtime
-     -> descriptor build/check
+     -> published descriptor check
      -> project Lua vararg policy check
      -> battle_nav.so
      -> Native tests
@@ -8770,31 +9113,41 @@ Unity Export
 -> LESSON1_SERVER_PREPARE_OK
 ```
 
-#### 第一次运行：从 Unity 导入资产
+#### 第一次运行：验证 Git 已发布资产
 
-先在 Unity 完成：
+这一节验收课程自带的 `Battle_1001`，不是任意地图的自动注册入口。先在 Unity 完成以下门禁：
 
 ```text
-Tools -> Battle Navigation -> Validate Current Battle Scene
-Tools -> Battle Navigation -> Export BMAP
+Window -> General -> Console：0 个红色编译错误
+当前 Scene：Assets/BattleNavigation/Scenes/Battle_1001.unity
+Hierarchy：BattleMapRoot、Navigation 和双方 BattleSpawnPoint 均无 Missing Script
+Scene 视图：能看到 Bake 后的蓝色 NavMesh
 ```
 
-确认输出目录存在：
+如果 `Tools -> 战斗导航` 菜单不存在，先处理 Console 第一条红色错误。菜单由 Editor 程序集注册，编译失败时继续调整 Scene 不会解决问题。
+
+日常直接执行推荐入口：
 
 ```text
-BuildArtifacts/Navigation/
+Tools -> 战斗导航 -> 00 一键执行：校验 -> 烘焙 -> 导出（推荐）
+```
+
+它会依次验证当前 Scene 的唯一地图根、Collider 和双方出生点，异步 Bake 并保存 Scene，再采样 NavMesh、计算 Clearance、校验并原子写出资产。排错时使用同一菜单下的 01、02、03 单步入口，不要跳过前一个失败阶段。
+
+确认 Unity 本地候选输出目录存在：
+
+```text
+shared/navigation/battle_1001/
   battle_1001.bmap
   battle_1001.manifest.json
 ```
 
-WSL：
+完成 Unity 侧验证后，把 BMAP 与 manifest 作为同一个提交推送。Server 机器拉取该提交；它不需要访问 Unity 所在机器。然后在 WSL 执行：
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
 
-BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
-  --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
 ```
 
 这里建议第一课最终验收使用 `BUILD_TYPE=Debug`。原因不是 Debug 构建更接近生产，而是后面的 gdb 需要完整符号。性能基线再单独使用 Release/RelWithDebInfo，不要拿 Debug 数据做性能结论。
@@ -8817,22 +9170,19 @@ map_version  = 1
 cell_size_mm = 500
 ```
 
-如果 Unity 误导出了别的地图版本，脚本会在覆盖 `server/maps` 前失败。
+如果拉取到的 manifest 不是课程要求的地图版本，脚本会在构建前失败。脚本不会跨目录复制，也不会把未提交的 Unity Bake 偷偷注入 Server。
 
-#### 后续重复验收：复用已经导入的地图
+#### 后续重复验收
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
 ```
 
 #### 需要从零检查构建链
 
 ```bash
-BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
-  --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation" \
-  --rebuild
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
 ```
 
 `--rebuild` 最终调用已有的：
@@ -8844,9 +9194,8 @@ run_server.sh rebuild
 它只清理项目自己的 build 产物和 Skynet 编译产物，不删除：
 
 ```text
-maps/
+shared/
 源码
-Unity 导出物
 固定 third_party 源码
 ```
 
@@ -8881,7 +9230,7 @@ run_server.sh doctor
   负责单一职责和局部故障定位
 ```
 
-不要为了“一键运行”把所有 curl、make、cmake、测试、资产复制重新写进一个巨大的脚本，否则以后一个步骤变化会产生两套构建逻辑。
+不要为了“一键运行”把所有 curl、make、cmake、测试和发布逻辑重新写进一个巨大脚本，否则以后一个步骤变化会产生两套构建逻辑。
 
 ---
 
@@ -8936,7 +9285,7 @@ NAV_SERVER_READY
 打开：
 
 ```text
-Tools -> Battle Navigation -> Server Query
+Tools -> 战斗导航 -> 调试 -> 12 查询 Skynet Server
 ```
 
 输入：
@@ -9057,6 +9406,127 @@ LUA_PANDA_ENABLE=1
 
 不会启动调试器，也不要求机器存在 LuaPanda/LuaSocket debug 依赖。
 
+
+#### 只读已有文件：`luapanda_debug.lua`
+
+这个模块解决“同一个启动方式既能正常运行，也能按 Service Lua State 选择性接入调试器”。Gateway 和 Query 会无条件 `require` 它，但只有 `LUA_PANDA_ENABLE=1` 时才修改当前 Lua State 的搜索路径并建立调试连接。
+
+本文件解决的问题：
+
+```text
+普通运行：start(role) 立即返回 false，不加载 LuaPanda/LuaSocket
+调试运行：按 role 选择独立端口，加载仓库本地依赖并连接 VS Code
+```
+
+本节必须掌握的概念：
+
+- `started` 属于当前 Service 的 Lua State，不是进程全局变量；
+- `package.path/package.cpath` 也属于当前 Lua State，因此每个被调试 Service 都要配置；
+- `gateway/query` 到端口的映射是显式合同，未知 role 必须失败；
+- 调试器连接只允许出现在 debug-only 启动链，不能进入生产路径。
+
+必须精读 `enabled`、`prepend_debug_paths` 和 `M.start`；端口表和字符串拼接属于可略读配置。输入是 role 与 `LUA_PANDA_*` 环境变量，成功返回 `true`，未启用返回 `false`；依赖缺失、端口非法、重复启动或未知 role 都通过 `assert` 显式失败。启用时会加载动态库并执行调试 TCP I/O；普通运行不做这些操作。
+
+操作类型：只读已有文件，不要重新创建。
+
+完整路径：
+
+```text
+server/lualib/debug/luapanda_debug.lua
+```
+
+完整源码：
+
+```lua
+-- 职责：按环境变量为指定 Skynet Service Lua State 启用 LuaPanda。
+-- 边界：Debug-only Runtime Library；默认完全不启动调试器。
+-- 输入/输出：service role + LUA_PANDA_* 环境变量 -> 当前 Lua State 的 LuaPanda 连接。
+-- 生命周期：每个 Service Lua State 最多启动一次；Gateway/Query 使用不同端口。
+-- 不负责：不下载依赖、不修改业务请求、不跨 Lua State 共享 debugger 状态。
+local skynet = require "skynet"
+
+local M = {}
+local started = false
+
+local DEFAULT_PORT = {
+    gateway = 8818,
+    query = 8819,
+}
+
+local PORT_ENV = {
+    gateway = "LUA_PANDA_GATEWAY_PORT",
+    query = "LUA_PANDA_QUERY_PORT",
+}
+
+local function enabled()
+    local value = os.getenv("LUA_PANDA_ENABLE")
+    return value == "1" or value == "true" or value == "TRUE"
+end
+
+local function prepend_debug_paths()
+    local socket_runtime = "./third_party/luasocket-runtime"
+    package.path = table.concat({
+        "./third_party/luapanda/?.lua",
+        socket_runtime .. "/share/lua/5.4/?.lua",
+        socket_runtime .. "/share/lua/5.4/?/init.lua",
+        package.path,
+    }, ";")
+    package.cpath = table.concat({
+        socket_runtime .. "/lib/lua/5.4/?.so",
+        socket_runtime .. "/lib/lua/5.4/?/core.so",
+        package.cpath,
+    }, ";")
+end
+
+-- role 目前只允许 gateway/query，因为第一课核心运行链只需要跟踪这两个 Lua State。
+-- LuaPanda.start 内部使用 LuaSocket；这是 debug-only 阻塞 socket，不属于业务 Gateway 网络模型。
+function M.start(role)
+    if not enabled() then
+        return false
+    end
+    assert(not started, "LuaPanda already started in this Lua State")
+    local default_port = assert(DEFAULT_PORT[role], "unsupported LuaPanda role: " .. tostring(role))
+    local port = tonumber(os.getenv(PORT_ENV[role]) or tostring(default_port))
+    assert(port and port > 0 and port <= 65535, "invalid LuaPanda port")
+    local host = os.getenv("LUA_PANDA_HOST") or "127.0.0.1"
+
+    prepend_debug_paths()
+    local ok_socket, socket_or_error = pcall(require, "socket.core")
+    assert(ok_socket, "LuaPanda requires debug LuaSocket runtime: " .. tostring(socket_or_error))
+
+    local panda = require "LuaPanda"
+    started = true
+    skynet.error("LUA_PANDA_CONNECT role=", role, " host=", host, " port=", port)
+    panda.start(host, port)
+    skynet.error("LUA_PANDA_READY role=", role, " port=", port)
+    return true
+end
+
+return M
+```
+
+调用链：
+
+```text
+Service 启动
+-> luapanda_debug.start(role)
+-> 检查 LUA_PANDA_ENABLE
+-> 为当前 Lua State 追加 LuaPanda/LuaSocket 路径
+-> require("socket.core") 验证 ABI 与搜索路径
+-> require("LuaPanda")
+-> panda.start(host, role 对应端口)
+-> VS Code Adapter 接受连接
+```
+
+运行验证：普通 `run_server.sh start` 不应出现 `LUA_PANDA_CONNECT`；执行 `debug_luapanda.sh` 时 Gateway 与 Query 应各出现一次 CONNECT 和 READY。
+
+理解自测：
+
+1. 为什么两个 Service 各自拥有一份 `started`？
+2. 为什么不能在 `main.lua` 里启动一个连接后让所有 Service 共用？
+3. 为什么普通启动仍可安全地 `require "debug.luapanda_debug"`？
+
+
 #### 为什么还需要 LuaSocket
 
 LuaPanda Debugger 需要一个 TCP 连接和 VS Code Adapter 通信。Skynet 自己的 `socketdriver` 是 Skynet runtime 网络层，并不是 LuaSocket 的 `socket.core` API。
@@ -9086,6 +9556,204 @@ commit e3ac3d3314f24cf939c36cac5b7dc1f2ed6ee129
 
 LuaSocket 3.1.0
 ```
+
+
+#### 只读已有文件：版本清单与 bootstrap
+
+版本清单把远程源码身份从脚本逻辑中分离。bootstrap 使用固定 tag/commit，防止某天上游更新后同一条课程命令构建出不同调试环境。
+
+操作类型：只读已有文件。
+
+```text
+server/debug/luapanda/VERSIONS.env
+```
+
+完整内容：
+
+```bash
+# Lesson 1 debug-only dependencies. These are not production runtime dependencies.
+LUAPANDA_VERSION=3.3.1
+LUAPANDA_COMMIT=e3ac3d3314f24cf939c36cac5b7dc1f2ed6ee129
+LUASOCKET_VERSION=3.1.0
+LUASOCKET_TAG=v3.1.0
+```
+
+`bootstrap_luapanda.sh` 解决“用 Skynet 自带 Lua 5.4 的 Header 构建匹配 ABI 的 LuaSocket，并把 LuaPanda 调试器固定安装在仓库本地”。它由学习者手工执行，也会被 `debug_luapanda.sh` 自动调用。
+
+本节必须掌握的概念：
+
+- Lua C Module 必须匹配实际宿主 Lua ABI，系统中另一个“能运行 lua 的版本”不能替代；
+- 下载源码、构建、安装、验证是四个独立失败边界；
+- `.pinned-commit/.pinned-tag` 用于拒绝静默版本漂移；
+- runtime 先安装到 staging，再替换正式目录，避免把半成品暴露给调试启动链。
+
+必须精读路径计算、版本检查、LuaSocket 编译参数和 `verify_runtime`；下载归档的常规 shell 语法可以略读。输入是固定版本清单和 Skynet Lua 5.4，输出只写 `server/third_party`；网络、工具、版本、编译或 `require` 任一步失败都会非零退出。脚本执行网络 I/O、文件 I/O、编译和目录替换，不会 sudo 安装或修改系统 Lua。
+
+操作类型：只读已有脚本并执行，不要从正文另建同名文件。
+
+完整路径：
+
+```text
+server/scripts/linux/bootstrap_luapanda.sh
+```
+
+完整源码：
+
+```bash
+#!/usr/bin/env bash
+# 职责：为 Skynet bundled Lua 5.4 构建 Lesson 1 LuaPanda 调试依赖。
+# 边界：Debug Tool Bootstrap；所有文件只写入 server/third_party，正常 Server 不依赖它。
+# 输入/输出：固定 LuaPanda commit + LuaSocket tag -> LuaPanda.lua + 本地 LuaSocket runtime。
+# 不负责：不启动 Server、不改系统 Lua、不 sudo 安装、不进入生产依赖链。
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+source "$SERVER_ROOT/debug/luapanda/VERSIONS.env"
+
+SKYNET_ROOT="$SERVER_ROOT/third_party/skynet"
+SKYNET_LUA_HEADERS="$SKYNET_ROOT/3rd/lua"
+SKYNET_LUA="$SKYNET_ROOT/3rd/lua/lua"
+LUAPANDA_DIR="$SERVER_ROOT/third_party/luapanda"
+LUASOCKET_SRC="$SERVER_ROOT/third_party/luasocket"
+LUASOCKET_RUNTIME="$SERVER_ROOT/third_party/luasocket-runtime"
+
+log() { printf '[luapanda-bootstrap] %s\n' "$*"; }
+fail() { printf '[luapanda-bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
+
+for tool in curl tar make cc install mktemp find; do
+    command -v "$tool" >/dev/null 2>&1 || fail "missing system tool: $tool"
+done
+
+mkdir -p "$SERVER_ROOT/third_party"
+
+if [[ ! -f "$SKYNET_LUA_HEADERS/lua.h" ]]; then
+    log "Skynet source missing; bootstrap pinned Skynet first"
+    "$SCRIPT_DIR/bootstrap_skynet.sh"
+fi
+if [[ ! -x "$SKYNET_LUA" ]]; then
+    log "Skynet bundled Lua executable missing; building Skynet"
+    "$SCRIPT_DIR/build_skynet.sh"
+fi
+
+install_luapanda() (
+    if [[ -f "$LUAPANDA_DIR/.pinned-commit" ]]; then
+        local actual
+        actual="$(cat "$LUAPANDA_DIR/.pinned-commit")"
+        [[ "$actual" == "$LUAPANDA_COMMIT" ]] || \
+            fail "LuaPanda version mismatch: expected=$LUAPANDA_COMMIT actual=$actual"
+        [[ -s "$LUAPANDA_DIR/LuaPanda.lua" ]] || fail "LuaPanda.lua missing"
+        return
+    fi
+    [[ ! -e "$LUAPANDA_DIR" ]] || fail "unmanaged LuaPanda directory exists: $LUAPANDA_DIR"
+
+    local archive temp source_file
+    archive="$(mktemp --suffix=.tar.gz)"
+    temp="$(mktemp -d)"
+    trap 'rm -f "$archive"; rm -rf "$temp"' EXIT
+
+    log "downloading LuaPanda $LUAPANDA_VERSION ($LUAPANDA_COMMIT)"
+    curl -fL --retry 4 --retry-delay 2 \
+        "https://codeload.github.com/Tencent/LuaPanda/tar.gz/$LUAPANDA_COMMIT" \
+        -o "$archive"
+    tar -xzf "$archive" -C "$temp"
+    source_file="$(find "$temp" -path '*/Debugger/LuaPanda.lua' -type f -print -quit)"
+    [[ -n "$source_file" ]] || fail "LuaPanda.lua not found in downloaded archive"
+
+    mkdir -p "$LUAPANDA_DIR"
+    install -m 0644 "$source_file" "$LUAPANDA_DIR/LuaPanda.lua"
+    printf '%s\n' "$LUAPANDA_COMMIT" > "$LUAPANDA_DIR/.pinned-commit"
+)
+
+install_luasocket_source() (
+    if [[ -f "$LUASOCKET_SRC/.pinned-tag" ]]; then
+        local actual
+        actual="$(cat "$LUASOCKET_SRC/.pinned-tag")"
+        [[ "$actual" == "$LUASOCKET_TAG" ]] || \
+            fail "LuaSocket version mismatch: expected=$LUASOCKET_TAG actual=$actual"
+        [[ -f "$LUASOCKET_SRC/src/makefile" ]] || fail "LuaSocket source incomplete"
+        return
+    fi
+    [[ ! -e "$LUASOCKET_SRC" ]] || fail "unmanaged LuaSocket directory exists: $LUASOCKET_SRC"
+
+    local archive temp
+    archive="$(mktemp --suffix=.tar.gz)"
+    temp="$(mktemp -d)"
+    trap 'rm -f "$archive"; rm -rf "$temp"' EXIT
+
+    log "downloading LuaSocket $LUASOCKET_VERSION"
+    curl -fL --retry 4 --retry-delay 2 \
+        "https://codeload.github.com/lunarmodules/luasocket/tar.gz/refs/tags/$LUASOCKET_TAG" \
+        -o "$archive"
+    mkdir -p "$LUASOCKET_SRC"
+    tar -xzf "$archive" --strip-components=1 -C "$LUASOCKET_SRC"
+    printf '%s\n' "$LUASOCKET_TAG" > "$LUASOCKET_SRC/.pinned-tag"
+)
+
+build_luasocket_runtime() {
+    local staging="$SERVER_ROOT/third_party/.luasocket-runtime.tmp.$$"
+    rm -rf -- "$staging"
+    mkdir -p "$staging"
+
+    log "building LuaSocket against Skynet bundled Lua 5.4 headers"
+    make -C "$LUASOCKET_SRC" clean >/dev/null
+    make -C "$LUASOCKET_SRC" linux \
+        LUAV=5.4 \
+        LUAINC_linux="$SKYNET_LUA_HEADERS"
+    make -C "$LUASOCKET_SRC" install \
+        LUAV=5.4 \
+        LUAINC_linux="$SKYNET_LUA_HEADERS" \
+        prefix="$staging" \
+        CDIR="lib/lua/5.4" \
+        LDIR="share/lua/5.4"
+
+    rm -rf -- "$LUASOCKET_RUNTIME"
+    mv "$staging" "$LUASOCKET_RUNTIME"
+}
+
+verify_runtime() {
+    local lua_path lua_cpath
+    lua_path="$LUASOCKET_RUNTIME/share/lua/5.4/?.lua;$LUASOCKET_RUNTIME/share/lua/5.4/?/init.lua;$LUAPANDA_DIR/?.lua;;"
+    lua_cpath="$LUASOCKET_RUNTIME/lib/lua/5.4/?.so;$LUASOCKET_RUNTIME/lib/lua/5.4/?/core.so;;"
+
+    LUA_PATH="$lua_path" LUA_CPATH="$lua_cpath" \
+        "$SKYNET_LUA" -e '
+            local core = assert(require("socket.core"))
+            local tcp = assert(core.tcp())
+            tcp:close()
+            local panda = assert(require("LuaPanda"))
+            assert(type(panda.start) == "function")
+            print("LUAPANDA_RUNTIME_OK")
+        '
+}
+
+install_luapanda
+install_luasocket_source
+build_luasocket_runtime
+verify_runtime
+
+log "READY LuaPanda=$LUAPANDA_VERSION LuaSocket=$LUASOCKET_VERSION"
+log "runtime=$LUASOCKET_RUNTIME"
+```
+
+把脚本拆成五段看：
+
+```text
+前置工具与 Skynet Lua 检查
+-> install_luapanda：取得固定 commit 的 LuaPanda.lua
+-> install_luasocket_source：取得固定 tag 的源码
+-> build_luasocket_runtime：针对 Skynet Lua 5.4 Header 构建并仓库内安装
+-> verify_runtime：用 Skynet 自带 lua 同时 require socket.core 和 LuaPanda
+```
+
+`LUAPANDA_RUNTIME_OK` 证明的是“当前 Skynet Lua 能加载当前 LuaSocket 和 LuaPanda”，比检查文件存在更强。它仍不证明 VS Code 端口已监听；连接验证在下一节完成。
+
+理解自测：
+
+1. 为什么不能直接执行 `apt install lua-socket` 后假设 ABI 一定匹配？
+2. 为什么验证命令必须使用 `third_party/skynet/3rd/lua/lua`？
+3. 为什么版本不一致时脚本选择失败，而不是自动覆盖本地目录？
+
 
 LuaSocket 会直接针对：
 
@@ -9144,6 +9812,19 @@ LuaPanda
 
 安装后确认扩展名称为 LuaPanda。
 
+
+也可以在 WSL VS Code 窗口的终端中用扩展 ID 明确安装并验证：
+
+```bash
+code --install-extension stuartwang.luapanda
+code --list-extensions | grep -Fx stuartwang.luapanda
+```
+
+扩展 ID 来自 LuaPanda 官方 `package.json` 的 `publisher=stuartwang` 与 `name=luapanda`。官方接入说明同样要求先让 VS Code 调试端等待，再由 Lua 侧调用 `LuaPanda.start(host, port)` 连接。参考：[LuaPanda 官方接入说明](https://github.com/Tencent/LuaPanda/blob/master/Docs/Manual/access-guidelines.md)和[官方 package.json](https://github.com/Tencent/LuaPanda/blob/master/package.json)。
+
+如果本机还装了另一款注册 `type: "lua"` 的调试扩展，F5 可能由错误的 Adapter 接管。先在当前 WSL Workspace 禁用冲突扩展并重载窗口，再继续配置。
+
+
 仓库提供模板：
 
 ```text
@@ -9158,6 +9839,75 @@ cp server/debug/luapanda/launch.json.example .vscode/launch.json
 ```
 
 如果已经有自己的 `launch.json`，不要整文件覆盖，只把模板里的两个 configuration 和 compound 合并进去。
+
+
+操作类型：复制模板生成本机工作区配置；仓库模板只读。
+
+模板完整内容：
+
+```json
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "LuaPanda Lesson1 Gateway",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8818,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "LuaPanda Lesson1 Query",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8819,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "LuaPanda Lesson1 Gateway + Query",
+      "configurations": [
+        "LuaPanda Lesson1 Gateway",
+        "LuaPanda Lesson1 Query"
+      ]
+    }
+  ]
+}
+```
+
+关键字段：
+
+```text
+type = lua
+  由 LuaPanda 扩展注册的 Debug Adapter 类型。
+
+request = launch
+  启动 Adapter 并等待 LuaPanda.lua 主动连接；不会替你启动 Skynet。
+
+cwd = ${workspaceFolder}/server
+  与 Server 的实际工作目录一致，便于自动路径映射。
+
+connectionPort
+  必须与 luapanda_debug.lua 中对应 role 的端口一致。
+
+autoPathMode = true
+  先让 Adapter 尝试自动匹配 WSL 源码路径。
+
+useCHook = false
+  使用 Lua hook；不加载另一个可能与 Skynet Lua ABI 不匹配的 C Hook。
+```
+
+复制或合并完成后，在 VS Code 的 Run and Debug 下拉框中必须能看到两个单独目标和一个 compound。若看不到，先检查当前打开的是仓库根目录、文件确实位于根目录的 `.vscode/launch.json`，以及 LuaPanda 扩展安装在当前 WSL Workspace。
+
 
 模板里有两个目标：
 
@@ -9183,6 +9933,76 @@ LuaPanda Lesson1 Gateway + Query
 第一课 WSL/Linux + Lua 5.4 直接使用 Lua hook 即可。LuaPanda 的 C hook 是调试性能优化，不是功能正确性的前置条件；这里优先减少额外 C ABI 变量。
 
 #### 第一次只验证连接
+
+
+#### 只读已有文件：调试启动编排脚本
+
+`debug_luapanda.sh` 只负责把“依赖准备、环境变量、Server 前台启动”按固定顺序串起来。它不实现 LuaPanda 协议，也不复制 `run_server.sh` 的构建和进程管理逻辑。
+
+操作类型：只读已有文件并执行。
+
+```text
+server/scripts/linux/debug_luapanda.sh
+```
+
+完整源码：
+
+```bash
+#!/usr/bin/env bash
+# 职责：以 debug-only LuaPanda 环境启动 Lesson 1 Server；可选同时进入 gdb。
+# 使用前：VS Code 中先启动 Gateway(8818)+Query(8819) 两个 LuaPanda target。
+set -euo pipefail
+
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+MODE="lua"
+
+if [[ "${1:-}" == "--gdb" ]]; then
+    MODE="gdb"
+    shift
+fi
+[[ $# -eq 0 ]] || { echo "usage: $0 [--gdb]" >&2; exit 2; }
+
+"$SCRIPT_DIR/bootstrap_luapanda.sh"
+
+export LUA_PANDA_ENABLE=1
+export LUA_PANDA_HOST="${LUA_PANDA_HOST:-127.0.0.1}"
+export LUA_PANDA_GATEWAY_PORT="${LUA_PANDA_GATEWAY_PORT:-8818}"
+export LUA_PANDA_QUERY_PORT="${LUA_PANDA_QUERY_PORT:-8819}"
+
+printf '[luapanda-debug] gateway=%s:%s query=%s:%s\n' \
+    "$LUA_PANDA_HOST" "$LUA_PANDA_GATEWAY_PORT" \
+    "$LUA_PANDA_HOST" "$LUA_PANDA_QUERY_PORT"
+
+if [[ "$MODE" == "gdb" ]]; then
+    command -v gdb >/dev/null 2>&1 || {
+        echo "gdb is required: sudo apt-get install -y gdb" >&2
+        exit 1
+    }
+    "$SCRIPT_DIR/run_server.sh" doctor
+    cd "$SERVER_ROOT"
+    exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" \
+        --args "$SERVER_ROOT/third_party/skynet/skynet" config/skynet.lua
+fi
+
+exec "$SCRIPT_DIR/run_server.sh" foreground
+```
+
+输入只有可选的 `--gdb`；无参数时以前台模式启动 Skynet，`--gdb` 时先执行 doctor 再由 gdb 接管进程。它会执行 I/O、设置当前子进程环境并最终 `exec`；任何多余参数都以退出码 2 失败。
+
+启动顺序固定为：
+
+```text
+VS Code 先启动 Gateway + Query compound，监听 8818/8819
+-> WSL 执行 debug_luapanda.sh
+-> bootstrap 验证本地调试 runtime
+-> Skynet 创建 Query/Gateway Service
+-> 两个 Lua State 分别连接两个 Adapter
+-> 两边出现 LUA_PANDA_READY
+```
+
+第一次连接验收让 Adapter 先监听，可以避免把“端口尚未就绪”和源码路径、LuaSocket ABI 等问题混在一起排查。
+
 
 VS Code：
 
@@ -9371,7 +10191,7 @@ LuaPanda 到这里已经完成职责。下一层是 C++。
 先确保第一课是 Debug 构建：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map --rebuild
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
 ```
 
 仓库提供：
@@ -9519,7 +10339,7 @@ WorldToGrid
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
 ```
 
 必须：

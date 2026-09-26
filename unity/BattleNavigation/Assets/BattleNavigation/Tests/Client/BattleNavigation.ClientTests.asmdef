@@ -1,17 +1,16 @@
 {
-  "name": "BattleNavigation.Editor",
-  "rootNamespace": "BattleNavigation.Editor",
+  "name": "BattleNavigation.ClientTests",
+  "rootNamespace": "BattleNavigation.Tests",
   "references": [
-    "BattleNavigation.Runtime",
-    "Unity.AI.Navigation",
-    "Unity.AI.Navigation.Editor"
+    "BattleNavigation.Client"
   ],
   "includePlatforms": ["Editor"],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
+  "autoReferenced": false,
   "overrideReferences": false,
   "precompiledReferences": [],
-  "autoReferenced": true,
+  "optionalUnityReferences": ["TestAssemblies"],
   "defineConstraints": [],
   "versionDefines": [],
   "noEngineReferences": false

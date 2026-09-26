@@ -494,3 +494,11 @@ lualib/protocol/navigation_codec.lua  Gateway 内部 codec
 ```
 
 商业级首先意味着 ownership、资源上限、错误、可观察性和演进边界正确。生产环境所需但尚未进入当前课程链路的能力必须明确列为阶段外能力，在首次产生真实用途时再引入。
+
+## D033 - 跨端合同以版本化发布资产交付
+
+Unity Authoring、协议生成和 Server 运行可能位于不同机器。仓库根目录 `shared/` 是课程阶段的发布边界：`shared/protocol/` 保存唯一 `.proto`、固定工具版本与可验证生成物，`shared/navigation/` 保存通过验证的 BMAP 与 manifest。
+
+“共享”表示各端消费同一个 Git 提交、业务版本和内容哈希，不表示运行期读取另一台机器的工作目录。Unity Bake 只产生本地候选资产；完成验证、提交和推送后，Server 机器通过 Git 更新或部署包获得该版本。Server 启动不重新生成 descriptor，也不读取 Unity `BuildArtifacts`、`Assets` 或 Windows 绝对路径。
+
+生产阶段可以把 `server/` 与所需 `shared/` 打成不可变发布包，或把相同目录迁移到制品仓库。迁移不得改变原子发布、版本固定和哈希校验语义。

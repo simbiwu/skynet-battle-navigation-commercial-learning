@@ -1,12 +1,12 @@
 {
-  "name": "BattleNavigation.Editor",
-  "rootNamespace": "BattleNavigation.Editor",
+  "name": "BattleNavigation.Client.Editor",
+  "rootNamespace": "BattleNavigation.Client.Editor",
   "references": [
-    "BattleNavigation.Runtime",
-    "Unity.AI.Navigation",
-    "Unity.AI.Navigation.Editor"
+    "BattleNavigation.Client"
   ],
-  "includePlatforms": ["Editor"],
+  "includePlatforms": [
+    "Editor"
+  ],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,

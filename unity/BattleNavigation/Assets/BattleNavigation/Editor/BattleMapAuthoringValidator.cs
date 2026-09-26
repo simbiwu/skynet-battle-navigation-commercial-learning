@@ -21,7 +21,7 @@ namespace BattleNavigation.Editor
         /// 验证当前打开的场景。
         /// 本方法只做快速检查，不执行 NavMesh Bake、Grid Sampling 或 BMAP Export。
         /// </summary>
-        [MenuItem("Tools/Battle Navigation/Validate Current Battle Scene")]
+        [MenuItem("Tools/战斗导航/01 校验当前战斗场景", false, 101)]
         public static void Validate()
         {
             // 每个 Battle Scene 必须只有一个 BattleMapRoot，它保存该地图的导出配置。

@@ -21,7 +21,7 @@ namespace BattleNavigation.Editor
             SceneView.duringSceneGui += Draw;
         }
 
-        [MenuItem("Tools/Battle Navigation/Toggle Overlay")]
+        [MenuItem("Tools/战斗导航/调试/11 切换 Grid Overlay", false, 111)]
         private static void Toggle()
         {
             enabled = !enabled;

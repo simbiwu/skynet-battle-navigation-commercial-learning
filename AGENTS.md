@@ -26,17 +26,86 @@ https://github.com/simbiwu/Skynet-slg-learning
 
 禁止合并旧工程或复制旧业务。
 
+## 可抽取的 Skynet Server 模块
+
+课程首先完成当前真实链路，同时把已经成熟、与具体 SLG 业务无关的能力设计成以后可抽取到独立 Skynet Server 框架 `skynet-flywow` 的模块。抽取时不应重写核心实现，也不应要求网络、地图、热更等模块互相依赖。
+
+`skynet-flywow` 使用独立 Git 仓库，当前本机编辑源为：
+
+```text
+~/workspace/skynet-flywow
+```
+
+学习项目与框架仓库按阶段协作：
+
+```text
+课程中的真实问题
+-> 在课程链路中实现、运行、调试和测试
+-> 判断是否与具体业务无关
+-> 在 skynet-flywow 中整理公开合同、独立测试和接入示例
+-> 再由课程或其他商业项目通过公开边界接入
+```
+
+禁止直接用一个仓库的目录覆盖另一个仓库。抽取时分别修改、验证和提交两个仓库，保留各自的历史、版本和适配层；框架远端固定为 `https://github.com/simbiwu/Skynet-FlyWow.git`，只有用户明确要求提交或同步时才 Push。
+
+预期可以独立复用的方向包括：
+
+```text
+网络接入与连接生命周期
+协议 framing / codec / dispatch
+配置、日志、指标和错误合同
+Service 启停与依赖注入
+代码或配置热更、状态迁移与回滚
+静态地图资产加载与查询
+导航查询运行时
+测试、诊断和部署工具
+```
+
+模块依赖必须形成单向、可解释的 DAG：
+
+```text
+composition root
+  -> 独立基础模块
+  -> 少量稳定公共合同
+  -> Skynet / Lua / Native 等固定运行时依赖
+
+业务模块 -> 基础模块
+基础模块 -X-> Battle / SLG 具体业务
+网络模块 -X-> 地图或导航模块
+地图或导航模块 -X-> 网络模块
+```
+
+`common` 只能放真正稳定、被多个模块共同需要的最小合同，例如错误结构、版本标识和少量值类型。禁止把它变成无归属代码、业务 DTO、全局状态或循环依赖的收容目录。
+
+每个准备复用的模块在课程中达到稳定边界时，都要能回答：
+
+```text
+公开 API 和版本合同是什么
+允许依赖什么，禁止依赖什么
+状态、Service、Lua State、native 对象和 buffer 由谁拥有
+配置怎样注入，是否依赖全局名字或固定路径
+怎样启动、停止、重载、回滚和报告失败
+怎样单独 build / test / benchmark / diagnose
+怎样从课程仓库打包或迁移到另一项目
+```
+
+可抽取不等于提前建立空框架。继续遵守“架构预留 ≠ 提前教学”：只有当前课程出现真实调用者、实现已经工作、边界能由测试证明时，才整理稳定接口和模块目录。第一次真实实现直接遵守正确的 ownership、依赖方向和错误合同，避免以后靠大改拆除业务耦合。
+
+课程工程仍然是独立、可运行的完整仓库，不在教学过程中强制依赖另一个尚未发布的个人框架。后续抽取优先采用保留历史和测试的迁移方式；共享源码的具体发布形态（独立仓库、包、submodule 或其他方式）等出现第二个真实消费者后再决定。
+
 ## 本机双工作区职责
 
 本项目在当前开发机使用两个完整 Git worktree，但每类文件只有一个编辑源，禁止同时维护两份实现：
 
 ```text
 G:\simbi\dev\skynet-battle-navigation-commercial-learning
-  docs/、unity/、codex/、根目录课程文档和文档生成工具的编辑源
+  docs/、unity/、shared/navigation/、shared/protocol/generated/unity/、codex/、根目录课程文档和文档生成工具的编辑源
 
 ~/workspace/skynet-battle-navigation-commercial-learning
-  server/ 的编辑源
+  server/、shared/protocol/ 源文件与 Server 生成物的编辑源
 ```
+
+两边通过 Git 提交同步，不把 `/mnt/g/...`、Windows 盘符、WSL home 或另一工作区路径写进 Runtime 配置。跨端共享资产遵守后文“跨端共享合同与发布资产”规则；双工作区只是一种本机开发安排，不是部署拓扑。
 
 WSL 中必须保持完整主仓库结构，Server 位于：
 
@@ -304,6 +373,25 @@ Lesson 1 static GridMap 加载后 immutable。
 Lesson 2 每场 Battle 才出现 dynamic occupancy。
 
 禁止把动态单位写入共享静态地图。
+
+## 跨端共享合同与发布资产
+
+Unity、Server 和离线工具共同依赖的内容必须以仓库根目录 `shared/` 为唯一版本化来源：
+
+```text
+shared/protocol/    .proto、固定版本和各端可验证生成物
+shared/navigation/  Unity 验证通过并准备发布的 BMAP 与 manifest
+```
+
+共享指的是同一个 Git 提交、发布版本和内容哈希，不是共享某台机器的实时目录。Unity Bake 只更新当前工作区的候选资产；验证、提交和推送后，Server 所在机器通过 Git 或发布包取得同一版本，新的资产才可生效。真实部署必须允许 Unity、构建机和 Server 位于不同机器。
+
+要求：
+
+- `.proto` 只有一份源文件；Unity C#、Server descriptor 和校验文件必须从它生成并在同一次提交中更新；
+- Server 启动和部署只消费已发布生成物，不在启动时临时生成另一份协议合同；
+- BMAP 与 manifest 成对发布，目录按地图 ID 隔离；Server 不读取 Unity `Assets/`、Library、临时 Bake 目录或 Windows 绝对路径；
+- 本地双工作区只能用来开发和验证，不能成为运行时架构前提；
+- 后续若改用制品仓库，仍必须保留版本、哈希和原子发布语义，不能退回人工复制“当前最新文件”。
 
 ## Native Thread Safety
 
