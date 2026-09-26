@@ -10,7 +10,7 @@ Tuanjie Scene
   -> C++ BMapReader / GridMap / MapRegistry
   -> Lua C Binding
   -> Skynet QueryWorker
-  -> socketdriver + netpack + Protobuf
+  -> FlyWow Gateway（TCP/WebSocket + Protobuf）
   -> Unity Server Query Window
 ```
 
@@ -6636,64 +6636,53 @@ lualib/   只放同一 Lua State 内由 require 加载的普通模块
 service/
   main.lua
   navigation_query.lua
-  navigation_gateway.lua
 lualib/
   navigation/
     query_logic.lua
-  protocol/
-    navigation_codec.lua
+  protocol/                         # 构建时生成的 registry 输出目录，不手工维护
 protocol/
   navigation_query.proto
   generated/server/navigation_query.pb
 config/
+  gateway.lua
   game.lua
   skynet.lua
 ```
 
-`protocol/` 保存 `.proto` 源和生成物；运行期 `require` 的 codec 放在 `lualib/protocol/`。文件所在目录直接表达它的运行身份。
+`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库，由 `config/skynet.lua` 加入搜索路径；学习工程不复制这些源码。`protocol/` 保存 `.proto` 源，`lualib/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
-Gateway 改成 `socketdriver + netpack` 后，配置除了监听地址和协议版本，还需要明确连接容量、单连接并发请求上限以及慢连接写缓冲保护。`netpack` 使用 16 位包长，因此应用 payload 上限不能再写成 64 KiB；精确上限是 `65535` bytes。
+FlyWow Gateway 的配置除了监听地址和协议版本，还需要明确 transport、连接容量和慢连接写缓冲保护。TCP framing 使用 16 位包长，因此应用 payload 上限是 `65535` bytes；WebSocket 复用同一上限，避免两种 transport 产生不同的业务合同。
 
-操作：完整替换 Server 业务配置。
+操作：新建 Gateway 默认配置。Gateway Service 启动时自动读取它；业务入口通常只传入 Query Service handle。
 
-完整替换已有文件：`config/game.lua`
+新建文件：`config/gateway.lua`
 
 ```lua
--- 职责：集中声明导航查询 Server 的监听、协议和静态地图启动参数。
--- 边界：Server Runtime Config；由各 Service 在自己的 Lua State 中只读加载。
--- 输入/输出：无运行时输入 -> 一张进程配置 table。
--- 生命周期：每个 Lua State 由 require 缓存一份；启动完成后不得修改。
--- 不负责：不加载地图、不打开端口、不保存连接或战斗动态状态。
+-- 职责：声明 FlyWow Gateway 的宿主默认配置，集中管理监听、协议产物和资源上限。
+-- 边界：Server Runtime Config；由 flywow_gateway Service 在启动时只读加载。
+-- 输入/输出：无运行时输入 -> Gateway 默认配置 table；start 覆盖项可临时替换顶层字段。
+-- 生命周期：Gateway 启动时读取一次；启动后不可修改，不持有连接或业务状态。
+-- 不负责：不创建 Service、不生成协议、不注册 command、不处理 Socket。
 return {
-    host = "127.0.0.1",              -- 第一课默认只绑定本机；显式修改后才暴露到其他网卡。
-    port = 19001,                     -- Navigation Gateway TCP 端口。
-    backlog = 128,                    -- listen backlog；不是最大在线连接数。
-    tcp_nodelay = true,               -- 小请求/响应优先减少 Nagle 延迟。
-    max_clients = 1024,               -- 单个课程 Gateway 的连接上限。
-    max_inflight_per_connection = 32, -- 防止单连接无限流水请求堆积跨 Service call。
-    write_warning_close_kb = 1024,    -- Skynet write buffer warning 达到该值时主动断开慢连接。
+    host = "127.0.0.1",                         -- 监听地址；默认只接受本机连接。
+    port = 19001,                                -- TCP/WebSocket 监听端口；范围 1..65535。
+    backlog = 128,                               -- OS accept backlog；不等于 max_clients。
+    transport = "tcp",                          -- 接入模式：tcp 或 websocket。
+    websocket_protocol = "ws",                  -- transport=websocket 时选择 Skynet 内置 ws/wss。
 
-    protocol_version = 1,             -- Envelope 兼容版本。
-    query_cell_command = 1001,        -- QueryCell 命令号。
-    -- skynet.netpack 的 framing 固定为 2-byte Big Endian uint16 length。
-    -- netpack.pack 对 payload >= 0x10000 直接报错，因此业务上限固定为 65535 bytes。
-    max_frame_bytes = 0xffff,
+    descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 路径。
+    registry_module = "protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
+    protocol_version = 1,                          -- Envelope 兼容版本。
 
-    -- 由 shared/protocol 发布的 Server descriptor；相对 server/ 运行目录解析。
-    protocol_descriptor = "../shared/protocol/generated/server/navigation_query.pb",
-
-    map = {
-        id = 1001,                       -- BMAP Header 和协议共用的 uint32 地图 ID。
-        version = 1,                     -- 必须与 BMAP Header 一致。
-        -- 由 Unity Authoring 生成并经 Git 发布；Server 只消费已提交版本。
-        bmap = "../shared/navigation/battle_1001/battle_1001.bmap",
-    },
+    max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
+    max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。
+    write_warning_close_kb = 1024,                -- 写缓冲 warning 达到该 KB 时关闭慢连接。
 }
 ```
 
-这里的 `max_clients` 和 `max_inflight_per_connection` 解决的是两个不同问题：前者限制同时存在的 TCP 连接数，后者限制一个连接在 Gateway `skynet.call(Query Service)` yield 期间能够堆积多少未完成请求。二者都属于接入层保护，不进入 Query/Navigate 业务。
+这里的 Gateway 配置属于接入层，不进入 Query/Navigate 业务。`descriptor_path` 和 `registry_module` 是可替换的协议 bundle 参数；同一套 FlyWow Gateway 可以接入其他项目的协议产物。
 
 端口继续默认绑定 `127.0.0.1`。需要局域网联调时显式改成 `0.0.0.0`，并同时确认宿主机/WSL 防火墙；不要为了“连得上”把正式配置默认暴露到所有网卡。
 
@@ -6701,9 +6690,7 @@ return {
 
 这个文件是 Gateway Lua State 内的普通运行库。它不拥有 Socket 和 Service 生命周期，因此放入 `lualib/protocol/`。
 
-操作：把已经创建的 `protocol/codec.lua` 移动并完整替换为下面内容。
-
-移动并完整替换：`protocol/codec.lua` -> `lualib/protocol/navigation_codec.lua`
+历史阅读材料：下面的旧 codec 代码只用于解释 descriptor 与 Protobuf bytes 的关系。当前运行链不再创建或移动业务专用 `navigation_codec.lua`；Protobuf codec 由 FlyWow Gateway 按生成的 `protocol.navigation_registry` 自动加载，也不要求业务 Service 注册 command。
 
 ```lua
 -- 职责：集中封装导航协议的 Protobuf descriptor 加载和消息编解码。
@@ -6877,16 +6864,15 @@ local config = require "config.game"
 local query_logic = require "navigation.query_logic"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
--- query_cell handler 内部不 yield，响应 table 由 skynet.pack 复制发送。
+-- gateway_dispatch handler 只接收已完成 Protobuf 解码的 request table。
 skynet.start(function()
     query_logic.start(config)
 
     skynet.dispatch("lua", function(_session, _source, command, payload)
-        if command ~= "query_cell" then
-            error("unknown navigation_query command: " .. tostring(command))
-        end
-        local response = query_logic.query(assert(payload, "query payload is required"))
-        skynet.ret(skynet.pack(response))
+        assert(command == "gateway_dispatch", "navigation_query only accepts gateway_dispatch")
+        assert(payload.command == "QueryCell", "unsupported navigation command: " .. tostring(payload.command))
+        local response = query_logic.query(assert(payload.request, "query request is required"))
+        skynet.retpack({ ok = true, response = response })
     end)
 
     skynet.error("NAV_QUERY_READY address=", skynet.address(skynet.self()),
@@ -6898,6 +6884,65 @@ end)
 
 ## 27. TCP framing：`socketdriver + netpack` 的事件驱动 Gateway
 
+> 当前可运行实现已经收敛到 `skynet-flywow` 的 `flywow_gateway`。本节后面的 `socketdriver + netpack` 代码保留用于解释 Skynet 原始 Socket 事件、queue ownership 和半包/粘包处理；它是底层实现教学材料，不再是第一课启动链的最终 Gateway 文件。
+
+### 27.0 当前 Gateway 接入入口：FlyWow Gateway
+
+第一课现在由 `main.lua` 创建 `flywow_gateway` Service，并显式注入 Query Service handle。descriptor、registry、transport 和资源上限由 `config/gateway.lua` 默认配置提供，必要时才通过 start 覆盖；业务 Query Service 不再注册 `query_cell` 协议，也不接触 TCP/WebSocket frame。
+
+当前运行链：
+
+```text
+Unity TCP / WebSocket
+-> flywow_gateway
+-> Envelope 校验
+-> 生成的 protocol.navigation_registry
+-> Protobuf request 解码
+-> navigation_query.gateway_dispatch
+-> QueryCell response table
+-> FlyWow 自动编码 response Envelope
+```
+
+协议 registry 由 `shared/protocol/navigation_query.proto` 的 `service/rpc` 结构在构建阶段生成：
+
+```bash
+./scripts/linux/run_server.sh build
+```
+
+run_server.sh 只负责调用独立的 Skynet-FlyWow 生成器；生成器实现不复制到学习工程。若框架仓库不在当前 workspace 的约定位置，设置 FLYWOW_ROOT=/path/to/skynet-flywow。
+
+需要替换协议 bundle 时，可以用 `GATEWAY_REGISTRY_OUTPUT` 改变 registry 生成路径，并同步让 `config/gateway.lua` 的 `registry_module` 指向相同的 Lua 模块；默认值是 `server/lualib/protocol/navigation_registry.lua`。
+
+运行时不解析 `.proto`，也不要求业务代码调用 `gateway.register_command`。业务 Service 只处理：
+
+```lua
+skynet.dispatch("lua", function(_, _, command, payload)
+    assert(command == "gateway_dispatch")
+    assert(payload.command == "QueryCell")
+    local response = query_logic.query(payload.request)
+    skynet.retpack({ ok = true, response = response })
+end)
+```
+
+Gateway transport 由 `server/config/gateway.lua` 的 `transport` 决定：
+
+```lua
+transport = "tcp"        -- TCP uint16 length + Envelope
+transport = "websocket"  -- Skynet 内置 http.websocket + binary Envelope
+```
+
+WebSocket 不由课程自己重复实现协议解析；Skynet 固定版本的 `http.websocket` 负责 Upgrade、mask、fragment、ping/pong 和 close frame，FlyWow 负责 binary-only 策略、Envelope、业务路由、背压和错误合同。
+
+验证 WebSocket 时，把 `server/config/gateway.lua` 的 `transport` 临时改为 `"websocket"`，执行 `./scripts/linux/run_server.sh restart`，再用支持 WebSocket binary message 的客户端发送同一份 Envelope。日志应出现 `FLYWOW_GATEWAY_READY transport=websocket`，响应仍是同一套 `Envelope`；验证完成后恢复 `transport = "tcp"`。不要把文本 JSON 当作 WebSocket 业务协议，也不要在客户端再包一层自定义长度头。
+
+完整的 FlyWow 接入合同见独立仓库：
+
+```text
+skynet-flywow/docs/gateway/README.md
+```
+
+从下一小节开始的 `27.1`～`27.9` 是保留的历史 `socketdriver + netpack` 深读材料，用来理解 Skynet 原始 Socket 事件、消息 ownership、`queue` 和 `yield` 边界。它们不再是当前启动链的操作步骤；当前 Gateway 的构建、启动和验收以本节、`Skynet-FlyWow/service/flywow_gateway.lua` 以及第 31 节中的 FlyWow 日志为准。
+
 现在处理第一课网络链路中最接近真实 Skynet Server 的一层。旧实现用 `skynet.socket` 给每个连接启动一个 `client_loop`，然后反复 `socket.read(fd)`，自己维护字符串 buffer、半包和粘包。这个写法可以工作，也适合普通 Lua 网络程序入门，但它把 Skynet 底层已经提供的 socket event 与 `netpack` 分帧能力重新做了一遍。
 
 这一版直接使用 Skynet v1.8.0 自带的底层组合：
@@ -6905,7 +6950,7 @@ end)
 ```text
 socket thread
    -> PTYPE_SOCKET message
-   -> navigation_gateway.lua
+   -> 历史 navigation_gateway.lua（socketdriver + netpack 教学实现）
       -> netpack.filter(queue, msg, sz)
          ├─ init      listen 完成
          ├─ open      accept 新连接
@@ -6926,11 +6971,11 @@ socket thread
 第一课只承载低频 `QueryCell`，但 Gateway 仍然是正式接入层，不能用“教学 Demo”作为省略错误边界的理由。本节必须做到：
 
 ```text
-Gateway Service 独占 listen fd、client fd、connections 和 netpack queue
+Gateway Service 独占 listen fd、client fd、connections 和 transport 生命周期
 协议先完成 frame/version/command/body 校验，再进入 Query Service
-max_frame、max_clients、单连接 in-flight 和写缓冲都有明确上限
-netpack C message 在任何 yield 前转换或释放
-skynet.call 返回后重新确认 connection object，防止 fd 复用误写
+max_frame、max_clients 和写缓冲都有明确上限；同一连接按顺序处理请求
+Protobuf bytes 在跨 Service yield 前已经转换为 Lua table
+skynet.call 返回后重新确认 connection object，防止连接关闭后的误写
 close/error/stop 都有可重复、可观察的资源回收路径
 main 保存并显式注入 Query Service handle，不依赖隐藏全局名字
 Gateway 只做接入、协议和转发，不加载 BMAP，不执行 Native 查询
@@ -6940,7 +6985,7 @@ Gateway 只做接入、协议和转发，不加载 BMAP，不执行 Native 查�
 
 当前阶段不宣称 Gateway 已经可以直接暴露到生产公网。TLS、账号鉴权、按玩家限流、空闲超时、指标平台、多实例负载均衡和应用层 drain 属于真实部署还要补齐的能力。教程会在它们首次成为当前链路需求时引入；缺少这些能力不能被包装成“已经生产就绪”。
 
-这里最重要的变化不是 API 名字，而是 ownership 模型：Gateway 不再为每个 fd 建一个“读循环 owner”。连接状态保存在 Gateway Service 的 `connections[fd]` 中，底层 socket 事件不断投递到同一个 Service；每条请求自己的消息协程可以在 `skynet.call` 处 yield。
+这里最重要的变化不是 API 名字，而是 ownership 模型：FlyWow Gateway 仍然是连接和协议状态的唯一 owner，但 TCP 与 WebSocket transport 共用同一套 `connection` 上下文和业务 dispatch 合同。TCP 会话协程、WebSocket 内置回调和业务 `skynet.call` 都只在 Gateway 自己的 Service 边界内运行；业务 Service 不接触 fd、frame 或底层 WebSocket 状态。
 
 ### 27.1 为什么 framing 必须从 4-byte 改成 2-byte
 
@@ -7207,7 +7252,7 @@ SOCKET.open(fd, address)
 
 ```text
 删除：server/lualib/network/length_frame.lua
-完整替换：server/service/navigation_gateway.lua
+历史底层示例：以下代码用于精读 `socketdriver + netpack` 的 ownership、queue 和事件分发，不要再新建 `server/service/navigation_gateway.lua`。当前运行链使用 `Skynet-FlyWow/service/flywow_gateway.lua`。
 ```
 
 ```lua
@@ -7823,8 +7868,13 @@ local skynet = require "skynet"
 -- Query 先完成地图加载，Gateway 再监听，避免端口就绪时依赖尚未可用。
 skynet.start(function()
     local query_service = skynet.newservice("navigation_query")
-    local gateway_service = skynet.newservice("navigation_gateway")
-    assert(skynet.call(gateway_service, "lua", "start", query_service))
+    -- ready call 等待 Query 完成 BMAP 加载并注册 dispatch，随后 Gateway 才开始监听。
+    assert(skynet.call(query_service, "lua", "ready"))
+    local gateway_service = skynet.newservice("flywow_gateway")
+    -- Gateway 从 config.gateway 读取默认配置；composition root 只注入业务 handler handle。
+    assert(skynet.call(gateway_service, "lua", "start", {
+        handler_service = query_service,
+    }))
 
     skynet.error("NAV_SERVER_READY query=", skynet.address(query_service),
                  " gateway=", skynet.address(gateway_service))
@@ -7843,10 +7893,12 @@ Skynet 可执行文件接收的是进程配置文件。下面的配置把本工�
 ```lua
 -- 职责：声明当前工程的 Skynet 进程启动参数和 Lua/C 模块搜索路径。
 -- 边界：Server Runtime Bootstrap；由 skynet 可执行文件在创建 Service 前读取。
--- 输入/输出：仓库内固定目录 -> main Service 及其运行时加载路径。
+-- 输入/输出：仓库目录与 FLYWOW_ROOT -> main Service 及其运行时加载路径。
 -- 生命周期：进程启动时读取一次；不会进入业务 Service 的 Lua State。
 -- 不负责：不加载 BMAP、不监听业务端口、不包含业务配置。
 local skynet_root = "./third_party/skynet/"
+-- `$FLYWOW_ROOT` 由 run_server.sh 在依赖检查后导出；Skynet 配置加载器会先替换环境变量。
+local flywow_root = "$FLYWOW_ROOT"
 
 thread = 4
 harbor = 0
@@ -7854,9 +7906,12 @@ logger = nil
 start = "main"
 bootstrap = "snlua bootstrap"
 
-luaservice = "./service/?.lua;" .. skynet_root .. "service/?.lua"
+-- flywow_gateway 和 flywow.gateway.* 由独立框架仓库提供；业务仓库不复制这些源码。
+luaservice = "./service/?.lua;" .. flywow_root .. "/service/?.lua;" .. skynet_root .. "service/?.lua"
 lualoader = skynet_root .. "lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
+           flywow_root .. "/lualib/?.lua;" ..
+           flywow_root .. "/lualib/?/init.lua;" ..
            skynet_root .. "lualib/?.lua;" ..
            skynet_root .. "lualib/?/init.lua"
 lua_cpath = "./build/lua_battle_nav/?.so;" ..
@@ -7864,6 +7919,8 @@ lua_cpath = "./build/lua_battle_nav/?.so;" ..
             skynet_root .. "luaclib/?.so"
 cpath = skynet_root .. "cservice/?.so"
 ```
+
+`run_server.sh` 会在构建阶段查找 `Skynet-FlyWow`：优先使用环境变量 `FLYWOW_ROOT`，其次查找仓库内 `third_party/skynet-flywow`，最后查找当前 workspace 的 sibling 仓库。直接运行 Skynet 时也必须先导出 `FLYWOW_ROOT`，否则配置无法定位框架 Service 和 Lua library。
 
 `harbor = 0` 明确第一课是单节点进程，也进一步说明这里不需要无点号的全局服务名。
 
@@ -7959,11 +8016,14 @@ SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
+REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/protocol/navigation_registry.lua}"
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
+# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时按 vendored/sibling 约定查找。
+FLYWOW_ROOT="${FLYWOW_ROOT:-}"
 
 ACTION="start"
 FOREGROUND=0
@@ -8003,6 +8063,8 @@ Environment:
   BUILD_TYPE=RelWithDebInfo|Debug|Release
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
+  FLYWOW_ROOT=/path/to/skynet-flywow
+  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/protocol/navigation_registry.lua
 USAGE
 }
 
@@ -8164,6 +8226,34 @@ build_lua_protobuf_if_needed() {
     fi
 }
 
+# 查找独立的 Skynet-FlyWow 框架；业务仓库只调用框架工具，不复制生成器实现。
+find_flywow_root() {
+    local candidate
+    if [[ -n "$FLYWOW_ROOT" ]]; then
+        [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/flywow_gateway.lua" ]] || return 1
+        FLYWOW_ROOT="$(cd -- "$FLYWOW_ROOT" && pwd)"
+        return 0
+    fi
+    for candidate in \
+        "$SERVER_ROOT/third_party/skynet-flywow" \
+        "$SERVER_ROOT/../../skynet-flywow"; do
+        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/flywow_gateway.lua" ]]; then
+            FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 调用 FlyWow 生成 registry；运行时不解析 .proto。
+build_gateway_registry() {
+    find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT"
+    log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
+    python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
+        --proto "$PROTO_SOURCE" \
+        --output "$REGISTRY_OUTPUT"
+}
+
 verify_descriptor_asset() {
     local target="$DESCRIPTOR_FILE"
     local source_checksum_file="$(dirname "$target")/navigation_query.source.sha256"
@@ -8197,6 +8287,7 @@ prepare_runtime() {
     bootstrap_project_dependencies
     build_skynet_if_needed
     build_lua_protobuf_if_needed
+    build_gateway_registry
     verify_descriptor_asset
     build_native_incremental
 }
@@ -8244,6 +8335,7 @@ check_runtime_assets() {
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || fail "pb.so missing"
     [[ -s "$DESCRIPTOR_FILE" ]] || fail "published server descriptor missing: $DESCRIPTOR_FILE"
+    [[ -s "$REGISTRY_OUTPUT" ]] || fail "Gateway registry missing; run server/scripts/linux/run_server.sh build"
     [[ -s "$MAP_FILE" ]] || fail "published BMAP missing: $MAP_FILE; pull the matching repository release first"
 }
 
@@ -8256,6 +8348,10 @@ doctor() {
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
+    if ! find_flywow_root; then
+        log "MISSING Skynet-FlyWow framework; set FLYWOW_ROOT"
+        failed=1
+    fi
     [[ -s "$DESCRIPTOR_FILE" ]] || { log "MISSING published descriptor: $DESCRIPTOR_FILE"; failed=1; }
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }
     [[ -s "$MAP_FILE" ]] || { log "MISSING battle_1001.bmap"; failed=1; }
@@ -8524,11 +8620,11 @@ tail -f logs/server.log
 ```text
 PROTO_DESCRIPTOR_OK
 NAV_QUERY_READY ... map=1001 version=1
-NAV_TCP_READY 127.0.0.1:19001 ... framing=netpack-u16be max_frame=65535
+FLYWOW_GATEWAY_READY transport=tcp address=127.0.0.1:19001 ... commands=1
 NAV_SERVER_READY query=:... gateway=:...
 ```
 
-日志证明 Query Service 先加载地图、Gateway 完成 socketdriver listen/init 后再 READY，最后 main 才报告整个查询链可用。
+日志证明 Query Service 先加载地图、FlyWow Gateway 完成协议 registry 加载和监听后再 READY，最后 main 才报告整个查询链可用。
 
 ## 29. Unity C# Protobuf 客户端
 
@@ -9052,27 +9148,27 @@ public sealed class LengthFrameTests
 3.  protocol_version=999，不执行地图查询；
 4.  command=9999，不执行地图查询；
 5.  Envelope body 不是 QueryCellRequest，Gateway 不崩溃；
-6.  两个 netpack frame 一次 write，得到两个独立 request_id 响应；
-7.  一个 frame 分 3 次 write，仍只形成一个业务请求；
+6.  两个 TCP frame 一次 write，得到两个独立 request_id 响应；WebSocket 使用两个 binary message 得到同样结果；
+7.  一个 TCP frame 分 3 次 write，仍只形成一个业务请求；WebSocket fragment 由 Skynet 内置实现合并；
 8.  response.request_id 必须等于对应 request.request_id；
 9.  map_version 不匹配只能得到 MAP_VERSION_MISMATCH；
 10. 世界坐标越界只能得到 OUT_OF_BOUNDS；
-11. 单连接并发请求超过 max_inflight_per_connection 时连接被保护性关闭；
+11. 单连接请求按顺序进入 handler；超过 max_frame 或写缓冲阈值时得到明确错误/关闭；
 12. close/error 在 skynet.call yield 期间发生时，旧协程不能向后来复用的同号 fd 写响应。
 ```
 
-`65536` 及以上 payload 不再属于“收到后检查”的场景：2-byte uint16 header 根本无法表达它，发送端必须在 framing 层拒绝。Server 的 `netpack.pack` 也会拒绝 `>= 0x10000` 的 payload。
+`65536` 及以上 TCP payload 不属于“收到后检查”的场景：2-byte uint16 header 根本无法表达它，发送端必须在 framing 层拒绝。WebSocket 也沿用相同的 FlyWow 业务上限，避免两种 transport 产生不同协议行为。
 
 ## 31. 第一课最终回顾、调试与验收
 
-到这里，第一课不再继续增加新概念。本节只做一件事：把前面已经完成的 Unity 地图生产、BMAP、C++ Native、Lua Binding、Skynet Service、`socketdriver + netpack` Gateway、Protobuf 和 Unity 查询重新串成一条能够亲手执行、逐层断点、故意破坏并最终验收的完整链路。
+到这里，第一课不再继续增加新概念。本节只做一件事：把前面已经完成的 Unity 地图生产、BMAP、C++ Native、Lua Binding、Skynet Service、FlyWow Gateway、Protobuf 和 Unity 查询重新串成一条能够亲手执行、逐层断点、故意破坏并最终验收的完整链路。`socketdriver + netpack` 的底层阅读材料仍保留在第 27 节，但不属于当前启动链。
 
 如果只做到“代码都在”“Server 能启动”，第一课还没有真正结束。最终要能证明以下四件事：
 
 ```text
 1. Unity 导出的地图资产可重复生产，并且 Server 加载的是同一份 map/version。
-2. 一个真实 QueryCell 请求可以从 Unity TCP 进入 Gateway，跨 Service 到 Query，再进入 C++ GridMap。
-3. Gateway / Query / Native 三个边界都可以被调试器准确停住，并能说明 ownership、Lua State 和 yield 边界。
+2. 一个真实 QueryCell 请求可以从 Unity TCP 或 WebSocket 进入 FlyWow Gateway，跨 Service 到 Query，再进入 C++ GridMap。
+3. FlyWow Gateway / Query / Native 三个边界都可以被调试器准确停住，并能说明 ownership、Lua State 和 yield 边界。
 4. 正常输入和错误输入都得到可解释结果，Server 不靠“偶然跑通”通过验收。
 ```
 
@@ -9099,10 +9195,10 @@ shared/navigation/battle_1001/
         v
 Skynet Process
   |
-  +-> navigation_gateway Service
-  |     socketdriver + PTYPE_SOCKET + netpack
-  |     Envelope decode
-  |     skynet.call(query_service)       <- yield boundary
+  +-> flywow_gateway Service
+  |     TCP/WebSocket transport + Envelope registry
+  |     Protobuf decode
+  |     skynet.call(query_service, gateway_dispatch) <- yield boundary
   |
   +-> navigation_query Service
         query_logic.query                <- no-yield
@@ -9184,8 +9280,8 @@ GridMap
 MapRegistry
   管理已加载静态地图，不保存每次查询临时状态。
 
-navigation_gateway
-  拥有 listen/client fd、connections、netpack queue。
+flywow_gateway
+  拥有监听/客户端连接、协议 registry、TCP/WebSocket framing 和背压策略。
 
 navigation_query
   拥有 Query Service 自己的 Lua State 和 query_logic。
@@ -9381,7 +9477,7 @@ tail -f logs/server.log
 
 ```text
 NAV_QUERY_READY ... map=1001 version=1
-NAV_TCP_READY 127.0.0.1:19001 ... framing=netpack-u16be max_frame=65535
+FLYWOW_GATEWAY_READY transport=tcp address=127.0.0.1:19001 ... commands=1
 NAV_SERVER_READY query=:... gateway=:...
 ```
 
@@ -9391,8 +9487,8 @@ NAV_SERVER_READY query=:... gateway=:...
 NAV_QUERY_READY
   BMAP 已通过 Native 加载，Query Service 已可处理业务查询。
 
-NAV_TCP_READY
-  Gateway listen socket 已完成 bind/start。
+FLYWOW_GATEWAY_READY
+  FlyWow Gateway 已加载 descriptor/registry，并完成 TCP 或 WebSocket listen。
 
 NAV_SERVER_READY
   main 已完成 Query/Gateway 接线，进程整体可以接受第一课请求。
@@ -9480,7 +9576,7 @@ OUT_OF_BOUNDS
 Skynet 中：
 
 ```text
-navigation_gateway Service
+flywow_gateway Service
   -> 自己的 Lua State
 
 navigation_query Service
@@ -10189,16 +10285,16 @@ connectionPort
 文件：
 
 ```text
-server/service/navigation_gateway.lua
+Skynet-FlyWow/service/flywow_gateway.lua
 ```
 
 建议断：
 
 ```text
-SOCKET.open
-  看 accepted fd / address / connections[fd]
+accept_client
+  看 accepted fd / address / Gateway connections
 
-dispatch_packet
+dispatch_payload
   看 netpack 已经切好的 payload
 
 codec.decode_envelope 之后
@@ -10683,7 +10779,7 @@ clearance_cells
 
 5. Server startup
    NAV_QUERY_READY
-   NAV_TCP_READY
+   FLYWOW_GATEWAY_READY
    NAV_SERVER_READY
 
 6. LuaPanda Gateway breakpoint
@@ -10736,10 +10832,10 @@ clearance_cells
 ```text
 [ ] service/ 与 lualib/ 的运行身份没有混用。
 [ ] navigation_query 是独立 Service/Lua State。
-[ ] navigation_gateway 是独立 Service/Lua State。
-[ ] Gateway 使用 socketdriver + PTYPE_SOCKET + netpack。
-[ ] 不再使用 skynet.socket + socket.read 循环。
-[ ] netpack queue 的 message ownership 明确。
+[ ] flywow_gateway 是独立 Service/Lua State。
+[ ] 当前 Gateway 通过 FlyWow registry 自动发现 proto service/rpc command。
+[ ] TCP 和 WebSocket 共用 Envelope、编解码、业务 handler 和错误合同。
+[ ] WebSocket 使用固定 Skynet 的 http.websocket，不重复实现 WebSocket 帧解析。
 [ ] Gateway -> Query 使用显式 Service handle。
 [ ] skynet.call 的 yield 边界能解释。
 [ ] Query -> query_logic 是同 Lua State 普通函数调用。
@@ -10871,7 +10967,7 @@ ss -lntp | grep 19001
 tail -n 100 logs/server.log
 ```
 
-必须先确认 `NAV_TCP_READY`，再排 Unity。
+必须先确认 `FLYWOW_GATEWAY_READY`，再排 Unity。
 
 #### 所有坐标都 OOB
 
@@ -10955,7 +11051,7 @@ Server 权威；单层 2.5D；地图资产版本化；多 Service 可并发读�
 Unity NavMesh 只做 Authoring；采样输出 BMAP；
 Server 用 BMapReader 加载为 immutable GridMap；
 MapRegistry 管理静态地图；Lua Binding 保持薄；
-运行时用 Protobuf Envelope；Gateway 使用 socketdriver + netpack；
+运行时用 Protobuf Envelope；Gateway 使用 FlyWow 统一的 TCP/WebSocket transport，并调用固定 Skynet 的 `http.websocket`；
 Query Service 和 Gateway 各有独立 Lua State。
 
 执行链：

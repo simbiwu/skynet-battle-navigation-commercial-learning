@@ -190,9 +190,10 @@ Lesson 1：
 ```text
 native/grid_map/                 C++ 静态地图
 service/navigation_query.lua    真正的 Query Service 入口
-service/navigation_gateway.lua  真正的 Gateway Service 入口；直接使用 socketdriver + netpack
+Skynet-FlyWow/service/flywow_gateway.lua  FlyWow Gateway Service 入口；统一使用 TCP/WebSocket transport 和生成 registry
 lualib/navigation/              Query Service 内普通模块
-lualib/protocol/                运行期 Protobuf codec
+lualib/protocol/                运行期 Protobuf codec/生成 registry
+config/gateway.lua              Gateway 默认配置；协议路径和 transport 可覆盖
 ```
 
 `service/` 只放 `newservice/uniqueservice` 启动的入口；普通 `require` 模块必须放入 `lualib/`。后续课程延续这一规则，不能用文件名把普通模块伪装成 Worker、Agent 或 Gateway。
