@@ -48,3 +48,9 @@ message QueryCellResponse {
   uint32 area = 8;          // 稳定 BattleArea 编码。
   uint32 clearance = 9;     // 到静态障碍/边界的距离，单位 Cell。
 }
+
+// Gateway registry 由构建工具读取 service/rpc 结构生成；command_id 保持与 Envelope.command 一致。
+service NavigationService {
+  // command_id=1001；请求和响应类型由 RPC 签名确定。
+  rpc QueryCell(QueryCellRequest) returns (QueryCellResponse);
+}

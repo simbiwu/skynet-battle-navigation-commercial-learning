@@ -3,7 +3,7 @@
 # 边界：仓库级 Runtime/Build Launcher；只操作当前 server/ 下已知 build/run/log 目录和固定依赖脚本。
 # 输入/输出：源码、固定版本依赖、shared/ 已发布资产 -> 可运行 Skynet 进程及 logs/run 状态文件。
 # 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
-# 不负责：不生成 Unity BMAP、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
+# 不负责：不生成 Unity BMAP、不实现 FlyWow 协议生成器、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
 # -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
 # -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
@@ -22,12 +22,16 @@ SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
+# GATEWAY_REGISTRY_OUTPUT 允许不同协议 bundle 使用不同生成文件；默认输出到运行时 Lua module 目录。
+REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/protocol/navigation_registry.lua}"
 # source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
+# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时按仓库内 vendored 或当前 workspace sibling 约定查找。
+FLYWOW_ROOT="${FLYWOW_ROOT:-}"
 
 ACTION="start"
 FOREGROUND=0
@@ -68,6 +72,8 @@ Environment:
   BUILD_TYPE=RelWithDebInfo|Debug|Release
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
+  FLYWOW_ROOT=/path/to/skynet-flywow
+  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/protocol/navigation_registry.lua
 USAGE
 }
 
@@ -242,6 +248,40 @@ build_lua_protobuf_if_needed() {
     fi
 }
 
+# 查找独立的 Skynet-FlyWow 框架；只返回包含协议生成器的目录，不复制框架源码到业务仓库。
+# 查找顺序：显式 FLYWOW_ROOT -> 仓库内 third_party/skynet-flywow -> 当前 workspace 的 sibling 仓库。
+find_flywow_root() {
+    local candidate
+    if [[ -n "$FLYWOW_ROOT" ]]; then
+        [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/flywow_gateway.lua" ]] || return 1
+        FLYWOW_ROOT="$(cd -- "$FLYWOW_ROOT" && pwd)"
+        export FLYWOW_ROOT
+        return 0
+    fi
+    for candidate in \
+        "$SERVER_ROOT/third_party/skynet-flywow" \
+        "$SERVER_ROOT/../../skynet-flywow"; do
+        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/flywow_gateway.lua" ]]; then
+            FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
+            export FLYWOW_ROOT
+            return 0
+        fi
+    done
+    return 1
+}
+
+# 由 FlyWow 框架生成 registry；业务仓库只提供 proto 和输出位置。
+# 运行时不解析 .proto，生成器失败时不保留可误用的旧输出。
+build_gateway_registry() {
+    find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT to its repository root"
+    log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
+    python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
+        --proto "$PROTO_SOURCE" \
+        --output "$REGISTRY_OUTPUT"
+    [[ -s "$REGISTRY_OUTPUT" ]] || \
+        fail "FlyWow Gateway registry was not generated: $REGISTRY_OUTPUT"
+}
+
 # 校验已提交 descriptor、源协议哈希和 descriptor 哈希，不在 Server 启动时临时生成协议。
 verify_descriptor_asset() {
     local target="$DESCRIPTOR_FILE"
@@ -278,6 +318,7 @@ prepare_runtime() {
     bootstrap_project_dependencies
     build_skynet_if_needed
     build_lua_protobuf_if_needed
+    build_gateway_registry
     verify_descriptor_asset
     build_native_incremental
 }
@@ -329,6 +370,7 @@ check_runtime_assets() {
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || fail "battle_nav.so missing"
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || fail "pb.so missing"
     [[ -s "$DESCRIPTOR_FILE" ]] || fail "published server descriptor missing: $DESCRIPTOR_FILE"
+    [[ -s "$REGISTRY_OUTPUT" ]] || fail "Gateway registry missing; run server/scripts/linux/run_server.sh build"
     [[ -s "$MAP_FILE" ]] || fail "published BMAP missing: $MAP_FILE; pull the matching repository release first"
 }
 
@@ -342,6 +384,10 @@ doctor() {
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
+    if ! find_flywow_root; then
+        log "MISSING Skynet-FlyWow framework; set FLYWOW_ROOT"
+        failed=1
+    fi
     [[ -s "$DESCRIPTOR_FILE" ]] || { log "MISSING published descriptor: $DESCRIPTOR_FILE"; failed=1; }
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }
     [[ -s "$MAP_FILE" ]] || { log "MISSING battle_1001.bmap"; failed=1; }

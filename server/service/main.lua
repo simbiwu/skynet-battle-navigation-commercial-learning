@@ -6,10 +6,16 @@
 local skynet = require "skynet"
 
 -- Query 先完成地图加载，Gateway 再开始监听，避免端口就绪后查询依赖尚未可用。
+-- skynet.start 回调无参数；它只负责创建 Service、注入 handle 和启动合同。
 skynet.start(function()
     local query_service = skynet.newservice("navigation_query")
-    local gateway_service = skynet.newservice("navigation_gateway")
-    assert(skynet.call(gateway_service, "lua", "start", query_service))
+    -- ready call 等待 Query 完成 BMAP 加载并注册 dispatch，随后 Gateway 才开始监听。
+    assert(skynet.call(query_service, "lua", "ready"))
+    local gateway_service = skynet.newservice("flywow_gateway")
+    -- Gateway 从 config.gateway 读取默认配置；composition root 只注入业务 handler handle。
+    assert(skynet.call(gateway_service, "lua", "start", {
+        handler_service = query_service,
+    }))
 
     skynet.error("NAV_SERVER_READY query=", skynet.address(query_service),
                  " gateway=", skynet.address(gateway_service))
