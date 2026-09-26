@@ -584,46 +584,88 @@ core.*
 
 ```bash
 #!/usr/bin/env bash
+# 职责：下载并准备课程固定版本的 Skynet 源码快照。
+# 边界：Server Build Bootstrap；只写入 server/third_party/skynet，不编译、不启动进程。
+# 输入/输出：Skynet 固定 tag -> 带 .pinned-tag 标记的源码目录。
+# 生命周期：首次准备依赖时执行；目录存在且标记匹配时只做校验。
+# 不负责：不保留 Git 历史、不升级系统工具、不修改 Unity 或 shared 发布资产。
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+# 脚本位置推导 server 根目录，调用者不必先 cd 到固定目录。
+SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+SOURCE_DIR="$SERVER_ROOT/third_party/skynet"
+EXPECTED_TAG="v1.8.0"
+JEMALLOC_COMMIT="54eaed1d8b56b1aa528be3bdd1877e59c56fa90c"
 
-source_dir="third_party/skynet"
-expected_tag="v1.8.0"
+log() { printf '[skynet-bootstrap] %s\n' "$*"; }
+fail() { printf '[skynet-bootstrap] ERROR: %s\n' "$*" >&2; exit 1; }
 
-mkdir -p third_party
+# codeload 只下载固定 tag 的源码快照，不保留 Git 历史或远程配置。
+download_snapshot() {
+    local archive jemalloc_archive temp_dir
+    archive="$(mktemp --suffix=.tar.gz)"
+    jemalloc_archive="$(mktemp --suffix=.tar.gz)"
+    temp_dir="$(mktemp -d)"
+    trap 'rm -f "$archive" "$jemalloc_archive"; rm -rf "$temp_dir"' RETURN
 
-if [[ ! -d "$source_dir/.git" ]]; then
-    if [[ -e "$source_dir" ]]; then
-        echo "SKYNET_SOURCE_INVALID path=$source_dir" >&2
-        exit 1
-    fi
+    # -f 让 HTTP 错误失败，-L 跟随重定向，retry 应对临时网络错误。
+    curl -fL --retry 4 --retry-delay 2 \
+        -o "$archive" \
+        "https://codeload.github.com/cloudwu/skynet/tar.gz/refs/tags/$EXPECTED_TAG"
+    # 去掉 GitHub 压缩包的外层目录，保证 Makefile 位于目标目录根部。
+    tar -xzf "$archive" --strip-components=1 -C "$temp_dir"
+    test -f "$temp_dir/Makefile" || fail "Skynet snapshot has no Makefile"
+    # Skynet 的 jemalloc 是 submodule，源码归档不会自动带上 gitlink 指向的内容。
+    curl -fL --retry 4 --retry-delay 2 \
+        -o "$jemalloc_archive" \
+        "https://codeload.github.com/jemalloc/jemalloc/tar.gz/$JEMALLOC_COMMIT"
+    mkdir -p "$temp_dir/3rd/jemalloc"
+    tar -xzf "$jemalloc_archive" --strip-components=1 -C "$temp_dir/3rd/jemalloc"
+    test -x "$temp_dir/3rd/jemalloc/autogen.sh" || fail "jemalloc snapshot is incomplete"
+    printf '%s\n' "$EXPECTED_TAG" > "$temp_dir/.pinned-tag"
+    mkdir -p "$(dirname "$SOURCE_DIR")"
+    mv "$temp_dir" "$SOURCE_DIR"
+    trap - RETURN
+    rm -f "$archive"
+}
 
-    git clone \
-        --branch "$expected_tag" \
-        --depth 1 \
-        https://github.com/cloudwu/skynet.git \
-        "$source_dir"
+# 只接受由本脚本准备且版本标记匹配的目录，不覆盖用户目录。
+verify_snapshot() {
+    local actual_tag
+    [[ -f "$SOURCE_DIR/.pinned-tag" ]] || fail "Skynet pin marker missing"
+    actual_tag="$(cat "$SOURCE_DIR/.pinned-tag")"
+    [[ "$actual_tag" == "$EXPECTED_TAG" ]] || \
+        fail "SKYNET_VERSION_MISMATCH expected=$EXPECTED_TAG actual=$actual_tag"
+    [[ -f "$SOURCE_DIR/Makefile" ]] || fail "Skynet source incomplete"
+    log "SKYNET_SOURCE_OK tag=$actual_tag path=$SOURCE_DIR"
+}
+
+if [[ ! -e "$SOURCE_DIR" ]]; then
+    download_snapshot
+elif [[ ! -f "$SOURCE_DIR/.pinned-tag" ]]; then
+    fail "SKYNET_SOURCE_INVALID unmanaged directory: $SOURCE_DIR"
 fi
-
-actual_tag="$(git -C "$source_dir" describe --tags --exact-match HEAD 2>/dev/null || true)"
-if [[ "$actual_tag" != "$expected_tag" ]]; then
-    echo "SKYNET_VERSION_MISMATCH expected=$expected_tag actual=$actual_tag" >&2
-    exit 1
-fi
-
-echo "SKYNET_SOURCE_OK tag=$actual_tag commit=$(git -C "$source_dir" rev-parse HEAD)"
+verify_snapshot
 ```
 
 新建 `scripts/linux/build_skynet.sh`：
 
 ```bash
 #!/usr/bin/env bash
+# 职责：使用已固定的 Skynet 源码构建 skynet 可执行文件和 bundled Lua 运行时。
+# 边界：Server Build；读取 third_party/skynet，写回本机构建产物。
+# 输入/输出：Skynet Makefile -> skynet 与 bundled Lua 5.4。
+# 生命周期：bootstrap_skynet 成功后执行；可重复执行，不修改源码版本。
+# 不负责：不下载依赖、不启动 Server、不使用系统 Lua 替代 bundled Lua。
 set -euo pipefail
-cd "$(dirname "$0")/../.."
+SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+cd "$SERVER_ROOT"
 
+# Makefile 缺失表示源码快照不完整。
 test -f third_party/skynet/Makefile
+# linux 目标构建 Skynet 和它实际使用的 Lua ABI。
 make -C third_party/skynet linux
 
+# 这些文件是后续 Native Lua 模块和 Server 启动的前置条件。
 test -x third_party/skynet/skynet
 test -f third_party/skynet/3rd/lua/lua.h
 echo "SKYNET_BUILD_OK"
@@ -638,6 +680,21 @@ chmod +x scripts/linux/bootstrap_skynet.sh scripts/linux/build_skynet.sh
 ```
 
 脚本发现已有目录版本不符时只报错，不自动 reset、不删除用户文件。新项目需要自己的恢复脚本；“本机另一个仓库已经有 Skynet”不能代替当前项目的可复现依赖声明。
+
+### 为什么第三方源码统一使用 `curl` 快照
+
+本课程的第三方初始化脚本统一下载固定版本快照：
+
+```text
+curl + tar.gz   Skynet、LuaPanda、LuaSocket、lua-protobuf 源码
+curl + zip      protoc 固定版本二进制包
+```
+
+这里的 `curl` 负责把网络上的归档下载到临时文件，`-f` 让 HTTP 错误变成脚本失败，`-L` 跟随 GitHub 重定向，`--retry` 处理暂时性网络错误。`tar --strip-components=1` 用于去掉 GitHub 压缩包外层目录，使源码直接落在脚本约定的目录结构中。
+
+初始化脚本不需要第三方仓库的历史、分支和远程配置，因此不使用 `git clone`。下载完成后脚本写入 `.pinned-tag` 或 `.pinned-commit`，后续只验证标记和必要文件，不覆盖一个无法确认来源的已有目录。`git -C` 也不再参与第三方初始化；它只是“在指定目录执行 Git 命令”，本课统一后不需要它。
+
+这套快照方式的输入是固定 tag/commit，输出是本机 `third_party/` 下的源码；下载失败、解压失败、版本标记不匹配、源码不完整和编译失败都必须停止。脚本不会自动 `sudo`、不会从系统中寻找“能用的另一个版本”，也不会把第三方源码提交到课程仓库。
 
 ## 6. 创建 Battle_1001 场景
 
@@ -5811,6 +5868,8 @@ GOOGLE_PROTOBUF_NUMERICS_VECTORS_VERSION=4.4.0
 # 边界：Server Build Bootstrap；不编译模块，不生成业务 descriptor。
 # 输入/输出：shared/protocol/VERSIONS.env -> third_party 下的固定版本工具源码/二进制。
 # 失败约定：已有目录版本不符时明确失败，不删除或静默升级用户文件。
+# 生命周期：Server 首次构建或切换协议工具版本时执行；成功后由构建和检查脚本消费。
+# 不负责：不生成 Unity C#、不编译 pb.so、不启动 Server。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -5820,6 +5879,7 @@ source "$REPO_ROOT/shared/protocol/VERSIONS.env"
 PROTOC_DIR="$ROOT/third_party/protoc-$PROTOC_VERSION"
 LUA_PROTOBUF_DIR="$ROOT/third_party/lua-protobuf"
 
+# curl 下载，python3 解压 protoc zip，tar 解压 lua-protobuf 源码快照。
 command -v curl >/dev/null
 command -v python3 >/dev/null
 command -v tar >/dev/null
@@ -5830,15 +5890,19 @@ if [[ ! -x "$PROTOC_DIR/bin/protoc" ]]; then
         echo "PROTOC_DIR_INVALID path=$PROTOC_DIR" >&2
         exit 1
     fi
+    # 临时归档避免半下载内容出现在 third_party。
     archive="$(mktemp --suffix=.zip)"
     trap 'rm -f "$archive"' EXIT
+    # -f：HTTP 错误失败；-L：跟随重定向；retry：应对临时网络错误。
     curl -fL --retry 4 --retry-delay 2 -o "$archive" \
         "https://github.com/protocolbuffers/protobuf/releases/download/v$PROTOC_VERSION/protoc-$PROTOC_VERSION-linux-x86_64.zip"
     mkdir -p "$PROTOC_DIR"
+    # Python 标准库解压 zip，避免依赖系统 unzip 的额外行为。
     python3 -m zipfile -e "$archive" "$PROTOC_DIR"
     chmod +x "$PROTOC_DIR/bin/protoc"
 fi
 
+# 版本检查调用刚准备的二进制，不能只相信目录名。
 actual_protoc="$($PROTOC_DIR/bin/protoc --version)"
 if [[ "$actual_protoc" != "libprotoc $PROTOC_VERSION" ]]; then
     echo "PROTOC_VERSION_MISMATCH expected=$PROTOC_VERSION actual=$actual_protoc" >&2
@@ -5850,11 +5914,13 @@ if [[ ! -f "$LUA_PROTOBUF_DIR/.pinned-commit" ]]; then
         echo "LUA_PROTOBUF_DIR_INVALID path=$LUA_PROTOBUF_DIR" >&2
         exit 1
     fi
+    # lua-protobuf 只需要源码快照，因此不保留 Git 历史。
     archive="$(mktemp --suffix=.tar.gz)"
     temp_dir="$(mktemp -d)"
     trap 'rm -f "$archive"; rm -rf "$temp_dir"' EXIT
     curl -fL --retry 4 --retry-delay 2 -o "$archive" \
         "https://codeload.github.com/starwing/lua-protobuf/tar.gz/$LUA_PROTOBUF_COMMIT"
+    # 去掉 GitHub 压缩包外层目录，保证 pb.c 位于预期源码根目录。
     tar -xzf "$archive" --strip-components=1 -C "$temp_dir"
     printf '%s\n' "$LUA_PROTOBUF_COMMIT" > "$temp_dir/.pinned-commit"
     mv "$temp_dir" "$LUA_PROTOBUF_DIR"
@@ -5880,6 +5946,8 @@ echo "LUA_PROTOBUF_SOURCE_OK commit=$actual_commit path=$LUA_PROTOBUF_DIR"
 # 边界：Server Native Build；不安装系统 Lua，不写入 /usr/local。
 # 输入/输出：lua-protobuf pb.c + Skynet Lua headers -> lua-protobuf-runtime/pb.so。
 # 失败约定：源码、Lua Header 或编译失败时立即退出。
+# 生命周期：Skynet bundled Lua 编译完成后执行；输出只属于当前 server 工作区。
+# 不负责：不使用系统 Lua ABI、不安装到 /usr/local、不生成 descriptor。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -5887,12 +5955,14 @@ SOURCE="$ROOT/third_party/lua-protobuf"
 LUA_HEADERS="$ROOT/third_party/skynet/3rd/lua"
 OUTPUT="$ROOT/third_party/lua-protobuf-runtime"
 
+# pb.c 必须和 Skynet bundled Lua 头文件使用同一个 Lua ABI。
 test -f "$SOURCE/pb.c"
 test -f "$SOURCE/protoc.lua"
 test -f "$LUA_HEADERS/lua.h"
 command -v cc >/dev/null
 mkdir -p "$OUTPUT"
 
+# 生成可被 Lua require 加载的 position-independent shared object。
 cc -O2 -shared -fPIC -Wall -Wextra \
     -I "$LUA_HEADERS" \
     "$SOURCE/pb.c" \
@@ -5912,6 +5982,8 @@ echo "LUA_PROTOBUF_BUILD_OK $OUTPUT/pb.so"
 # 职责：使用项目自带 Lua 和固定 pb.so 验证 Server descriptor。
 # 边界：Protocol Build Check；不依赖系统 lua 命令，不启动 Skynet。
 # 输入/输出：navigation_query.pb -> PROTO_DESCRIPTOR_OK 或非零退出码。
+# 生命周期：协议生成后或 Server 启动前执行；只读验证，不修改 descriptor。
+# 不负责：不编译 protoc、不加载地图、不启动 Skynet Service。
 set -euo pipefail
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -5920,10 +5992,12 @@ LUA="$ROOT/third_party/skynet/3rd/lua/lua"
 RUNTIME="$ROOT/third_party/lua-protobuf-runtime"
 DESCRIPTOR="$REPO_ROOT/shared/protocol/generated/server/navigation_query.pb"
 
+# 固定使用 Skynet 自带 Lua 和本项目编译的 pb.so，避免系统 Lua ABI 偶然通过。
 test -x "$LUA"
 test -s "$RUNTIME/pb.so"
 test -s "$DESCRIPTOR"
 
+# 只为子进程临时设置 Lua 模块搜索路径，不污染调用 Shell。
 LUA_PATH="$RUNTIME/?.lua;;" \
 LUA_CPATH="$RUNTIME/?.so;;" \
     "$LUA" "$ROOT/protocol/check_descriptor.lua" "$DESCRIPTOR"
@@ -8009,7 +8083,7 @@ bootstrap_project_dependencies() {
     require_system_tools || fail "system dependency check failed"
     cd "$SERVER_ROOT"
 
-    if [[ ! -d third_party/skynet/.git ]]; then
+    if [[ ! -f third_party/skynet/.pinned-tag ]]; then
         log "Skynet source missing; bootstrapping pinned v1.8.0"
         ./scripts/linux/bootstrap_skynet.sh
     else
@@ -8132,7 +8206,8 @@ doctor() {
     local failed=0
     require_system_tools || failed=1
 
-    [[ -d "$SERVER_ROOT/third_party/skynet/.git" ]] || { log "MISSING skynet source"; failed=1; }
+    [[ -f "$SERVER_ROOT/third_party/skynet/.pinned-tag" &&
+       -f "$SERVER_ROOT/third_party/skynet/Makefile" ]] || { log "MISSING pinned skynet source"; failed=1; }
     [[ -x "$SKYNET_BIN" ]] || { log "MISSING skynet binary"; failed=1; }
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
