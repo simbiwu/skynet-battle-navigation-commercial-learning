@@ -5,6 +5,9 @@
 # 生命周期：bootstrap_skynet 成功后执行；可重复执行，不修改源码版本。
 # 不负责：不下载依赖、不启动 Server、不使用系统 Lua 替代 Skynet bundled Lua。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 # 以脚本位置推导 server 根目录，调用者无需先 cd 到固定目录。
 SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"

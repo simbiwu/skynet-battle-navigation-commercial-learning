@@ -8,16 +8,6 @@ local skynet = require "skynet"
 local M = {}
 local started = false
 
-local DEFAULT_PORT = {
-    gateway = 8818,
-    query = 8819,
-}
-
-local PORT_ENV = {
-    gateway = "LUA_PANDA_GATEWAY_PORT",
-    query = "LUA_PANDA_QUERY_PORT",
-}
-
 local function enabled()
     local value = os.getenv("LUA_PANDA_ENABLE")
     return value == "1" or value == "true" or value == "TRUE"
@@ -38,15 +28,15 @@ local function prepend_debug_paths()
     }, ";")
 end
 
--- role 目前只允许 gateway/query，因为第一课核心运行链只需要跟踪这两个 Lua State。
+-- port 由 Service 启动入口显式传入；本模块不维护 Service 名称到端口的映射。
 -- LuaPanda.start 内部使用 LuaSocket；这是 debug-only 阻塞 socket，不属于业务 Gateway 网络模型。
-function M.start(role)
+-- port 必须只属于当前 Lua State，不能与另一个同时运行的调试端点重复。
+function M.start(port)
     if not enabled() then
         return false
     end
     assert(not started, "LuaPanda already started in this Lua State")
-    local default_port = assert(DEFAULT_PORT[role], "unsupported LuaPanda role: " .. tostring(role))
-    local port = tonumber(os.getenv(PORT_ENV[role]) or tostring(default_port))
+    port = tonumber(port)
     assert(port and port > 0 and port <= 65535, "invalid LuaPanda port")
     local host = os.getenv("LUA_PANDA_HOST") or "127.0.0.1"
 
@@ -56,9 +46,9 @@ function M.start(role)
 
     local panda = require "LuaPanda"
     started = true
-    skynet.error("LUA_PANDA_CONNECT role=", role, " host=", host, " port=", port)
+    skynet.error("LUA_PANDA_CONNECT host=", host, " port=", port)
     panda.start(host, port)
-    skynet.error("LUA_PANDA_READY role=", role, " port=", port)
+    skynet.error("LUA_PANDA_READY port=", port)
     return true
 end
 

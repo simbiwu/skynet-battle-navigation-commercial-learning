@@ -12,7 +12,7 @@ local luapanda_debug = require "debug.luapanda_debug"
 -- 本 Service 的 query_cell handler 内部不 yield，响应 table 由 skynet.pack 复制发送。
 skynet.start(function()
     -- Query 是独立 Lua State，使用与 Gateway 不同的 LuaPanda port。
-    luapanda_debug.start("query")
+    luapanda_debug.start(8819)
     query_logic.start(config)
 
     skynet.dispatch("lua", function(_session, _source, command, payload)

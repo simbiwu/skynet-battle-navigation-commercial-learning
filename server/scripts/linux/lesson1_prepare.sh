@@ -5,6 +5,9 @@
 # 生命周期：每次切换课程提交或准备首次运行时执行；脚本本身短生命周期。
 # 不负责：不触发 Unity Bake、不跨机器复制文件、不启动长驻 Server、不绕过 BMapReader 校验。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"

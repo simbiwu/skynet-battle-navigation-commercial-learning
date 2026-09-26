@@ -374,7 +374,7 @@ skynet.register_protocol {
 
 skynet.start(function()
     -- Debug-only: normal start does nothing; LUA_PANDA_ENABLE=1 enables this Lua State target.
-    luapanda_debug.start("gateway")
+    luapanda_debug.start(8818)
 
     skynet.dispatch("lua", function(_session, _source, command, argument)
         if command == "start" then

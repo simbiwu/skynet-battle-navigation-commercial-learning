@@ -5,6 +5,9 @@
 # 生命周期：仅用于本地 Debug；不会被普通 run_server.sh start 自动调用。
 # 不负责：不实现 LuaPanda 协议、不替代 run_server.sh 的 PID 管理、不修改生产配置。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
@@ -23,12 +26,8 @@ fi
 # export 让 main 创建的每个 Service Lua State 都能看到调试开关和对应端口。
 export LUA_PANDA_ENABLE=1
 export LUA_PANDA_HOST="${LUA_PANDA_HOST:-127.0.0.1}"
-export LUA_PANDA_GATEWAY_PORT="${LUA_PANDA_GATEWAY_PORT:-8818}"
-export LUA_PANDA_QUERY_PORT="${LUA_PANDA_QUERY_PORT:-8819}"
-
-printf '[luapanda-debug] gateway=%s:%s query=%s:%s\n' \
-    "$LUA_PANDA_HOST" "$LUA_PANDA_GATEWAY_PORT" \
-    "$LUA_PANDA_HOST" "$LUA_PANDA_QUERY_PORT"
+printf '[luapanda-debug] host=%s; Service ports are passed explicitly by each Service\n' \
+    "$LUA_PANDA_HOST"
 
 if [[ "$MODE" == "gdb" ]]; then
     # gdb 负责 C++ 断点；LuaPanda 仍由 Service 内的 debug.luapanda 模块连接 VS Code。
@@ -38,6 +37,7 @@ if [[ "$MODE" == "gdb" ]]; then
     }
     "$SCRIPT_DIR/run_server.sh" doctor
     cd "$SERVER_ROOT"
+# exec：用目标进程替换当前脚本进程，保留信号转发和最终退出码。
     exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" \
         --args "$SERVER_ROOT/third_party/skynet/skynet" config/skynet.lua
 fi

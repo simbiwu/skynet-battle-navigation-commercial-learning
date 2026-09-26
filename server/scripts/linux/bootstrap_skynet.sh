@@ -5,6 +5,9 @@
 # 生命周期：首次准备依赖时执行；目录存在且标记匹配时只做校验。
 # 不负责：不保留 Git 历史、不升级系统工具、不修改 Unity 或 shared 发布资产。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 # 统一把当前脚本定位到 server 根目录，避免调用者从任意工作目录运行时路径漂移。
 SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
@@ -26,6 +29,7 @@ download_snapshot() {
     jemalloc_archive="$(mktemp --suffix=.tar.gz)"
     temp_dir="$(mktemp -d)"
     # 无论 curl、tar 还是移动失败，临时文件都不应留在系统临时目录。
+# trap：注册退出清理动作，下载或构建失败时也释放临时文件。
     trap 'rm -f "$archive" "$jemalloc_archive"; rm -rf "$temp_dir"' RETURN
 
     log "downloading Skynet tag=$EXPECTED_TAG"

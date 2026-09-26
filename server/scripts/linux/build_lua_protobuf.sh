@@ -6,6 +6,9 @@
 # 生命周期：Skynet bundled Lua 编译完成后执行；输出只属于当前 server 工作区。
 # 不负责：不使用系统 Lua ABI、不安装到 /usr/local、不生成协议 descriptor。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 # ROOT 是 server 根目录；所有输入输出都由它推导，避免依赖调用者当前目录。
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"

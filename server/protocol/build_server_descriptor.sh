@@ -5,10 +5,14 @@
 # 生命周期：协议源变更后由开发者显式执行；生成物随同协议源提交并由各部署端拉取。
 # 不负责：不生成 Unity C#、不启动 Server、不从另一台机器复制运行时文件。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SERVER_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
 PROTO_ROOT="$REPO_ROOT/shared/protocol"
+# source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$PROTO_ROOT/VERSIONS.env"
 PROTOC="${PROTOC:-$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc}"
 OUT="$PROTO_ROOT/generated/server"

@@ -5,9 +5,13 @@
 # 不负责：不启动 Server、不改系统 Lua、不 sudo 安装、不进入生产依赖链。
 # 生命周期：仅在 debug_luapanda.sh 启动前执行；产物与 Skynet bundled Lua 5.4 ABI 绑定。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+# source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$SERVER_ROOT/debug/luapanda/VERSIONS.env"
 
 SKYNET_ROOT="$SERVER_ROOT/third_party/skynet"
@@ -31,6 +35,7 @@ mkdir -p "$SERVER_ROOT/third_party"
 
 # LuaSocket 的 C 模块必须使用实际宿主 Skynet Lua 的头文件和 ABI。
 if [[ ! -f "$SKYNET_LUA_HEADERS/lua.h" ]]; then
+# trap：注册退出清理动作，下载或构建失败时也释放临时文件。
     log "Skynet source missing; bootstrap pinned Skynet first"
     "$SCRIPT_DIR/bootstrap_skynet.sh"
 fi

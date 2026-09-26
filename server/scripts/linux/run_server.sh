@@ -5,6 +5,9 @@
 # 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
 # 不负责：不生成 Unity BMAP、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
@@ -19,6 +22,7 @@ SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
+# source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
@@ -401,7 +405,9 @@ start_foreground() {
     cd "$SERVER_ROOT"
     log "starting in foreground; Ctrl+C/SIGTERM ends the current Lesson-1 process"
     flock -u 9 || true
+    # exec 9>&-：关闭继承的锁文件描述符，不让 Skynet 持有控制锁。
     exec 9>&-
+    # exec Skynet：前台模式由 Skynet 接收信号并直接返回最终退出码。
     exec "$SKYNET_BIN" "config/skynet.lua"
 }
 

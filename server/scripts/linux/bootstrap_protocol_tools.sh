@@ -6,9 +6,13 @@
 # 生命周期：Server 首次构建或切换课程依赖版本时执行；成功后由 build/descriptor 脚本消费。
 # 不负责：不生成 Unity C#、不编译 pb.so、不启动 Server。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
 REPO_ROOT="$(cd "$ROOT/.." && pwd)"
+# source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$REPO_ROOT/shared/protocol/VERSIONS.env"
 
 PROTOC_DIR="$ROOT/third_party/protoc-$PROTOC_VERSION"
@@ -27,6 +31,7 @@ if [[ ! -x "$PROTOC_DIR/bin/protoc" ]]; then
     fi
     # 临时归档文件避免半下载内容出现在 third_party；失败由 set -e 传播。
     archive="$(mktemp --suffix=.zip)"
+# trap：注册退出清理动作，下载或构建失败时也释放临时文件。
     trap 'rm -f "$archive"' EXIT
     # protoc 是固定版本二进制包，URL 中的版本来自 shared/protocol/VERSIONS.env。
     curl -fL --retry 4 --retry-delay 2 \

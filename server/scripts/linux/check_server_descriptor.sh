@@ -5,6 +5,9 @@
 # 生命周期：协议生成后或 Server 启动前执行；只读验证，不修改 descriptor。
 # 不负责：不编译 protoc、不加载地图、不启动 Skynet Service。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 # ROOT 是 server 根目录；REPO_ROOT 用来访问跨端共享协议发布物。
 ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"

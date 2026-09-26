@@ -5,6 +5,9 @@
 # 生命周期：由 run_server.sh build/rebuild 调用，也可由开发者单独执行；不修改任何文件。
 # 不负责：不解析第三方 Lua、不替代 Lua 语法检查，也不对性能作无基准结论。
 set -euo pipefail
+# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
+# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
+# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
