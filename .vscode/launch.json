@@ -1,0 +1,36 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "LuaPanda Lesson1 Gateway",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8818,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "LuaPanda Lesson1 Query",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8819,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    }
+  ],
+  "compounds": [
+    {
+      "name": "LuaPanda Lesson1 Gateway + Query",
+      "configurations": [
+        "LuaPanda Lesson1 Gateway",
+        "LuaPanda Lesson1 Query"
+      ]
+    }
+  ]
+}
