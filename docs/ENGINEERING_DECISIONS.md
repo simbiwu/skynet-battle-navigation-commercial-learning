@@ -405,9 +405,9 @@ Lesson 2 当 `AgentProfile / Path / NavigationContext / FindPath` 已经工作�
 
 ```text
 Unity WorldPosition
--> TCP netpack frame
+-> FlyWow TCP/WebSocket transport
 -> Protobuf Envelope / QueryCellRequest
--> Navigation Gateway Service
+-> FlyWow Gateway Service
 -> Navigation Query Service
 -> query_logic
 -> battle_nav.so
@@ -428,11 +428,11 @@ Unity dependency: System.Runtime.CompilerServices.Unsafe 4.5.3
 Unity dependency: System.Buffers 4.5.1
 Unity dependency: System.Numerics.Vectors 4.4.0
 protoc: 36.2
-frame: uint16 big-endian length (Skynet netpack) + Protobuf Envelope
+frame: TCP uint16 big-endian length + Protobuf Envelope；WebSocket binary message 直接承载 Envelope
 max application payload: 65535 bytes
 ```
 
-`.proto` 是唯一权威 Schema。Descriptor 和 C# 类型在构建阶段生成，普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
+`.proto` 是唯一权威 Schema。Descriptor、C# 类型和 FlyWow `*_registry.lua` 在构建阶段生成，registry 生成器归独立 `Skynet-FlyWow` 框架所有，业务仓库只提供源文件和构建输出位置。普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
 
 这条链只用于第一课查询验收和后续 Unity/Server 通信基础，不把一个 MapService 设计成所有高频导航请求的永久代理。
 
@@ -470,16 +470,16 @@ ordered BattleEvent
 
 ```text
 service/navigation_query.lua       Query Service 入口
-service/navigation_gateway.lua     Gateway Service 入口；直接持有 socketdriver/netpack event loop
+service/flywow_gateway.lua         FlyWow Gateway Service 入口；统一持有 TCP/WebSocket transport、连接和协议生命周期
 lualib/navigation/query_logic.lua  Query 内部业务模块
-lualib/protocol/navigation_codec.lua  Gateway 内部 codec
+lualib/protocol/navigation_registry.lua  构建阶段从 proto service/rpc 生成的 command registry
 ```
 
 启动者保存 `newservice()` 返回的 handle，并显式注入依赖。单节点内不通过全局名字隐藏地址关系，也不让一个 Service 用 `skynet.call` 调用自己。后续 BattleWorker、AI、技能和 Replay 文件继续按同一规则判断目录，不能按“看起来像业务组件”决定是否放入 `service/`。
 
 ## D032 - Skynet 是课程主线，功能裁剪不能破坏商业级边界
 
-课程基于 Skynet 实现可演进的 SLG Server。第一次使用 `newservice`、`dispatch`、`call/send`、`register_protocol`、`PTYPE_SOCKET`、`socketdriver/netpack` 等机制时，教程必须解释参数来源、Lua State、消息边界、ownership、yield、失败传播和固定版本源码依据，不能只提供可复制代码。
+课程基于 Skynet 实现可演进的 SLG Server。第一次使用 `newservice`、`dispatch`、`call/send`、`register_protocol`、`PTYPE_SOCKET`、`socketdriver/netpack` 或固定版本的 `http.websocket` 等机制时，教程必须解释参数来源、Lua State、消息边界、ownership、yield、失败传播和固定版本源码依据，不能只提供可复制代码。
 
 课程阶段允许暂不实现 TLS、账号鉴权、跨区路由、完整指标平台或最终 drain 编排，但不允许用以下 Demo 捷径换取代码量更少：
 

@@ -525,14 +525,18 @@ command + 一个带 Lua Language Server 注解的 request record；或
 第一课 Gateway 即使只承载低频 `QueryCell`，也必须采用正确接入层边界：
 
 ```text
-socketdriver + PTYPE_SOCKET + netpack
-Gateway Service 独占 listen/client fd 与 connections
-netpack C message 在任何 yield 前转成 Lua string 或释放
-fd close/reuse 后用 connection object identity 防止旧协程误写
-max frame / max clients / per-connection in-flight / write warning 有界
-malformed/version/command/body 显式拒绝
-Query Service handle 由 main 显式注入
+FlyWow Gateway Service 独占 listen/client fd、connections 与 transport 生命周期
+TCP 使用固定的 uint16 big-endian length + Envelope；WebSocket 使用固定 Skynet 的 http.websocket
+TCP/WebSocket 共用 descriptor、生成 registry、Envelope、业务 handler 和错误合同
+fd/connection close 后用 connection object identity 防止旧协程误写
+max frame / max clients / write warning 有界；同一连接按顺序处理请求
+malformed/version/command/body 显式拒绝并记录 error/warning
+Query Service handle、descriptor、registry 和 transport 由 main 显式注入
 ```
+
+课程仍保留 `socketdriver + PTYPE_SOCKET + netpack` 作为 Skynet 底层事件、queue ownership 和 `register_protocol` 的历史深读材料，但它不是当前第一课的运行时 Gateway。当前运行入口固定为 `Skynet-FlyWow/service/flywow_gateway.lua`；WebSocket 不得在课程或 FlyWow 中重复实现握手和帧解析。
+
+Gateway 协议 registry 的生成器归 `skynet-flywow` 框架所有。业务仓库只维护 `.proto`、`config/gateway.lua` 和构建调用，不得复制或手工维护 `generate_gateway_registry.py`；`*_registry.lua` 是构建生成物。
 
 课程可以明确暂不实现 TLS、账号鉴权、跨区路由、全量限流策略、指标平台或最终 drain 编排，但必须标注这些是阶段外能力，不能把缺失能力包装成“已可直接生产部署”。也不能为了看起来完整而提前创建尚未被当前行为使用的模块。
 
