@@ -166,6 +166,16 @@ LESSON2_GATEWAY_PROCESS_READY
 
 `run_lesson2_processes.sh doctor` 只检查固定 Skynet、FlyWow submodule、协议 descriptor、registry 和两个 bootstrap 文件是否存在；它不会启动服务，也不会生成新的协议版本。修改端口时必须同时更新两个 `process_*.lua` 文件以及本节中的验证说明，不能在脚本中写死第二套配置。
 
+### 为未来 2D 地图保留的接入边界
+
+本课仍只实现 2.5D Ground Grid，但业务调用从现在开始遵守三个约束：
+
+1. 业务位置使用整数世界/逻辑坐标、`map_id` 和 `map_version`；长期 Path、BattleEvent 和持久状态不保存 `GridPos` 或 `grid_z`。
+2. 地图 manifest 负责声明空间类型、坐标轴、原点、Cell 尺寸、资产格式版本和内容 hash。Unity BMAP 是当前输入，未来 H5/Tiled/JSON 通过离线导入器接入，Server 不读取客户端工程目录。
+3. 俯视角 2D 可以复用 Grid A*、动态占位和确定性战斗；横版平台的重力、跳跃和多层平台属于另一种运动模型，不能把固定高度当作完整支持。
+
+因此，第二课完成后将地图加载、寻路上下文、BattleWorker 和 Replay 抽取到 Skynet-FlyWow 时，网络模块仍不依赖地图，地图模块仍不依赖网络，Unity/H5 只替换表现层 Adapter。只有出现第二个真实地图消费者后，才从 2.5D 与 2D 的共同调用面提取稳定接口。
+
 ---
 
 ## 0. 开始前先确认第一课的真实边界

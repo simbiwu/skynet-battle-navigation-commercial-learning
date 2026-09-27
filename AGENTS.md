@@ -69,6 +69,18 @@ Service 启停与依赖注入
 测试、诊断和部署工具
 ```
 
+地图、寻路和战斗模块必须从一开始保留多地图空间合同，但不提前实现空抽象。当前课程先完成真实的 2.5D Grid 调用；设计上必须确保以后加入 H5 俯视角 2D 地图时，FlyWow Gateway、Battle Process、动态占位、确定性战斗和 Replay 不需要绑定 Unity 或 `X/Z + 高度`。可复用边界至少应满足：
+
+```text
+2.5D ground：逻辑 X/Z 网格，可查询地表高度、Area、Clearance
+top-down 2D：逻辑二维平面，通常固定高度或无高度字段
+side-view 2D：平台、重力和跳跃语义，不能伪装成 top-down 2D
+```
+
+共同业务合同使用整数世界/逻辑坐标、地图 ID、地图版本和内容哈希；长期 Path 和 BattleEvent 不直接暴露 `GridPos`、`grid_z` 或某个客户端的坐标轴。地图资产 manifest 必须声明空间类型、坐标轴、原点、Cell 尺寸、版本和 hash。Unity BMAP、H5/Tiled 等来源只能通过离线导入适配到该合同，运行时 Server 不读取客户端工程目录。
+
+FlyWow 的网络、地图、寻路和战斗模块保持单向依赖：Gateway 不依赖地图，地图/寻路不依赖网络，战斗核心不依赖客户端协议。业务工程通过 composition root 注入地图资产、寻路 profile、Battle Service 和客户端 Adapter；相同的 Server Event 可以由 Unity 或 H5 表现层分别转换。只有第二个真实地图消费者出现并通过测试后，才从 2.5D 与 2D 的共同调用面提取稳定接口，禁止提前创建几十个未来式 interface。
+
 模块依赖必须形成单向、可解释的 DAG：
 
 ```text

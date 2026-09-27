@@ -510,3 +510,11 @@ Unity Authoring、协议生成和 Server 运行可能位于不同机器。仓库
 “共享”表示各端消费同一个 Git 提交、业务版本和内容哈希，不表示运行期读取另一台机器的工作目录。Unity Bake 只产生本地候选资产；完成验证、提交和推送后，Server 机器通过 Git 更新或部署包获得该版本。Server 启动不重新生成 descriptor，也不读取 Unity `BuildArtifacts`、`Assets` 或 Windows 绝对路径。
 
 生产阶段可以把 `server/` 与所需 `shared/` 打成不可变发布包，或把相同目录迁移到制品仓库。迁移不得改变原子发布、版本固定和哈希校验语义。
+
+## D035 - 地图、寻路与战斗模块为 2.5D 和 2D 保留同一接入方向
+
+当前三课先实现 2.5D Ground Grid，但框架边界从现在起按多空间消费者设计。未来 H5 俯视角 2D 地图可以使用同一 Gateway、Battle Process、动态占位、确定性战斗和 Replay；业务只需选择地图资产、空间类型、寻路 profile 和客户端 Adapter。FlyWow Gateway 不知道地图维度，地图/寻路运行时不依赖网络，战斗核心不依赖 Unity、H5 或 Protobuf DTO。
+
+第一类共同合同是整数世界/逻辑坐标、`map_id`、`map_version` 和内容 hash。地图 manifest 还必须声明 `space_type`、坐标轴、原点、Cell 尺寸和资产格式版本。长期 Path、BattleEvent 和业务位置不能暴露 `GridPos`、`grid_z` 或某个客户端的坐标轴；2.5D 的高度、2D 的固定平面和客户端坐标转换由地图空间 Adapter 负责。
+
+Unity BMAP 和 H5/Tiled/JSON 等输入属于离线资产生产链，不能让 Server 运行时读取客户端工程目录。俯视角 2D 可以复用 Grid A* 的共同语义；横版平台的重力、跳跃和多层平台属于不同运动模型，不能把 `y=0` 当作完整支持。第二个真实地图消费者出现并通过独立测试后，才从两种实现的共同调用面提取稳定接口，不提前创建空的多维导航框架。
