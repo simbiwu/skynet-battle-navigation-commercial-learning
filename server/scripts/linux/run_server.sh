@@ -30,7 +30,7 @@ source "$SHARED_ROOT/protocol/VERSIONS.env"
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
-# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时按仓库内 vendored 或当前 workspace sibling 约定查找。
+# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时优先使用仓库内 Git submodule，必要时再查找当前 workspace sibling。
 FLYWOW_ROOT="${FLYWOW_ROOT:-}"
 
 ACTION="start"
@@ -249,7 +249,7 @@ build_lua_protobuf_if_needed() {
 }
 
 # 查找独立的 Skynet-FlyWow 框架；只返回包含协议生成器的目录，不复制框架源码到业务仓库。
-# 查找顺序：显式 FLYWOW_ROOT -> 仓库内 third_party/skynet-flywow -> 当前 workspace 的 sibling 仓库。
+# 查找顺序：显式 FLYWOW_ROOT -> 仓库内 third_party/skynet-flywow Git submodule -> 当前 workspace 的 sibling 仓库（开发覆盖）。
 find_flywow_root() {
     local candidate
     if [[ -n "$FLYWOW_ROOT" ]]; then

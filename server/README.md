@@ -70,17 +70,19 @@ cd server
 
 ## Gateway framing
 
-第一课 Navigation Gateway 使用 Skynet v1.8.0 的：
+第一课 Navigation Gateway 通过 server/third_party/skynet-flywow Git submodule 提供：
 
 ```text
-socketdriver
-+ PTYPE_SOCKET event dispatch
-+ netpack.filter / netpack.pop
+FlyWow Gateway Service
++ Skynet http.websocket（WebSocket transport）
++ 生成 registry、Envelope 和统一 handler dispatch
 ```
 
-`skynet.netpack` 固定使用 `uint16 Big Endian length + payload`，因此单个 Envelope 最大 `65535` bytes。Protobuf Envelope/command/request_id 本身没有变化。
+FlyWow TCP framing 固定为 uint16 Big Endian length + payload；因此单个 Envelope 最大 65535 bytes。
 
 Unity 验证通过的 BMAP 与 manifest 发布到仓库根目录 `shared/navigation/battle_1001/`。Unity Bake 只改变当前工作区；提交、推送并由 Server 机器拉取相同提交后，Server 才会看到新版本。`BMapReader` 仍会在加载阶段校验格式和 CRC。
+
+首次获取仓库或切换到新的主仓库提交后，先在仓库根目录执行 git submodule update --init --recursive；这样 server/third_party/skynet-flywow 会处于主仓库固定的 FlyWow 提交。只有开发 FlyWow 本身时才设置 FLYWOW_ROOT 覆盖该 submodule。
 
 ## 第一课最终准备与调试
 
