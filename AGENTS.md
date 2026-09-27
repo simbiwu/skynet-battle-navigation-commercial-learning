@@ -36,6 +36,14 @@ https://github.com/simbiwu/Skynet-slg-learning
 ~/workspace/skynet-flywow
 ```
 
+课程仓库按正常商业项目方式通过 Git submodule 固定 FlyWow 版本：
+
+```text
+server/third_party/skynet-flywow
+```
+
+主仓库提交的是 submodule gitlink，而不是 FlyWow 源码副本；gitlink 固定一个已经验证过的 FlyWow 提交。`~/workspace/skynet-flywow` 继续作为框架独立开发源，开发调试时可通过 `FLYWOW_ROOT` 覆盖 submodule，但正常克隆和构建必须依赖 `git clone --recurse-submodules` 或 `git submodule update --init --recursive`。
+
 学习项目与框架仓库按阶段协作：
 
 ```text
@@ -91,7 +99,7 @@ composition root
 
 可抽取不等于提前建立空框架。继续遵守“架构预留 ≠ 提前教学”：只有当前课程出现真实调用者、实现已经工作、边界能由测试证明时，才整理稳定接口和模块目录。第一次真实实现直接遵守正确的 ownership、依赖方向和错误合同，避免以后靠大改拆除业务耦合。
 
-课程工程仍然是独立、可运行的完整仓库，不在教学过程中强制依赖另一个尚未发布的个人框架。后续抽取优先采用保留历史和测试的迁移方式；共享源码的具体发布形态（独立仓库、包、submodule 或其他方式）等出现第二个真实消费者后再决定。
+课程工程仍然是独立、可运行的完整仓库；它依赖的是已固定提交的 FlyWow submodule，而不是某台机器上的 sibling 目录。后续抽取优先采用保留历史和测试的迁移方式；框架独立仓库继续单独 build、test、commit，课程仓库只更新 gitlink。
 
 ## 本机双工作区职责
 

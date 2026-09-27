@@ -231,7 +231,7 @@ WSL:
 <仓库根目录>/server
 ```
 
-第一课的 Gateway 实现和协议 registry 生成器来自独立仓库 `Skynet-FlyWow`。Server 工程不复制框架源码；构建脚本会优先使用 `FLYWOW_ROOT`，其次查找仓库内 vendored 目录或当前 workspace 的 sibling 仓库。
+第一课的 Gateway 实现和协议 registry 生成器来自独立仓库 `Skynet-FlyWow`。Server 工程通过 `server/third_party/skynet-flywow` Git submodule 固定已验证提交；构建脚本默认使用该 submodule，开发调试时才允许用 `FLYWOW_ROOT` 覆盖到独立 sibling 仓库。首次获取请使用 `git clone --recurse-submodules`，或执行 `git submodule update --init --recursive`。
 
 ## Codex 第一条指令
 

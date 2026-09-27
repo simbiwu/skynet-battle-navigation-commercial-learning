@@ -96,6 +96,16 @@ PlayerCommand
 
 ---
 
+## 第一课 Gateway 与第二课战斗调度的边界
+
+第二课不重新实现网络接入。第一课已经由 `server/third_party/skynet-flywow/service/flywow_gateway.lua` 负责 TCP/WebSocket、framing、Protobuf 解码、连接生命周期和错误合同；第二课只新增战斗业务的 handler、BattleMgr、BattleWorker 和 `battle_core`。
+
+进入战斗业务时，Gateway 传递的是已经解码的 `command`、`request`、`request_id` 和 `connection_id`。业务层根据 command 调用 BattleMgr；BattleMgr 可以 `skynet.call` BattleWorker 并 yield，BattleWorker 再调用 no-yield 的 `battle_core.simulate()`。网络 fd、frame buffer 和 Protobuf codec 不得进入 BattleWorker 或模拟核心。
+
+如果需要多个监听端口，仍由 composition root 创建多个 `flywow_gateway` Service，并分别注入端口和业务 handler；第二课的战斗状态不能写入 Gateway 全局状态。
+
+---
+
 ## 0. 开始前先确认第一课的真实边界
 
 本课依赖的第一课真实 C++ 类型位于：
@@ -4272,7 +4282,7 @@ DynamicOccupancy
 
 ### 15.1 为什么 no-yield 不是“Skynet 不能 yield”
 
-`BattleMgr` 调 Worker 本来就会 yield。第一课的 Navigation Gateway 现在由 `socketdriver + netpack` 直接接收 `PTYPE_SOCKET` 事件，在完整请求进入 `skynet.call(Query Service)` 时同样允许 yield；这类接入层并发不会改变 Battle 核心的 no-yield 规则。
+`BattleMgr` 调 Worker 本来就会 yield。第一课当前由 FlyWow Gateway 接收 TCP/WebSocket 请求、完成 framing 和 Protobuf 解码，再把已命名的业务 request 交给业务 Service；BattleMgr 可以在业务调度层执行 `skynet.call(BattleWorker, "lua", "simulate", snapshot)` 并 yield。接入层、BattleMgr 和 BattleWorker 的并发不会改变 `battle_core.simulate()` 的 no-yield 规则。`socketdriver + netpack` 仍是第一课保留的 Skynet 底层阅读材料，不是第二课需要重新实现的 Gateway。
 
 约束只针对**已经开始推进某段 Battle 状态的核心临界区**：
 

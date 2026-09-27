@@ -190,7 +190,7 @@ Lesson 1：
 ```text
 native/grid_map/                 C++ 静态地图
 service/navigation_query.lua    真正的 Query Service 入口
-Skynet-FlyWow/service/flywow_gateway.lua  FlyWow Gateway Service 入口；统一使用 TCP/WebSocket transport 和生成 registry
+server/third_party/skynet-flywow/service/flywow_gateway.lua  FlyWow Gateway Service 入口；由 Git submodule 固定版本，统一使用 TCP/WebSocket transport 和生成 registry
 lualib/navigation/              Query Service 内普通模块
 lualib/protocol/                运行期 Protobuf codec/生成 registry
 config/gateway.lua              Gateway 默认配置；协议路径和 transport 可覆盖

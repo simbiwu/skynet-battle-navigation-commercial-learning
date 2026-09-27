@@ -432,7 +432,7 @@ frame: TCP uint16 big-endian length + Protobuf Envelope；WebSocket binary messa
 max application payload: 65535 bytes
 ```
 
-`.proto` 是唯一权威 Schema。Descriptor、C# 类型和 FlyWow `*_registry.lua` 在构建阶段生成，registry 生成器归独立 `Skynet-FlyWow` 框架所有，业务仓库只提供源文件和构建输出位置。普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
+`.proto` 是唯一权威 Schema。Descriptor、C# 类型和 FlyWow `*_registry.lua` 在构建阶段生成，registry 生成器归独立 `Skynet-FlyWow` 框架所有。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定框架提交，业务仓库只提供源文件和构建输出位置；开发调试时才用 `FLYWOW_ROOT` 覆盖到 sibling 工作区。普通 Skynet Service 启动时不编译 Schema。Codec 在接入层结束，Query Service 的业务逻辑和 Native GridMap 不依赖 Protobuf 对象。
 
 这条链只用于第一课查询验收和后续 Unity/Server 通信基础，不把一个 MapService 设计成所有高频导航请求的永久代理。
 

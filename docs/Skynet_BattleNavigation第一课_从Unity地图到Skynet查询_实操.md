@@ -6649,7 +6649,7 @@ config/
   skynet.lua
 ```
 
-`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库，由 `config/skynet.lua` 加入搜索路径；学习工程不复制这些源码。`protocol/` 保存 `.proto` 源，`lualib/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
+`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -6890,6 +6890,33 @@ end)
 
 第一课现在由 `main.lua` 创建 `flywow_gateway` Service，并显式注入 Query Service handle。descriptor、registry、transport 和资源上限由 `config/gateway.lua` 默认配置提供，必要时才通过 start 覆盖；业务 Query Service 不再注册 `query_cell` 协议，也不接触 TCP/WebSocket frame。
 
+#### 27.0.1 获取固定版本的 FlyWow submodule
+
+这一步解决“换一台构建机后 Gateway 源码从哪里来”的问题。主仓库只记录 FlyWow 的 gitlink，真正的框架历史仍在独立仓库中；完成后，`run_server.sh` 可以直接从 `server/third_party/skynet-flywow` 找到 Gateway 和 registry 生成器。
+
+已有主仓库克隆时，执行：
+
+```bash
+git submodule update --init --recursive
+```
+
+首次克隆时使用：
+
+```bash
+git clone --recurse-submodules https://github.com/simbiwu/skynet-battle-navigation-commercial-learning.git
+```
+
+验证 submodule 是否处于主仓库固定提交：
+
+```bash
+git submodule status
+./scripts/linux/run_server.sh doctor
+```
+
+`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/service/flywow_gateway.lua` 和 `tools/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向 sibling 仓库，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
+
+同一进程需要多个监听端口时，不复制 Gateway 代码。由 composition root 多次调用 `skynet.newservice("flywow_gateway")`，为每个 Service 传入不同 `port`、`transport` 和业务 `handler_service`；每个实例拥有独立 Lua State、监听 fd、连接表和生命周期。主 Service 必须保存这些 handle，并在停服时分别调用 `stop`。
+
 当前运行链：
 
 ```text
@@ -6938,10 +6965,10 @@ WebSocket 不由课程自己重复实现协议解析；Skynet 固定版本的 `h
 完整的 FlyWow 接入合同见独立仓库：
 
 ```text
-skynet-flywow/docs/gateway/README.md
+server/third_party/skynet-flywow/docs/gateway/README.md
 ```
 
-从下一小节开始的 `27.1`～`27.9` 是保留的历史 `socketdriver + netpack` 深读材料，用来理解 Skynet 原始 Socket 事件、消息 ownership、`queue` 和 `yield` 边界。它们不再是当前启动链的操作步骤；当前 Gateway 的构建、启动和验收以本节、`Skynet-FlyWow/service/flywow_gateway.lua` 以及第 31 节中的 FlyWow 日志为准。
+从下一小节开始的 `27.1`～`27.9` 是保留的历史 `socketdriver + netpack` 深读材料，用来理解 Skynet 原始 Socket 事件、消息 ownership、`queue` 和 `yield` 边界。它们不再是当前启动链的操作步骤；当前 Gateway 的构建、启动和验收以本节、`server/third_party/skynet-flywow/service/flywow_gateway.lua` 以及第 31 节中的 FlyWow 日志为准。
 
 现在处理第一课网络链路中最接近真实 Skynet Server 的一层。旧实现用 `skynet.socket` 给每个连接启动一个 `client_loop`，然后反复 `socket.read(fd)`，自己维护字符串 buffer、半包和粘包。这个写法可以工作，也适合普通 Lua 网络程序入门，但它把 Skynet 底层已经提供的 socket event 与 `netpack` 分帧能力重新做了一遍。
 
@@ -7252,7 +7279,7 @@ SOCKET.open(fd, address)
 
 ```text
 删除：server/lualib/network/length_frame.lua
-历史底层示例：以下代码用于精读 `socketdriver + netpack` 的 ownership、queue 和事件分发，不要再新建 `server/service/navigation_gateway.lua`。当前运行链使用 `Skynet-FlyWow/service/flywow_gateway.lua`。
+历史底层示例：以下代码用于精读 `socketdriver + netpack` 的 ownership、queue 和事件分发，不要再新建 `server/service/navigation_gateway.lua`。当前运行链使用 `server/third_party/skynet-flywow/service/flywow_gateway.lua`。
 ```
 
 ```lua
@@ -7920,7 +7947,7 @@ lua_cpath = "./build/lua_battle_nav/?.so;" ..
 cpath = skynet_root .. "cservice/?.so"
 ```
 
-`run_server.sh` 会在构建阶段查找 `Skynet-FlyWow`：优先使用环境变量 `FLYWOW_ROOT`，其次查找仓库内 `third_party/skynet-flywow`，最后查找当前 workspace 的 sibling 仓库。直接运行 Skynet 时也必须先导出 `FLYWOW_ROOT`，否则配置无法定位框架 Service 和 Lua library。
+`run_server.sh` 会在构建阶段查找 `Skynet-FlyWow`：优先使用显式的 `FLYWOW_ROOT`，没有覆盖时使用 `server/third_party/skynet-flywow` submodule，最后才查找当前 workspace 的 sibling 仓库。正常使用不需要设置 `FLYWOW_ROOT`；只有直接绕过脚本启动 Skynet，或正在开发 sibling 框架源码时，才需要先导出它。
 
 `harbor = 0` 明确第一课是单节点进程，也进一步说明这里不需要无点号的全局服务名。
 
@@ -8022,7 +8049,7 @@ source "$SHARED_ROOT/protocol/VERSIONS.env"
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
-# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时按 vendored/sibling 约定查找。
+# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时优先使用 third_party/skynet-flywow submodule，sibling 目录只用于开发覆盖。
 FLYWOW_ROOT="${FLYWOW_ROOT:-}"
 
 ACTION="start"
@@ -10285,7 +10312,7 @@ connectionPort
 文件：
 
 ```text
-Skynet-FlyWow/service/flywow_gateway.lua
+server/third_party/skynet-flywow/service/flywow_gateway.lua
 ```
 
 建议断：
