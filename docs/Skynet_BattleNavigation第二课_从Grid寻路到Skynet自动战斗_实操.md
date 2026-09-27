@@ -104,6 +104,68 @@ PlayerCommand
 
 如果需要多个监听端口，仍由 composition root 创建多个 `flywow_gateway` Service，并分别注入端口和业务 handler；第二课的战斗状态不能写入 Gateway 全局状态。
 
+## 第一课到第二课的双进程运行模式
+
+第二课第一次把“接入层”和“地图/战斗状态”放到不同的 Skynet Process 中。默认的单进程入口仍然保留，便于先调试业务；下面的双进程入口用于验证商业部署边界：Gateway Process 只拥有客户端连接，Map/Battle Process 只拥有地图查询和后续 Battle Service。
+
+```text
+Gateway Process
+  gateway_main
+    -> gateway_proxy
+    -> FlyWow Gateway（TCP/WebSocket、frame、Protobuf、连接生命周期）
+    -> skynet.cluster.call("battle", "@battle_dispatch", "gateway_dispatch", request_record)
+
+Map/Battle Process
+  battle_main
+    -> navigation_query（当前已实现的地图查询入口）
+    -> battle_dispatch（跨进程发现名；后续 BattleMgr/BattleWorker 接入同一边界）
+```
+
+这里的 `cluster.call` 只传递已经解码的 request record；fd、frame buffer、Protobuf codec 和 Lua State 都不会跨进程传递。`battle_dispatch` 是明确存在跨启动树发现需求时才使用的名字，Map/Battle Process 启动完成后注册它，Gateway Process 先等待 `ready` 再监听客户端端口。远程进程不可用时，Proxy 返回 `REMOTE_UNAVAILABLE`，由 FlyWow Gateway 按统一错误合同记录并关闭当前请求连接。
+
+本节涉及的文件操作如下：
+
+| 文件 | 操作 | 直接用途 |
+| --- | --- | --- |
+| `server/config/process_gateway.lua` | [新建文件] | Gateway 监听端口和远程 cluster 地址 |
+| `server/config/process_battle.lua` | [新建文件] | Battle cluster 监听端口和入口名 |
+| `server/config/skynet_gateway.lua` | [新建文件] | Gateway Process 的 Skynet bootstrap |
+| `server/config/skynet_battle.lua` | [新建文件] | Map/Battle Process 的 Skynet bootstrap |
+| `server/service/gateway_main.lua` | [新建文件] | 创建 Proxy 和 FlyWow Gateway |
+| `server/service/gateway_proxy.lua` | [新建文件] | 把已解码请求转成 cluster RPC |
+| `server/service/battle_main.lua` | [新建文件] | 创建 Query、开放 cluster 并注册入口 |
+| `server/scripts/linux/run_lesson2_processes.sh` | [新建文件] | 统一启动、停止、状态和诊断两个进程 |
+
+这些文件属于 Server 编辑源 `~/workspace/skynet-battle-navigation-commercial-learning/server/`。Windows 主工作区只同步 Git 提交，不复制 WSL 目录。
+
+### 双进程启动与验证
+
+在 WSL 中进入 Server 编辑源。脚本会先启动 Battle Process，等待 `LESSON2_BATTLE_PROCESS_READY`，再启动 Gateway Process；因此 Gateway 端口就绪时，远程 Query 入口已经完成地图加载和 cluster 注册。
+
+```bash
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
+./scripts/linux/run_lesson2_processes.sh doctor
+./scripts/linux/run_lesson2_processes.sh start
+./scripts/linux/run_lesson2_processes.sh status
+```
+
+默认端口是 Gateway `19011`、Gateway Process cluster `2527`、Map/Battle Process cluster `2528`。日志位于 `server/logs/lesson2/gateway.log` 和 `server/logs/lesson2/battle.log`，应分别看到：
+
+```text
+LESSON2_BATTLE_PROCESS_READY
+FLYWOW_GATEWAY_READY
+LESSON2_GATEWAY_PROCESS_READY
+```
+
+停止时必须让 Gateway 先停止，再停止 Battle，避免仍有客户端请求尝试访问已经退出的远程节点：
+
+```bash
+./scripts/linux/run_lesson2_processes.sh stop
+```
+
+`run_lesson2_processes.sh doctor` 只检查固定 Skynet、FlyWow submodule、协议 descriptor、registry 和两个 bootstrap 文件是否存在；它不会启动服务，也不会生成新的协议版本。修改端口时必须同时更新两个 `process_*.lua` 文件以及本节中的验证说明，不能在脚本中写死第二套配置。
+
 ---
 
 ## 0. 开始前先确认第一课的真实边界

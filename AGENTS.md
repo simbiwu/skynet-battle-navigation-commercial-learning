@@ -546,6 +546,8 @@ Query Service handle、descriptor、registry 和 transport 由 main 显式注入
 
 Gateway 协议 registry 的生成器归 `skynet-flywow` 框架所有。业务仓库只维护 `.proto`、`config/gateway.lua` 和构建调用，不得复制或手工维护 `generate_gateway_registry.py`；`*_registry.lua` 是构建生成物。
 
+Lesson 2 额外提供一个可运行的双进程边界：Gateway Process 由 `gateway_main` 持有 FlyWow Gateway 和本地 Proxy；Map/Battle Process 由 `battle_main` 持有地图查询以及后续 Battle Service。默认单进程入口仍用于本地调试，双进程入口通过 `skynet.cluster` 传递已解码 request/result record。Gateway 不持有地图或战斗状态，Map/Battle Process 不接触客户端 fd、frame buffer 或 Protobuf codec。`battle_dispatch` 只因跨启动树发现而注册，并且必须在 `ready` 合同完成后发布 READY。
+
 课程可以明确暂不实现 TLS、账号鉴权、跨区路由、全量限流策略、指标平台或最终 drain 编排，但必须标注这些是阶段外能力，不能把缺失能力包装成“已可直接生产部署”。也不能为了看起来完整而提前创建尚未被当前行为使用的模块。
 
 ## Lesson 2 A*

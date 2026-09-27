@@ -436,7 +436,15 @@ max application payload: 65535 bytes
 
 这条链只用于第一课查询验收和后续 Unity/Server 通信基础，不把一个 MapService 设计成所有高频导航请求的永久代理。
 
-## D030 - 在线交互与整场回放共用同一个 BattleWorker
+## D030 - Lesson 2 的 Gateway 与 Map/Battle Process 分离
+
+第二课保留单进程入口作为本地调试默认，同时增加可运行的双进程验收入口：Gateway Process 由 `gateway_main` 组装 FlyWow Gateway 和本地 `gateway_proxy`；Map/Battle Process 由 `battle_main` 组装 `navigation_query`，并通过 Skynet cluster 注册 `battle_dispatch`。Gateway 只拥有客户端 fd、连接、framing 和协议编解码，Map/Battle Process 只拥有地图查询以及后续 BattleMgr/BattleWorker 的状态。
+
+跨进程边界只传输已解码的 request/result record。cluster 节点地址、监听端口和入口名放在 `config/process_gateway.lua`、`config/process_battle.lua`，由 composition root 注入；不通过全局名字隐藏单节点依赖。`battle_dispatch` 例外属于明确的跨启动树发现合同，并要求 Battle Process 先完成 `ready` 再发布 READY 日志。远程不可用必须转换为结构化 `REMOTE_UNAVAILABLE`，不能让接入层吞掉错误。
+
+本地脚本 `server/scripts/linux/run_lesson2_processes.sh` 负责有序启动、停止、状态检查和 doctor；默认 Gateway 端口为 19011，两个 cluster 端口为 2527/2528。该进程拆分验证部署边界，不提前创建尚未被当前行为使用的 BattleWorker 抽象；后续 BattleMgr/BattleWorker 接入 `battle_dispatch` 后，Gateway 合同保持不变。
+
+## D031 - 在线交互与整场回放共用同一个 BattleWorker
 
 第三课同时验证两种 SLG 战斗运行方式：
 
@@ -460,7 +468,7 @@ ordered BattleEvent
 
 网络收包、等待玩家输入、插值和特效不进入核心 `simulate`。禁止为在线模式和自动回放各写一套战斗规则。
 
-## D031 - Skynet Service 入口与 Lua 模块按运行身份分目录
+## D032 - Skynet Service 入口与 Lua 模块按运行身份分目录
 
 `service/` 只存放由 `skynet.newservice()` 或 `skynet.uniqueservice()` 启动的入口。这里的文件拥有独立 Service Context、消息队列、Lua State、生命周期和 dispatch。
 
@@ -477,7 +485,7 @@ lualib/protocol/navigation_registry.lua  构建阶段从 proto service/rpc 生�
 
 启动者保存 `newservice()` 返回的 handle，并显式注入依赖。单节点内不通过全局名字隐藏地址关系，也不让一个 Service 用 `skynet.call` 调用自己。后续 BattleWorker、AI、技能和 Replay 文件继续按同一规则判断目录，不能按“看起来像业务组件”决定是否放入 `service/`。
 
-## D032 - Skynet 是课程主线，功能裁剪不能破坏商业级边界
+## D033 - Skynet 是课程主线，功能裁剪不能破坏商业级边界
 
 课程基于 Skynet 实现可演进的 SLG Server。第一次使用 `newservice`、`dispatch`、`call/send`、`register_protocol`、`PTYPE_SOCKET`、`socketdriver/netpack` 或固定版本的 `http.websocket` 等机制时，教程必须解释参数来源、Lua State、消息边界、ownership、yield、失败传播和固定版本源码依据，不能只提供可复制代码。
 
@@ -495,7 +503,7 @@ lualib/protocol/navigation_registry.lua  构建阶段从 proto service/rpc 生�
 
 商业级首先意味着 ownership、资源上限、错误、可观察性和演进边界正确。生产环境所需但尚未进入当前课程链路的能力必须明确列为阶段外能力，在首次产生真实用途时再引入。
 
-## D033 - 跨端合同以版本化发布资产交付
+## D034 - 跨端合同以版本化发布资产交付
 
 Unity Authoring、协议生成和 Server 运行可能位于不同机器。仓库根目录 `shared/` 是课程阶段的发布边界：`shared/protocol/` 保存唯一 `.proto`、固定工具版本与可验证生成物，`shared/navigation/` 保存通过验证的 BMAP 与 manifest。
 
