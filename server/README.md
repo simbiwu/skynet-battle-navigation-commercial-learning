@@ -70,17 +70,19 @@ cd server
 
 ## Gateway framing
 
-第一课 Navigation Gateway 使用 Skynet v1.8.0 的：
+第一课 Navigation Gateway 通过 server/third_party/skynet-flywow Git submodule 提供：
 
 ```text
-socketdriver
-+ PTYPE_SOCKET event dispatch
-+ netpack.filter / netpack.pop
+FlyWow Gateway Service
++ Skynet http.websocket（WebSocket transport）
++ 生成 registry、Envelope 和统一 handler dispatch
 ```
 
-`skynet.netpack` 固定使用 `uint16 Big Endian length + payload`，因此单个 Envelope 最大 `65535` bytes。Protobuf Envelope/command/request_id 本身没有变化。
+FlyWow TCP framing 固定为 uint16 Big Endian length + payload；因此单个 Envelope 最大 65535 bytes。
 
 Unity 验证通过的 BMAP 与 manifest 发布到仓库根目录 `shared/navigation/battle_1001/`。Unity Bake 只改变当前工作区；提交、推送并由 Server 机器拉取相同提交后，Server 才会看到新版本。`BMapReader` 仍会在加载阶段校验格式和 CRC。
+
+首次获取仓库或切换到新的主仓库提交后，先在仓库根目录执行 git submodule update --init --recursive；这样 server/third_party/skynet-flywow 会处于主仓库固定的 FlyWow 提交。只有开发 FlyWow 本身时才设置 FLYWOW_ROOT 覆盖该 submodule。
 
 ## 第一课最终准备与调试
 
@@ -116,4 +118,32 @@ LuaPanda + gdb 同时跟踪：
 
 Gateway 使用 8818，Query 使用 8819。两个 Service 是两个独立 Lua State，因此必须是两个调试 target。正常 `run_server.sh start` 不设置 `LUA_PANDA_ENABLE`，不会加载 LuaPanda runtime。
 
+
 完整断点顺序、故障排查和验收证据见第一课第 31 节。
+## 第二课双进程运行入口
+
+第二课保留 `run_server.sh` 的单进程入口作为本地调试路径，同时提供 Gateway 与 Map/Battle 分离的真实进程边界：
+
+```text
+Gateway Process : gateway_main -> gateway_proxy -> FlyWow Gateway :19011
+Map/Battle     : battle_main -> navigation_query -> cluster :2528
+Gateway cluster :2527
+```
+
+Gateway 只拥有客户端连接、framing 和 Protobuf 编解码；Map/Battle Process 只拥有地图查询和后续战斗 Service。两个进程通过 `skynet.cluster` 传递已解码 request/result record，`battle_dispatch` 是明确的跨启动树发现名。
+
+```bash
+cd ~/workspace/skynet-battle-navigation-commercial-learning/server
+BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
+./scripts/linux/run_lesson2_processes.sh doctor
+./scripts/linux/run_lesson2_processes.sh start
+./scripts/linux/run_lesson2_processes.sh status
+```
+
+启动脚本先等待 Map/Battle Process 输出 `LESSON2_BATTLE_PROCESS_READY`，再启动 Gateway；Gateway 日志还应包含 `FLYWOW_GATEWAY_READY` 和 `LESSON2_GATEWAY_PROCESS_READY`。日志分别写入 `logs/lesson2/battle.log`、`logs/lesson2/gateway.log`。停止时使用：
+
+```bash
+./scripts/linux/run_lesson2_processes.sh stop
+```
+
+脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/process_gateway.lua`、`config/process_battle.lua` 和课程文档。

@@ -1,0 +1,4 @@
+[submodule "server/third_party/skynet-flywow"]
+	path = server/third_party/skynet-flywow
+	url = https://github.com/simbiwu/Skynet-FlyWow.git
+	branch = main
