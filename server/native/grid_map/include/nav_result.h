@@ -30,6 +30,15 @@ enum class NavError {
     kMapNotFound,           // 查询的 mapId 或版本未加载。
     kOutOfBounds,           // 世界坐标或 Grid 下标位于地图外。
     kInvalidArgument,       // 其他调用参数违反公开合同。
+    kInvalidAgent,          // AgentProfile 本身不合法或 profile_id 不存在。
+    kStartNotNavigable,    // 起点在地图内，但不满足静态/动态通行规则。
+    kEndNotNavigable,      // 终点在地图内，但不满足静态/动态通行规则。
+    kNoPath,               // 起终点均合法，但当前规则下不存在连通路径。
+    kContextClosed,        // Lua/业务仍在调用已经关闭的 NavigationContext。
+    kPathTooLong,          // 回溯点数或累计长度超过项目保护上限。
+    kDynamicOccupied,      // 动态占位提交与其他 Unit 冲突。
+    kMoveBlocked,          // 缓存路径的本次跨格已被静态或动态规则拒绝。
+    kInternalError,        // Native 未预期异常在 C ABI 边界被收敛，不能继续传播。
 };
 
 // 返回便于日志和 Lua 错误结果使用的稳定 ASCII 名称。

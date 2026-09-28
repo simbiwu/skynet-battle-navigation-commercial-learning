@@ -27,6 +27,15 @@ const char* NavErrorName(NavError error) noexcept {
     case NavError::kMapNotFound: return "MAP_NOT_FOUND";
     case NavError::kOutOfBounds: return "OUT_OF_BOUNDS";
     case NavError::kInvalidArgument: return "INVALID_ARGUMENT";
+    case NavError::kInvalidAgent: return "INVALID_AGENT";
+    case NavError::kStartNotNavigable: return "START_NOT_NAVIGABLE";
+    case NavError::kEndNotNavigable: return "END_NOT_NAVIGABLE";
+    case NavError::kNoPath: return "NO_PATH";
+    case NavError::kContextClosed: return "CONTEXT_CLOSED";
+    case NavError::kPathTooLong: return "PATH_TOO_LONG";
+    case NavError::kDynamicOccupied: return "DYNAMIC_OCCUPIED";
+    case NavError::kMoveBlocked: return "MOVE_BLOCKED";
+    case NavError::kInternalError: return "INTERNAL_ERROR";
     }
     return "UNKNOWN_NAV_ERROR"; // 防御非法强制转换得到的未知枚举值。
 }

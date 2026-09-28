@@ -271,7 +271,7 @@ find_flywow_root() {
 }
 
 # 由 FlyWow 框架生成 registry；业务仓库只提供 proto 和输出位置。
-# 运行时不解析 .proto，生成器失败时不保留可误用的旧输出。
+# 运行时不解析 .proto；生成器只原子替换完整输出，失败时 prepare 立即终止。
 build_gateway_registry() {
     find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT to its repository root"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"

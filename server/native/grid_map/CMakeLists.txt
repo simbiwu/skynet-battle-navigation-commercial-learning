@@ -1,6 +1,8 @@
-# 职责：构建 grid_map_core 和第一课 Native 单元测试。
+# 职责：构建 grid_map_core 和第一/二课 Native 导航回归测试。
 # 边界：Server Native Build；不下载依赖，不构建 Skynet 本体。
 # 输入/输出：本目录 C++ 源码 -> 静态库、测试可执行文件和 CTest 用例。
+# 运行时机：第一/二课 Native 代码变化后，由 make_test.sh 驱动。
+# 不负责：不下载依赖、不加载 Unity Scene、不启动 BattleWorker、不生成 BMAP。
 cmake_minimum_required(VERSION 3.16)
 project(battle_grid_map LANGUAGES CXX C)
 
@@ -13,6 +15,9 @@ add_library(grid_map_core STATIC
     src/grid_map.cpp
     src/map_registry.cpp
     src/nav_result.cpp
+    src/dynamic_occupancy.cpp
+    src/navigation_context.cpp
+    src/grid_pathfinder.cpp
 )
 # grid_map_core 也会被链接进 Lua 动态模块，因此其目标文件必须可用于共享库。
 set_target_properties(grid_map_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -23,5 +28,10 @@ target_compile_options(grid_map_core PRIVATE -Wall -Wextra -Wpedantic)
 add_executable(grid_map_test tests/grid_map_test.cpp)
 target_link_libraries(grid_map_test PRIVATE grid_map_core pthread)
 
+add_executable(navigation_test tests/navigation_test.cpp)
+target_link_libraries(navigation_test PRIVATE grid_map_core pthread)
+target_compile_options(navigation_test PRIVATE -Wall -Wextra -Wpedantic)
+
 enable_testing()
 add_test(NAME grid_map_test COMMAND grid_map_test)
+add_test(NAME navigation_test COMMAND navigation_test)

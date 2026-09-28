@@ -10,17 +10,35 @@
 
 namespace battle_nav {
 
-GridMap::GridMap(BMapMetadata metadata, std::vector<NavCell> cells)
-    : metadata_(metadata), cells_(std::move(cells)) {
+GridMap::GridMap(
+    BMapMetadata metadata,
+    std::vector<NavCell> cells,
+    GridDynamicEntryRules dynamic_rules)
+    : metadata_(metadata),
+      cells_(std::move(cells)),
+      default_dynamic_entry_allowed_(dynamic_rules.default_allow),
+      dynamic_entry_rules_(std::move(dynamic_rules.per_cell)) {
     const std::uint64_t expected =
         static_cast<std::uint64_t>(metadata_.width) * metadata_.height;
     if (metadata_.cell_size_mm == 0 || expected != cells_.size()) {
         throw std::invalid_argument("GridMap metadata/cell mismatch");
     }
+    if (!dynamic_entry_rules_.empty() &&
+        dynamic_entry_rules_.size() != cells_.size()) {
+        throw std::invalid_argument("GridMap dynamic rule/cell mismatch");
+    }
+    for (const CellDynamicEntryRule rule : dynamic_entry_rules_) {
+        if (rule != CellDynamicEntryRule::kUseGridDefault &&
+            rule != CellDynamicEntryRule::kAllow &&
+            rule != CellDynamicEntryRule::kBlock) {
+            throw std::invalid_argument("GridMap dynamic rule is invalid");
+        }
+    }
 }
 
 std::size_t GridMap::memory_bytes() const noexcept {
-    return sizeof(*this) + cells_.capacity() * sizeof(NavCell);
+    return sizeof(*this) + cells_.capacity() * sizeof(NavCell) +
+        dynamic_entry_rules_.capacity() * sizeof(CellDynamicEntryRule);
 }
 
 NavResult<GridPos> GridMap::WorldToGrid(const WorldPosition& world) const {
@@ -88,6 +106,31 @@ NavResult<NavCell> GridMap::QueryWorld(const WorldPosition& world) const {
         return NavResult<NavCell>::Failure(grid.error, grid.detail);
     }
     return NavResult<NavCell>::Success(cells_[IndexOf(grid.value)]);
+}
+
+const NavCell* GridMap::TryCell(const GridPos& grid) const noexcept {
+    if (!Contains(grid)) {
+        return nullptr;
+    }
+    return &cells_[IndexOf(grid)];
+}
+
+bool GridMap::AllowsDynamicEntry(const GridPos& grid) const noexcept {
+    if (!Contains(grid)) {
+        return false;
+    }
+    if (dynamic_entry_rules_.empty()) {
+        return default_dynamic_entry_allowed_;
+    }
+
+    const CellDynamicEntryRule rule = dynamic_entry_rules_[IndexOf(grid)];
+    if (rule == CellDynamicEntryRule::kAllow) {
+        return true;
+    }
+    if (rule == CellDynamicEntryRule::kBlock) {
+        return false;
+    }
+    return default_dynamic_entry_allowed_;
 }
 
 bool GridMap::Contains(const GridPos& grid) const noexcept {
