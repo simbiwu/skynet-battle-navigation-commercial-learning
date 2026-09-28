@@ -4577,6 +4577,16 @@ struct LuaPath {
 增加通用 helper：
 
 ```cpp
+// 这些 helper 的实现保留在文件后部；先声明，供前面的 Binding 入口调用。
+// 从 Lua table 读取 int32 字段；缺失、类型错误或越界会通过 luaL_error 失败。
+std::int32_t int32_field(lua_State* L, int index, const char* name);
+
+// 压入 nil 和 {code,message}；message 由 Lua 复制持有，返回两个 Lua 结果。
+void push_error(lua_State* L, const char* code, const std::string& message);
+
+// 读取模块闭包 upvalue 中的非 owning Registry 指针；Registry 生命周期覆盖 Lua State。
+MapRegistry* registry(lua_State* L);
+
 // 校验 Context userdata 类型和生命周期；关闭后返回 nullptr，不转移所有权。
 LuaNavigationContext* check_context(lua_State* L, int index) {
     auto* value = static_cast<LuaNavigationContext*>(
@@ -5314,12 +5324,72 @@ include "skynet.lua"
 start = "battle/navigation_smoke"
 ```
 
-从 `server/` 目录、在依赖与 Native Binding 已构建且 FlyWow submodule 已初始化后运行：
+为避免每次手动记 CMake 参数，先新增一个固定构建入口。这个脚本直接使用
+`CMakeLists.txt` 中的目标定义，并把 `battle_nav.so` 生成到 Skynet 的 Lua C 模块搜索目录。
+运行后会看到 CMake 配置/编译输出以及 `[battle-nav-build] ready`。
+
+[新建文件]
+
+```text
+server/native/lua_battle_nav/make.sh
+```
 
 ```bash
+#!/usr/bin/env bash
+# 职责：配置并编译 Skynet 可加载的 battle_nav Native 模块。
+# 边界：Server Native Build；复用仓库内 Skynet Lua 头文件和 grid_map_core。
+# 输入/输出：当前目录 C++ 源码 -> server/build/lua_battle_nav/battle_nav.so。
+# 生命周期：开发者修改 Lua Binding 或导航 Native 后手动运行；构建产物由本地工作区持有。
+# 不负责：不下载依赖、不运行单元测试、不启动 Skynet、不加载 BMAP。
+
+set -euo pipefail
+# -e：配置或编译失败时立即停止，不让旧产物被误认为本次构建成功。
+# -u：未定义变量立即报错；pipefail：管道任一环节失败都向上传播。
+
+# 从脚本位置推导源码与产物目录，允许从任意当前目录调用本脚本。
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
+BUILD_DIR="$SERVER_ROOT/build/lua_battle_nav"
+BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
+case "$BUILD_TYPE" in
+    RelWithDebInfo|Debug|Release) ;;
+    *)
+        printf "[battle-nav-build] unsupported BUILD_TYPE: %s\n" "$BUILD_TYPE" >&2
+        exit 2
+        ;;
+esac
+
+# CMake 将依赖图和 Skynet Lua ABI 检查集中在 CMakeLists.txt；此入口只负责重复执行配置与构建。
+cmake -S "$SCRIPT_DIR" -B "$BUILD_DIR" -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
+cmake --build "$BUILD_DIR" -j"$(nproc)"
+
+# 确认本次构建应提供的固定模块路径，避免后续 Smoke 静默加载不到 Native 模块。
+if [[ ! -s "$BUILD_DIR/battle_nav.so" ]]; then
+    printf "[battle-nav-build] expected module was not generated: %s\n" "$BUILD_DIR/battle_nav.so" >&2
+    exit 1
+fi
+
+printf "[battle-nav-build] ready: %s\n" "$BUILD_DIR/battle_nav.so"
+```
+
+新建后只需赋予一次执行权限：
+
+```bash
+chmod +x native/lua_battle_nav/make.sh
+```
+
+在 `server/` 目录运行构建脚本，再启动 Smoke。构建脚本可从其他目录调用；这里保持在
+`server/` 是为了下一条 Skynet 启动命令使用固定的相对配置路径：
+
+```bash
+./native/lua_battle_nav/make.sh
 FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
   ./third_party/skynet/skynet config/skynet_navigation_smoke.lua
 ```
+
+`scripts/linux/run_server.sh prepare` 也会在依赖和发布资产校验后调用同一个 Native 构建入口。
+只有看到最终的 `PREPARE_OK` 才代表整段准备流程成功；如果 C++ 编译失败，旧 `.so` 文件可能仍留在输出目录，不能据此判断新源码已经构建。
+单独修改 Native 后，直接运行 `./native/lua_battle_nav/make.sh` 更容易看清构建结果。
 
 预期日志包含 `NAVIGATION_SMOKE_OK`。失败时先看 `NAV_QUERY_READY` 是否出现，
 再看 `new_context` 的错误码；验证后从终端停止进程，避免遗留的查询 Service
