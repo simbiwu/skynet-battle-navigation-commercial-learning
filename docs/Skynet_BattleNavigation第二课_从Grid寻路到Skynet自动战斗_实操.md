@@ -5651,8 +5651,21 @@ server/native/grid_map/src/grid_pathfinder.cpp
 server/native/lua_battle_nav/src/lua_battle_nav.cpp
 ```
 
+这四个文件分工不同，下面每段代码前都会标出要打开的文件和操作位置：
+
+| 文件 | 本节修改内容 |
+| --- | --- |
+| `navigation_path.h` | 在不可变 `Path` 类型之外，声明跟随状态、游标和推进结果类型；游标不成为 `Path` 的可变成员。 |
+| `grid_pathfinder.h` | 声明 `GridPathfinder::AdvancePath()`。 |
+| `grid_pathfinder.cpp` | 实现线段插值和按预算推进、逐子步提交的算法。 |
+| `lua_battle_nav.cpp` | 让每个 `LuaPath` userdata 持有独立游标，并注册 `advance_path` Lua 方法。 |
+
+按这个顺序修改：先定义共享类型，再声明和实现 Native 算法，最后接入 Lua userdata。
+
 Native 内部为每个 Path userdata 保存一个跟随游标；路线点仍然不可变，游标只记录该实体
 已经消费到哪一段。公开结果使用三种稳定状态：
+
+[局部修改：`server/native/grid_map/include/navigation_path.h`。在 `Path` 类定义之后新增以下类型；不要把游标字段加进 `Path`，这样路线点仍保持不可变。]
 
 ```cpp
 // Path 跟随状态只描述本次 Tick 的导航结果；业务层决定何时重寻路或攻击。
@@ -5680,6 +5693,8 @@ struct PathAdvanceResult {
 在 `GridPathfinder` 增加公开入口。`MoveUnit()` 保留为 Native 内部复用的单步原语和
 第 14 节 smoke 的诊断入口；Battle 核心不再自己循环调用它：
 
+[局部修改：`server/native/grid_map/include/grid_pathfinder.h`。在 `GridPathfinder` 的 `public:` 区域增加这个声明，并放在现有 `MoveUnit()` 声明附近。]
+
 ```cpp
 // 沿同一实体独占的 Path 消耗一次 fixed-tick 距离预算。
 // context/agent/path/policy：同步借用；cursor 由该 Path userdata 独占并在成功子步后更新。
@@ -5698,6 +5713,8 @@ static NavResult<PathAdvanceResult> AdvancePath(
 
 在 `grid_pathfinder.cpp` 的匿名 namespace 增加安全插值 helper。它使用固定线段起点和
 累计进度；乘法无法由 `int64` 安全表示时显式失败，不允许坐标静默回绕：
+
+[局部修改：`server/native/grid_map/src/grid_pathfinder.cpp`。把 helper 放在匿名 namespace 内，与其他仅供本文件使用的几何辅助函数同层。]
 
 ```cpp
 // 按 progress/length 在线段单轴上做整数插值；除法向 0 截断且每次都相对固定 origin。
@@ -5741,6 +5758,8 @@ bool InterpolateAxis(
 
 然后实现 `GridPathfinder::AdvancePath()`。下面是完整函数；它不重新 A*，只消费已经
 生成的 Path：
+
+[局部修改：仍是 `server/native/grid_map/src/grid_pathfinder.cpp`。在 `GridPathfinder::MoveUnit()` 实现之后、`battle_nav` namespace 关闭之前添加此函数。]
 
 ```cpp
 // 沿已有 Path 消耗一次 fixed-tick 距离预算；完整合同见头文件声明。
@@ -5874,6 +5893,8 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
 
 最后在 `lua_battle_nav.cpp` 修改 `push_path()`，保证每次查询结果都有自己独立的 cursor：
 
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。先在 `LuaPath` 结构体中增加 `PathFollowCursor cursor` 字段；再用下面代码替换现有 `push_path()` 函数体。]
+
 ```cpp
 // 把 immutable Path 和该实体私有 cursor move 进新 userdata；栈净增加 1。
 void push_path(lua_State* L, battle_nav::Path path) {
@@ -5887,6 +5908,8 @@ void push_path(lua_State* L, battle_nav::Path path) {
 ```
 
 再增加 request 整数字段读取和状态转换 helper：
+
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。在匿名 namespace 内、`l_context_advance_path()` 定义之前新增这两个 helper。]
 
 ```cpp
 // 从 request table 读取 uint32；allow_zero=false 时 0 也属于合同错误。
@@ -5922,6 +5945,8 @@ const char* path_advance_status_name(
 
 `l_context_advance_path()` 的完整 Binding 如下。所有可能 `luaL_error` 的 request 解析都在
 进入 Native 之前完成；一旦开始提交 Occupancy，就不再解析 Lua 输入：
+
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。新增这个 Binding 函数，放在现有 `l_context_move_unit()` 和其他 Context 操作入口附近。]
 
 ```cpp
 // Lua context:advance_path(request)：消费一个 fixed-tick 距离预算并返回最后成功位置。
@@ -6001,6 +6026,8 @@ int l_context_advance_path(lua_State* L) {
 
 在 `register_context_meta()` 中注册：
 
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。把下面两行加进 `register_context_meta()` 的 Context 方法注册区，与 `move_unit`、`release_unit` 注册语句放在一起。]
+
 ```cpp
 lua_pushcfunction(L, l_context_advance_path);
 lua_setfield(L, -2, "advance_path");
@@ -6022,6 +6049,8 @@ Cell 与异常速度组合制造无界循环。
 Lua Binding 将 cursor 放在 `LuaPath` wrapper 中，不要求业务层保存 `path_index` 或
 `segment_progress_mm`：
 
+[结构核对：这段结构定义对应 `server/native/lua_battle_nav/src/lua_battle_nav.cpp` 中的 `LuaPath`；游标字段已在前面的 `push_path()` 修改步骤中加入，不要重复添加。]
+
 ```cpp
 struct LuaPath {
     battle_nav::Path path;               // immutable 路线点，由 userdata 独占。
@@ -6030,6 +6059,8 @@ struct LuaPath {
 ```
 
 新增的方法使用 request/result record，避免继续扩大位置参数列表：
+
+[调用示例：这是 Lua 侧调用形式，不是新增 Native 文件。后续在 `battle_core.lua` 的 `advance_move()` 中调用；当前这一节先完成上面标出的四个 Native 文件修改。]
 
 ```lua
 local advanced, err = context:advance_path({
