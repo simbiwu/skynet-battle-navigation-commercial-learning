@@ -30,6 +30,16 @@ using battle_nav::DynamicNavigationPolicy;
 using battle_nav::NavigationAgent;
 using battle_nav::NavigationAgentHandle;
 
+// 这些 helper 的实现保留在文件后部；先声明，供前面的 Binding 入口调用。
+// 从 Lua table 读取 int32 字段；缺失、类型错误或越界会通过 luaL_error 失败。
+std::int32_t int32_field(lua_State* L, int index, const char* name);
+
+// 压入 nil 和 {code,message}；message 由 Lua 复制持有，返回两个 Lua 结果。
+void push_error(lua_State* L, const char* code, const std::string& message);
+
+// 读取模块闭包 upvalue 中的非 owning Registry 指针；Registry 生命周期覆盖 Lua State。
+MapRegistry* registry(lua_State* L);
+
 constexpr const char* kContextMeta = "battle_nav.NavigationContext";
 constexpr const char* kPathMeta = "battle_nav.Path";
 
@@ -494,7 +504,7 @@ int l_context_release_unit(lua_State* L) {
     }
 }
 
-/ 返回 Path 世界点数量；不分配、不修改 Path。
+// 返回 Path 世界点数量；不分配、不修改 Path。
 int l_path_count(lua_State* L) {
     auto* value = check_path(L, 1);
     lua_pushinteger(L, static_cast<lua_Integer>(value->path.count()));

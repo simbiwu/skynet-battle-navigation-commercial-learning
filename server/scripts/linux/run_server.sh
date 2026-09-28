@@ -301,16 +301,10 @@ verify_descriptor_asset() {
     fi
 }
 
-# 配置并编译 battle_nav.so；Native 产物写入 server/build，不进入共享资产目录。
+# 复用 Native 专用入口构建 battle_nav.so，避免 Server prepare 与开发者手动构建走两套命令。
 build_native_incremental() {
     log "configuring/building Native module ($BUILD_TYPE)"
-    cmake \
-        -S "$SERVER_ROOT/native/lua_battle_nav" \
-        -B "$SERVER_ROOT/build/lua_battle_nav" \
-        -DCMAKE_BUILD_TYPE="$BUILD_TYPE"
-    cmake --build "$SERVER_ROOT/build/lua_battle_nav" -j"$(nproc)"
-    [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || \
-        fail "battle_nav.so was not generated"
+    BUILD_TYPE="$BUILD_TYPE" "$SERVER_ROOT/native/lua_battle_nav/make.sh"
 }
 
 # 执行一次完整依赖和 Native 准备，供 start/prepare/build 复用。
