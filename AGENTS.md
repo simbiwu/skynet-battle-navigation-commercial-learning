@@ -14,6 +14,16 @@ Unity 3D Authoring
 
 功能可简化，工程边界不能用 Demo 捷径替代。
 
+## P0 编码规范 Skill
+
+新增、修改或评审课程的 C#、C++、Lua、Shell、PowerShell、Proto、CMake、配置、测试和可复制教程代码前，必须完整读取并应用：
+
+```text
+.agents/skills/skynet-battle-navigation-coding-standard/SKILL.md
+```
+
+该 Skill 与本文的教学顺序、仓库边界和课程分工同时生效。若代码或示例缺少文件头、函数合同、参数/返回/失败/ownership 说明或关键 WHY 注释，视为 P0 未完成。
+
 ## 独立项目
 
 参考：

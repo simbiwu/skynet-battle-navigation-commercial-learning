@@ -6670,7 +6670,7 @@ return {
     port = 19001,                                -- TCP/WebSocket 监听端口；范围 1..65535。
     backlog = 128,                               -- OS accept backlog；不等于 max_clients。
     transport = "tcp",                          -- 接入模式：tcp 或 websocket。
-    websocket_protocol = "ws",                  -- transport=websocket 时选择 Skynet 内置 ws/wss。
+    websocket_protocol = "ws",                  -- 当前只支持 ws；TLS 由宿主前置终止。
 
     descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 路径。
     registry_module = "protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
