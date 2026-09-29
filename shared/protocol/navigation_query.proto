@@ -15,9 +15,9 @@ message Envelope {
 }
 
 message WorldPosition {
-  sint32 x_mm = 1; // 世界 X，毫米；负数合法，ZigZag 编码负值。
-  sint32 y_mm = 2; // 世界高度 Y，毫米；ZigZag 编码。
-  sint32 z_mm = 3; // 世界 Z，毫米；负数合法，ZigZag 编码负值。
+  sint64 x_mm = 1; // 世界 X，毫米；各端 WorldPosition 均使用有符号 64 位。
+  sint64 y_mm = 2; // 世界高度 Y，毫米；单位和位宽与 X/Z 一致。
+  sint64 z_mm = 3; // 世界 Z，毫米；负数合法。
 }
 
 message QueryCellRequest {

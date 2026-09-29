@@ -33,6 +33,8 @@ using battle_nav::NavigationAgentHandle;
 // 这些 helper 的实现保留在文件后部；先声明，供前面的 Binding 入口调用。
 // 从 Lua table 读取 int32 字段；缺失、类型错误或越界会通过 luaL_error 失败。
 std::int32_t int32_field(lua_State* L, int index, const char* name);
+// 从 Lua table 读取 int64 世界毫米坐标；Skynet Lua 5.4 的 lua_Integer 为 64 位。
+std::int64_t int64_field(lua_State* L, int index, const char* name);
 
 // 压入 nil 和 {code,message}；message 由 Lua 复制持有，返回两个 Lua 结果。
 void push_error(lua_State* L, const char* code, const std::string& message);
@@ -84,13 +86,13 @@ const battle_nav::AgentProfile* find_profile(
     return nullptr;
 }
 
-// 从 Lua table 读取 int32 毫米 WorldPosition；字段缺失或越界 luaL_error。
+// 从 Lua table 读取 int64 毫米 WorldPosition；字段缺失或类型错误 luaL_error。
 battle_nav::WorldPosition world_position(lua_State* L, int index) {
     luaL_checktype(L, index, LUA_TTABLE);
     battle_nav::WorldPosition p;
-    p.x_mm = int32_field(L, index, "x_mm");
-    p.y_mm = int32_field(L, index, "y_mm");
-    p.z_mm = int32_field(L, index, "z_mm");
+    p.x_mm = int64_field(L, index, "x_mm");
+    p.y_mm = int64_field(L, index, "y_mm");
+    p.z_mm = int64_field(L, index, "z_mm");
     return p;
 }
 
@@ -720,8 +722,7 @@ MapRegistry* registry(lua_State* L) {
     return static_cast<MapRegistry*>(p);
 }
 
-// 从 index 指向的 Lua table 读取 int32 字段；缺失、类型错误或越界触发 luaL_error。
-// WorldPosition 的协议字段是 sint32，进入 Native int32 前必须显式检查范围。
+// 从 index 指向的 Lua table 读取 AgentProfile 用的 int32 字段；缺失、类型错误或越界触发 luaL_error。
 std::int32_t int32_field(lua_State* L, int index, const char* name) {
     lua_getfield(L, index, name);
     if (!lua_isinteger(L, -1)) {
@@ -734,6 +735,20 @@ std::int32_t int32_field(lua_State* L, int index, const char* name) {
         luaL_error(L, "field '%s' is outside int32 range", name);
     }
     return static_cast<std::int32_t>(value);
+}
+
+// 读取 WorldPosition 的 int64 毫米字段；Lua 5.4 的 lua_Integer 与此合同同为有符号 64 位。
+std::int64_t int64_field(lua_State* L, int index, const char* name) {
+    static_assert(
+        std::numeric_limits<lua_Integer>::digits == 63,
+        "WorldPosition requires a 64-bit Lua integer");
+    lua_getfield(L, index, name);
+    if (!lua_isinteger(L, -1)) {
+        luaL_error(L, "field '%s' must be integer", name);
+    }
+    const lua_Integer value = lua_tointeger(L, -1);
+    lua_pop(L, 1);
+    return static_cast<std::int64_t>(value);
 }
 
 // 向 Lua 栈压入 nil 和 {code,message} 两个返回值；message bytes 由 Lua 复制持有。
@@ -783,9 +798,9 @@ int l_query_cell(lua_State* L) {
     luaL_checktype(L, 3, LUA_TTABLE);
 
     battle_nav::WorldPosition position;
-    position.x_mm = int32_field(L, 3, "x_mm");
-    position.y_mm = int32_field(L, 3, "y_mm");
-    position.z_mm = int32_field(L, 3, "z_mm");
+    position.x_mm = int64_field(L, 3, "x_mm");
+    position.y_mm = int64_field(L, 3, "y_mm");
+    position.z_mm = int64_field(L, 3, "z_mm");
 
     const auto found = maps->Find(map_id, version);
     if (!found.ok()) {

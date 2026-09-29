@@ -42,10 +42,20 @@ std::size_t GridMap::memory_bytes() const noexcept {
 }
 
 NavResult<GridPos> GridMap::WorldToGrid(const WorldPosition& world) const {
+    // BMAP V1 的地图原点仍是 int32；先拒绝其可表达范围之外的坐标，
+    // 让后续 int64 相减安全，且不把超大业务坐标误映射进有限 Grid。
+    if (world.x_mm < std::numeric_limits<std::int32_t>::min() ||
+        world.x_mm > std::numeric_limits<std::int32_t>::max() ||
+        world.z_mm < std::numeric_limits<std::int32_t>::min() ||
+        world.z_mm > std::numeric_limits<std::int32_t>::max()) {
+        return NavResult<GridPos>::Failure(
+            NavError::kOutOfBounds,
+            "world position outside BMAP V1 coordinate range");
+    }
     const std::int64_t relative_x = // 相对 Grid 起点的世界 X 偏移，毫米；允许负数。
-        static_cast<std::int64_t>(world.x_mm) - metadata_.origin_x_mm;
+        world.x_mm - metadata_.origin_x_mm;
     const std::int64_t relative_z = // 相对 Grid 起点的世界 Z 偏移，毫米；允许负数。
-        static_cast<std::int64_t>(world.z_mm) - metadata_.origin_z_mm;
+        world.z_mm - metadata_.origin_z_mm;
 
     const std::int64_t grid_x = FloorDiv(relative_x, metadata_.cell_size_mm);
     const std::int64_t grid_z = FloorDiv(relative_z, metadata_.cell_size_mm);
@@ -94,9 +104,9 @@ NavResult<WorldPosition> GridMap::GridToWorldCenter(const GridPos& grid) const {
     }
 
     return NavResult<WorldPosition>::Success(WorldPosition{
-        static_cast<std::int32_t>(x),
+        x,
         cell.height_mm,
-        static_cast<std::int32_t>(z),
+        z,
     });
 }
 

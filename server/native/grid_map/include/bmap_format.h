@@ -24,14 +24,14 @@ struct BMapMetadata {
     std::uint32_t width = 0;        // Grid X 方向 Cell 数；合法下标 [0, width)。
     std::uint32_t height = 0;       // Grid Z 方向 Cell 数；合法下标 [0, height)。
     std::uint32_t cell_size_mm = 0; // 正方形 Cell 边长，毫米；必须大于 0。
-    std::int32_t origin_x_mm = 0;   // Grid 起点世界 X，毫米；允许负数。
-    std::int32_t origin_z_mm = 0;   // Grid 起点世界 Z，毫米；允许负数。
+    std::int32_t origin_x_mm = 0;   // BMAP V1 原点 X，磁盘字段为 i32 毫米；允许负数。
+    std::int32_t origin_z_mm = 0;   // BMAP V1 原点 Z，磁盘字段为 i32 毫米；允许负数。
     std::uint32_t flags = 0;        // V1 保留标记；必须为 0，不进入协议。
 };
 
 // 一个 Server Grid Cell 的静态导航数据；地图加载后 immutable 共享。
 struct NavCell {
-    std::int32_t height_mm = 0;       // Cell Center 对应表面的世界 Y，毫米。
+    std::int32_t height_mm = 0;       // BMAP V1 Cell 地表 Y，磁盘字段为 i32 毫米。
     std::uint16_t flags = 0;          // 静态属性 bitset；bit 0=Walkable。
     std::uint8_t area_type = 0;       // 稳定地表编码；不是 Unity Area 下标。
     std::uint8_t clearance_cells = 0; // 到静态障碍/边界的距离，单位 Cell。
@@ -42,11 +42,11 @@ struct NavCell {
     }
 };
 
-// Server 业务位置：世界坐标、整数毫米，可进入协议和战斗快照。
+// Server 业务位置：世界坐标、整数毫米；三轴均为 int64，可进入协议和战斗快照。
 struct WorldPosition {
-    std::int32_t x_mm = 0; // 世界 X，毫米；允许负数。
-    std::int32_t y_mm = 0; // 世界高度 Y，毫米。
-    std::int32_t z_mm = 0; // 世界 Z，毫米；允许负数。
+    std::int64_t x_mm = 0; // 世界 X，毫米；允许负数。
+    std::int64_t y_mm = 0; // 世界高度 Y，毫米。
+    std::int64_t z_mm = 0; // 世界 Z，毫米；允许负数。
 };
 
 // 当前地图内的二维 Cell 下标，只用于 Native 查询和 Debug API。

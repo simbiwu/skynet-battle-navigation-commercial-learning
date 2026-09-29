@@ -48,15 +48,20 @@ struct QueryPolicy {
 // 用途：把沿 Path 线段的消费进度换算成一个 X 或 Z 世界坐标，避免逐 Tick 累加坐标。
 // 例如 origin=100、target=500、progress=100、length=400，结果是 200。
 // 按 progress/length 在线段单轴上做整数插值；除法向 0 截断且每次都相对固定 origin。
-// origin/target 是世界毫米坐标；progress 必须不大于 length，out 由调用方提供。
-// 成功返回 true；乘法或最终 int32 坐标越界返回 false；不分配、不修改共享状态。
+// origin/target 是 BMAP V1 可表达范围内的 int64 世界毫米坐标；
+// progress 必须不大于 length，out 由调用方提供。
+// 成功返回 true；乘法溢出或参数越界返回 false；不分配、不修改共享状态。
 bool InterpolateAxis(
-    std::int32_t origin,
-    std::int32_t target,
+    std::int64_t origin,
+    std::int64_t target,
     std::uint64_t progress,
     std::uint64_t length,
-    std::int32_t* out) {
+    std::int64_t* out) {
     if (out == nullptr || length == 0 || progress > length ||
+        origin < std::numeric_limits<std::int32_t>::min() ||
+        std::numeric_limits<std::int32_t>::max() < origin ||
+        target < std::numeric_limits<std::int32_t>::min() ||
+        std::numeric_limits<std::int32_t>::max() < target ||
         length > static_cast<std::uint64_t>(
             std::numeric_limits<std::int64_t>::max())) {
         return false;
@@ -77,11 +82,7 @@ bool InterpolateAxis(
     const std::int64_t offset =
         delta * signed_progress / static_cast<std::int64_t>(length);
     const std::int64_t value = static_cast<std::int64_t>(origin) + offset;
-    if (value < std::numeric_limits<std::int32_t>::min() ||
-        value > std::numeric_limits<std::int32_t>::max()) {
-        return false;
-    }
-    *out = static_cast<std::int32_t>(value);
+    *out = value;
     return true;
 }
 
