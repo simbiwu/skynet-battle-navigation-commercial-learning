@@ -32,6 +32,11 @@ add_executable(navigation_test tests/navigation_test.cpp)
 target_link_libraries(navigation_test PRIVATE grid_map_core pthread)
 target_compile_options(navigation_test PRIVATE -Wall -Wextra -Wpedantic)
 
+# 独立记录性能，不混入 CTest 正确性门禁；运行条件由操作者随结果保存。
+add_executable(navigation_benchmark benchmark/navigation_benchmark.cpp)
+target_link_libraries(navigation_benchmark PRIVATE grid_map_core pthread)
+target_compile_options(navigation_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+
 enable_testing()
 add_test(NAME grid_map_test COMMAND grid_map_test)
 add_test(NAME navigation_test COMMAND navigation_test)
