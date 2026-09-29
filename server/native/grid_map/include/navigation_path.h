@@ -15,6 +15,27 @@
 
 namespace battle_nav {
 
+// Path 跟随状态只描述本次 Tick 的导航结果；业务层决定何时重寻路或攻击。
+enum class PathAdvanceStatus : std::uint8_t {
+    kMoving = 0, // 预算已经用完，Path 后面仍有路点。
+    kReached = 1, // 已经消费到 Path 最后一个路点。
+    kBlocked = 2, // 某个子步被最新静态/动态规则拒绝，位置停在最后一次成功提交处。
+};
+
+// 一个 Path userdata 独占一个 cursor；下标使用 C++ 0-based，不进入 Snapshot/Event。
+struct PathFollowCursor {
+    std::size_t next_point_index = 1;    // 下一个待追踪路点；count 表示已结束。
+    std::uint64_t segment_progress_mm = 0; // 当前线段从固定起点累计消费的毫米数。
+};
+
+// Native 一次 fixed-tick 推进的结果；position 是已经成功提交的权威位置。
+struct PathAdvanceResult {
+    PathAdvanceStatus status = PathAdvanceStatus::kMoving;
+    WorldPosition position{};
+    std::uint32_t consumed_mm = 0; // 本次调用真正消费的距离预算。
+    bool moved = false;            // X/Z 是否至少发生过一次成功变化。
+};
+
 class Path final {
 public:
     // 构造空路径结果；不分配内存，通常只用于结果容器初始化。

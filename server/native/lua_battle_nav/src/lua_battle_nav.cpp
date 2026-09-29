@@ -40,6 +40,11 @@ void push_error(lua_State* L, const char* code, const std::string& message);
 // 读取模块闭包 upvalue 中的非 owning Registry 指针；Registry 生命周期覆盖 Lua State。
 MapRegistry* registry(lua_State* L);
 
+// 检查目标 footprint 是否只被当前实体占用；定义位于后续的 DynamicOccupancy helper 区域。
+bool ExclusiveDynamicRule(
+    void*,
+    const battle_nav::DynamicNavigationQuery& query);
+
 constexpr const char* kContextMeta = "battle_nav.NavigationContext";
 constexpr const char* kPathMeta = "battle_nav.Path";
 
@@ -51,6 +56,7 @@ struct LuaNavigationContext {
 
 struct LuaPath {
     battle_nav::Path path; // userdata 独占 immutable Path 结果。
+    battle_nav::PathFollowCursor cursor;     // 这条路线自己的跟随进度。
 };
 
 // 校验 Context userdata 类型和生命周期；关闭后返回 nullptr，不转移所有权。
@@ -120,10 +126,12 @@ int push_nav_failure(
     return 2;
 }
 
-// 把 Path move 进新 userdata 并挂 metatable；栈净增加 1。
+// 把 immutable Path 和该实体私有 cursor move 进新 userdata；栈净增加 1。
 void push_path(lua_State* L, battle_nav::Path path) {
     void* storage = lua_newuserdatauv(L, sizeof(LuaPath), 0);
-    new (storage) LuaPath{std::move(path)};
+    new (storage) LuaPath{
+        std::move(path),
+        battle_nav::PathFollowCursor{}};
     luaL_getmetatable(L, kPathMeta);
     lua_setmetatable(L, -2);
 }
@@ -259,6 +267,110 @@ int l_new_context(lua_State* L) {
             L, battle_nav::NavError::kInternalError, exception.what());
     }
     return 1;
+}
+
+// 从 request table 读取 uint32；allow_zero=false 时 0 也属于合同错误。
+// 字段缺失、类型错误或越界通过 luaL_error 终止当前 Lua 调用；栈净变化为 0。
+std::uint32_t uint32_request_field(
+    lua_State* L,
+    int request_index,
+    const char* name,
+    bool allow_zero) {
+    const int request = lua_absindex(L, request_index);
+    lua_getfield(L, request, name);
+    const lua_Integer raw = luaL_checkinteger(L, -1);
+    lua_pop(L, 1);
+    if (raw < (allow_zero ? 0 : 1) ||
+        static_cast<std::uint64_t>(raw) >
+            std::numeric_limits<std::uint32_t>::max()) {
+        luaL_error(L, "field '%s' outside uint32 range", name);
+    }
+    return static_cast<std::uint32_t>(raw);
+}
+
+// 把 Native 状态映射为稳定 Lua 字符串；未知枚举视为 Native 编程错误。
+const char* path_advance_status_name(
+    battle_nav::PathAdvanceStatus status) {
+    switch (status) {
+    case battle_nav::PathAdvanceStatus::kMoving: return "moving";
+    case battle_nav::PathAdvanceStatus::kReached: return "reached";
+    case battle_nav::PathAdvanceStatus::kBlocked: return "blocked";
+    }
+    return nullptr;
+}
+
+// Lua context:advance_path(request)：消费一个 fixed-tick 距离预算并返回最后成功位置。
+// request 的 path/from_world 只在本次同步调用借用；函数不 I/O、不加锁、不 yield。
+// blocked 是成功 result 状态；参数、生命周期或 Native 内部错误返回 nil,error。
+int l_context_advance_path(lua_State* L) {
+    LuaNavigationContext* owner = check_context(L, 1);
+    if (owner == nullptr) {
+        return push_nav_failure(
+            L, battle_nav::NavError::kContextClosed, "context is closed");
+    }
+    luaL_checktype(L, 2, LUA_TTABLE);
+
+    const std::uint32_t profile_id =
+        uint32_request_field(L, 2, "profile_id", false);
+    const std::uint32_t unit_id =
+        uint32_request_field(L, 2, "unit_id", false);
+    const std::uint32_t distance_mm =
+        uint32_request_field(L, 2, "distance_mm", true);
+    const auto* profile = find_profile(*owner, profile_id);
+    if (profile == nullptr) {
+        return push_nav_failure(
+            L, battle_nav::NavError::kInvalidAgent,
+            "profile_id not found");
+    }
+
+    lua_getfield(L, 2, "path");
+    LuaPath* path_owner = check_path(L, -1);
+    lua_pop(L, 1);
+
+    lua_getfield(L, 2, "from_world");
+    const battle_nav::WorldPosition from_world = world_position(L, -1);
+    lua_pop(L, 1);
+
+    try {
+        const NavigationAgent agent{
+            NavigationAgentHandle{unit_id},
+            profile};
+        const DynamicNavigationPolicy dynamic_policy{
+            nullptr,
+            &ExclusiveDynamicRule};
+        auto advanced = battle_nav::GridPathfinder::AdvancePath(
+            *owner->context,
+            agent,
+            path_owner->path,
+            path_owner->cursor,
+            from_world,
+            distance_mm,
+            dynamic_policy);
+        if (!advanced.ok()) {
+            return push_nav_failure(
+                L, advanced.error, advanced.detail);
+        }
+
+        const char* status = path_advance_status_name(advanced.value.status);
+        if (status == nullptr) {
+            return push_nav_failure(
+                L, battle_nav::NavError::kInternalError,
+                "unknown PathAdvanceStatus");
+        }
+        lua_newtable(L);
+        lua_pushstring(L, status);
+        lua_setfield(L, -2, "status");
+        push_world_position(L, advanced.value.position);
+        lua_setfield(L, -2, "position");
+        lua_pushinteger(L, advanced.value.consumed_mm);
+        lua_setfield(L, -2, "consumed_mm");
+        lua_pushboolean(L, advanced.value.moved ? 1 : 0);
+        lua_setfield(L, -2, "moved");
+        return 1;
+    } catch (const std::exception& exception) {
+        return push_nav_failure(
+            L, battle_nav::NavError::kInternalError, exception.what());
+    }
 }
 
 // 判断 agent 的整个目标 footprint 是否只包含自己。
@@ -588,6 +700,8 @@ void register_context_meta(lua_State* L) {
         lua_setfield(L, -2, "move_unit");
         lua_pushcfunction(L, l_context_release_unit);
         lua_setfield(L, -2, "release_unit");
+        lua_pushcfunction(L, l_context_advance_path);
+        lua_setfield(L, -2, "advance_path");
         lua_pushcfunction(L, l_context_cell_size_mm);
         lua_setfield(L, -2, "cell_size_mm");
         lua_pushcfunction(L, l_context_close);
@@ -607,7 +721,7 @@ MapRegistry* registry(lua_State* L) {
 }
 
 // 从 index 指向的 Lua table 读取 int32 字段；缺失、类型错误或越界触发 luaL_error。
-// WorldPosition 的协议字段是 sint64，进入 Native int32 前必须显式检查范围。
+// WorldPosition 的协议字段是 sint32，进入 Native int32 前必须显式检查范围。
 std::int32_t int32_field(lua_State* L, int index, const char* name) {
     lua_getfield(L, index, name);
     if (!lua_isinteger(L, -1)) {

@@ -81,6 +81,21 @@ public:
         const WorldPosition& from,
         const WorldPosition& to,
         const DynamicNavigationPolicy& policy);
+
+    // 沿同一实体独占的 Path 消耗一次 fixed-tick 距离预算。
+    // context/agent/path/policy：同步借用；cursor 由该 Path userdata 独占并在成功子步后更新。
+    // cursor、path、agent 和 from 必须始终属于同一单位；外力改位或换 Path 时应丢弃旧 cursor。
+    // from：当前权威世界毫米位置；distance_mm：Battle 已结算的本 Tick 非负移动预算。
+    // 返回 moving/reached/blocked 和最后成功位置；blocked 是正常业务结果，不作为 NavError。
+    // 参数非法才返回失败；函数不执行 I/O、加锁或 yield，但会修改 cursor 和 Occupancy。
+    static NavResult<PathAdvanceResult> AdvancePath(
+        NavigationContext& context,
+        const NavigationAgent& agent,
+        const Path& path,
+        PathFollowCursor& cursor,
+        const WorldPosition& from,
+        std::uint32_t distance_mm,
+        const DynamicNavigationPolicy& policy);
 };
 
 } // namespace battle_nav

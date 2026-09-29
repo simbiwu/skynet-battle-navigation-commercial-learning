@@ -14,6 +14,7 @@
 #include <vector>
 
 namespace battle_nav {
+// 匿名 namespace 让下面的辅助符号只在本 .cpp 可见；它们不是其他文件可调用的公开 API。
 namespace {
 
 constexpr std::uint32_t kStraightCost = 1000;
@@ -43,6 +44,46 @@ struct QueryPolicy {
     const NavigationAgent* agent = nullptr;                 // 当前移动者视图；借用。
     DynamicQueryPurpose purpose = DynamicQueryPurpose::kFindPath;
 };
+
+// 用途：把沿 Path 线段的消费进度换算成一个 X 或 Z 世界坐标，避免逐 Tick 累加坐标。
+// 例如 origin=100、target=500、progress=100、length=400，结果是 200。
+// 按 progress/length 在线段单轴上做整数插值；除法向 0 截断且每次都相对固定 origin。
+// origin/target 是世界毫米坐标；progress 必须不大于 length，out 由调用方提供。
+// 成功返回 true；乘法或最终 int32 坐标越界返回 false；不分配、不修改共享状态。
+bool InterpolateAxis(
+    std::int32_t origin,
+    std::int32_t target,
+    std::uint64_t progress,
+    std::uint64_t length,
+    std::int32_t* out) {
+    if (out == nullptr || length == 0 || progress > length ||
+        length > static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max())) {
+        return false;
+    }
+
+    const std::int64_t delta =
+        static_cast<std::int64_t>(target) - origin;
+    const std::uint64_t magnitude = static_cast<std::uint64_t>(
+        delta < 0 ? -delta : delta);
+    if (magnitude != 0 &&
+        progress > static_cast<std::uint64_t>(
+            std::numeric_limits<std::int64_t>::max()) / magnitude) {
+        return false;
+    }
+
+    const std::int64_t signed_progress =
+        static_cast<std::int64_t>(progress);
+    const std::int64_t offset =
+        delta * signed_progress / static_cast<std::int64_t>(length);
+    const std::int64_t value = static_cast<std::int64_t>(origin) + offset;
+    if (value < std::numeric_limits<std::int32_t>::min() ||
+        value > std::numeric_limits<std::int32_t>::max()) {
+        return false;
+    }
+    *out = static_cast<std::int32_t>(value);
+    return true;
+}
 
 // 把合法 GridPos 映射成稳定 node_index；width 来自 immutable map metadata。
 std::int32_t NodeIndex(const GridMap& map, const GridPos& p) {
@@ -244,6 +285,7 @@ struct SegmentCheck {
 };
 
 // 使用整数 Supercover 思路逐 Cell 穿过一条 Grid 直线。
+// 例如 (0,0)->(3,0) 会逐个检查 (1,0)、(2,0)、(3,0)，而不是只验证两个端点。
 // 每一步都重新调用与 A* 相同的 CanTraverse，因此 corner/clearance/slope/dynamic 不会绕过。
 // map/profile：当前 immutable 地图与体型规则；policy/occupancy：本次查询的只读动态事实。
 // from/to：已经验证在同一 GridMap 内的 Cell 坐标；调用期间不修改 Occupancy。
@@ -723,7 +765,7 @@ static NavResult<Path> FindPathImpl(
     HeapPush(context, map, start_index, goal);
 
     while (context.heap_size() > 0) {
-        // HeapPop 取出当前 f 最小的候选；同一节点被重复入堆时，Closed 状态会过滤旧条目。
+        // HeapPop 取出当前 f 最小的候选；节点改善时用 decrease-key 原地调整，不会留下重复旧条目。
         const std::int32_t current_index = HeapPop(context, map, goal);
         auto& current_node = context.TouchNode(current_index);
         if (current_node.state == NavigationContext::NodeState::kClosed) {
@@ -966,6 +1008,162 @@ NavResult<bool> GridPathfinder::MoveUnit(
         agent.handle,
         profile,
         to_grid.value);
+}
+
+// 沿已有 Path 消耗一次 fixed-tick 距离预算；完整合同见头文件声明。
+NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
+    NavigationContext& context,
+    const NavigationAgent& agent,
+    const Path& path,
+    PathFollowCursor& cursor,
+    const WorldPosition& from,
+    std::uint32_t distance_mm,
+    const DynamicNavigationPolicy& policy) {
+    if (agent.profile == nullptr || !agent.handle.valid() || path.count() == 0) {
+        return NavResult<PathAdvanceResult>::Failure(
+            NavError::kInvalidArgument,
+            "AdvancePath requires valid agent and non-empty path");
+    }
+    const auto valid_profile = ValidateAgentProfile(*agent.profile);
+    if (!valid_profile.ok()) {
+        return NavResult<PathAdvanceResult>::Failure(
+            valid_profile.error, valid_profile.detail);
+    }
+    if (cursor.next_point_index > path.count() ||
+        (path.count() > 1 && cursor.next_point_index == 0)) {
+        return NavResult<PathAdvanceResult>::Failure(
+            NavError::kInvalidArgument, "Path cursor is outside path");
+    }
+
+    // position 从 Battle 的权威输入开始；返回前会更新为最后成功提交的位置。
+    PathAdvanceResult output;
+    output.position = from;
+    if (cursor.next_point_index == path.count()) {
+        output.status = PathAdvanceStatus::kReached;
+        return NavResult<PathAdvanceResult>::Success(output);
+    }
+
+    const std::uint64_t cell_size_mm = context.map()->metadata().cell_size_mm;
+    const std::uint64_t max_substep_mm =
+        std::max<std::uint64_t>(1, cell_size_mm / 2);
+    constexpr std::uint64_t kMaxSubstepsPerCall = 4096;
+    if (distance_mm > max_substep_mm * kMaxSubstepsPerCall) {
+        return NavResult<PathAdvanceResult>::Failure(
+            NavError::kInvalidArgument,
+            "distance budget exceeds bounded substep count");
+    }
+
+    // 把本 Tick 的距离预算分成小步；每步复用 MoveUnit 重新验证并提交。
+    std::uint64_t budget = distance_mm;
+    std::uint64_t substeps = 0;
+    while (budget > 0 && cursor.next_point_index < path.count()) {
+        // cursor 指向下一个路点；前一个点是当前线段的固定起点。
+        const WorldPosition& origin =
+            path.WorldPoint(cursor.next_point_index - 1);
+        const WorldPosition& goal =
+            path.WorldPoint(cursor.next_point_index);
+        const std::uint64_t length = SegmentLengthMm(origin, goal);
+        if (length == 0) {
+            ++cursor.next_point_index;
+            cursor.segment_progress_mm = 0;
+            continue;
+        }
+        if (cursor.segment_progress_mm >= length) {
+            return NavResult<PathAdvanceResult>::Failure(
+                NavError::kInternalError,
+                "Path cursor progress is outside current segment");
+        }
+        if (++substeps > kMaxSubstepsPerCall) {
+            output.status = PathAdvanceStatus::kMoving;
+            return NavResult<PathAdvanceResult>::Success(output);
+        }
+
+        const std::uint64_t remaining =
+            length - cursor.segment_progress_mm;
+        const std::uint64_t step =
+            std::min<std::uint64_t>(budget, std::min(remaining, max_substep_mm));
+        const std::uint64_t progress = cursor.segment_progress_mm + step;
+
+        WorldPosition candidate = output.position;
+        if (progress == length) {
+            candidate.x_mm = goal.x_mm;
+            candidate.z_mm = goal.z_mm;
+        } else if (!InterpolateAxis(
+                       origin.x_mm, goal.x_mm, progress, length,
+                       &candidate.x_mm) ||
+                   !InterpolateAxis(
+                       origin.z_mm, goal.z_mm, progress, length,
+                       &candidate.z_mm)) {
+            if (output.consumed_mm > 0) {
+                output.status = PathAdvanceStatus::kBlocked;
+                return NavResult<PathAdvanceResult>::Success(output);
+            }
+            return NavResult<PathAdvanceResult>::Failure(
+                NavError::kInvalidArgument,
+                "Path segment interpolation exceeds integer range");
+        }
+
+        if (candidate.x_mm != output.position.x_mm ||
+            candidate.z_mm != output.position.z_mm) {
+            // 先做只读转换，确保地图坐标错误不会在 Occupancy 提交后才报告。
+            const auto checked_grid = context.map()->WorldToGrid(candidate);
+            if (!checked_grid.ok()) {
+                if (output.consumed_mm > 0) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                return NavResult<PathAdvanceResult>::Failure(
+                    checked_grid.error, checked_grid.detail);
+            }
+            const auto checked_world =
+                context.map()->GridToWorldCenter(checked_grid.value);
+            if (!checked_world.ok()) {
+                if (output.consumed_mm > 0) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                return NavResult<PathAdvanceResult>::Failure(
+                    checked_world.error, checked_world.detail);
+            }
+            const auto moved = MoveUnit(
+                context, agent, output.position, candidate, policy);
+            if (!moved.ok()) {
+                if (moved.error == NavError::kMoveBlocked ||
+                    moved.error == NavError::kDynamicOccupied ||
+                    moved.error == NavError::kOutOfBounds ||
+                    moved.error == NavError::kStartNotNavigable ||
+                    moved.error == NavError::kEndNotNavigable) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                if (output.consumed_mm > 0) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                return NavResult<PathAdvanceResult>::Failure(
+                    moved.error, moved.detail);
+            }
+
+            // MoveUnit 已提交目标 footprint；权威 Y 使用提交前验证的目标 Cell 地表高度。
+            output.position = checked_world.value;
+            output.position.x_mm = candidate.x_mm;
+            output.position.z_mm = candidate.z_mm;
+            output.moved = true;
+        }
+
+        cursor.segment_progress_mm = progress;
+        budget -= step;
+        output.consumed_mm += static_cast<std::uint32_t>(step);
+        if (progress == length) {
+            ++cursor.next_point_index;
+            cursor.segment_progress_mm = 0;
+        }
+    }
+
+    output.status = cursor.next_point_index == path.count()
+        ? PathAdvanceStatus::kReached
+        : PathAdvanceStatus::kMoving;
+    return NavResult<PathAdvanceResult>::Success(output);
 }
 
 } // namespace battle_nav

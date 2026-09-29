@@ -1,25 +1,31 @@
--- 职责：组装 Lesson 2 Map/Battle Process，并注册跨进程 cluster Service。
--- 边界：Server Runtime Composition Root；拥有本进程的地图查询和后续战斗 Service 生命周期。
--- 输入/输出：Skynet 启动本文件 -> battle_dispatch cluster 入口和 READY 日志。
--- 生命周期：进程启动时创建查询 Service；本入口完成接线后退出，子 Service 继续运行。
--- 不负责：不监听 Unity TCP/WebSocket，不拥有 Gateway fd，不解析网络协议。
-
+-- 职责：组装 Lesson 2 Battle Process 的 Query、Manager 与跨进程分发入口。
+-- 边界：Server Runtime Composition Root；只注入 handle，不持有网络 fd。
+-- 输入/输出：进程配置与已构建 Service -> READY 的 battle_dispatch cluster 入口。
+-- 生命周期：启动完成后本入口退出，子 Service 和 cluster listener 长驻。
+-- 不负责：不解析 Protobuf、不执行 AI/A*、不保存客户端连接。
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local process = require "config.process_battle"
 
--- 先等待地图查询加载完成，再开放 cluster 端点；这样 Gateway 看到 READY 时，QueryCell 已可用。
--- 参数：无。返回值：无；执行 Service 创建、cluster I/O 和 yield，失败会终止进程启动。
+-- 先等待地图和 Worker Pool 就绪，再向 Gateway 发布 cluster 入口。
+-- 无参数/返回；会创建 Service、执行本地 call/cluster I/O 并 yield。
 skynet.start(function()
     local query_service = skynet.newservice("navigation_query")
-    assert(skynet.call(query_service, "lua", "ready"), "navigation query did not become ready")
+    assert(skynet.call(query_service, "lua", "ready"))
+    local mgr = skynet.newservice("battle/battle_mgr")
+    assert(skynet.call(mgr, "lua", "ready"))
+    local dispatcher = skynet.newservice("battle_dispatch")
+    assert(skynet.call(dispatcher, "lua", "configure", {
+        query_service = query_service,
+        battle_mgr = mgr,
+    }))
+    assert(skynet.call(dispatcher, "lua", "ready"))
 
-    -- cluster.open 只拥有本进程的 RPC 监听端口；它不暴露地图对象或任何 Socket fd。
     cluster.open(process.cluster.local_listen, process.cluster.max_clients)
-    cluster.register(process.cluster.service_name, query_service)
-
+    cluster.register(process.cluster.service_name, dispatcher)
     skynet.error("LESSON2_BATTLE_PROCESS_READY node=", process.cluster.service_name,
                  " query=", skynet.address(query_service),
-                 " cluster=", process.cluster.local_listen)
+                 " manager=", skynet.address(mgr),
+                 " dispatch=", skynet.address(dispatcher))
     skynet.exit()
 end)

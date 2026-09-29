@@ -1,23 +1,23 @@
-// 职责：定义 Unity 与 Skynet 之间 QueryCell 请求、响应和 Envelope 合同。
-// 边界：跨进程 Runtime Message Contract；生成 C# 类型并由 Lua descriptor 动态加载。
-// 输入/输出：WorldPosition(mm) 查询 -> Cell 静态信息或明确 ResultCode。
+// 职责：定义 Unity 与 Skynet 之间 QueryCell、RunAutoBattle 和 Envelope 合同。
+// 边界：跨 Unity Client Runtime、FlyWow Gateway 和 Server Battle Process 的消息合同。
+// 输入/输出：QueryCell 静态查询或固定场景 RunAutoBattle -> 强类型响应。
 // 生命周期：作为协议唯一源随 Git 发布；生成物必须与本文件处于同一提交。
-// 不负责：不表达路径、动态占位或战斗状态。
+// 不负责：不决定地图通行、战斗结果或客户端连接生命周期。
 syntax = "proto3";
 
 package battle.navigation.v1;
 
 message Envelope {
   uint32 protocol_version = 1; // 线协议兼容边界版本。
-  uint32 command = 2;          // body 的业务消息类型；QueryCell 固定为 1001。
+  uint32 command = 2;          // body 的业务消息类型；QueryCell=1001，RunAutoBattle=1002。
   uint64 request_id = 3;       // 请求/响应关联 ID；服务端原样返回。
   bytes body = 4;              // command 对应消息的 Protobuf bytes。
 }
 
 message WorldPosition {
-  sint64 x_mm = 1; // 世界 X，毫米；负数合法，ZigZag 编码负值。
-  sint64 y_mm = 2; // 世界高度 Y，毫米；ZigZag 编码。
-  sint64 z_mm = 3; // 世界 Z，毫米；负数合法，ZigZag 编码负值。
+  sint32 x_mm = 1; // 世界 X，毫米；负数合法，ZigZag 编码负值。
+  sint32 y_mm = 2; // 世界高度 Y，毫米；ZigZag 编码。
+  sint32 z_mm = 3; // 世界 Z，毫米；负数合法，ZigZag 编码负值。
 }
 
 message QueryCellRequest {
@@ -53,4 +53,54 @@ message QueryCellResponse {
 service NavigationService {
   // command_id=1001；请求和响应类型由 RPC 签名确定。
   rpc QueryCell(QueryCellRequest) returns (QueryCellResponse);
+}
+
+// 客户端只选择 Server 已发布场景，不提交单位位置或战斗状态。
+message RunAutoBattleRequest {
+  uint32 scenario_id = 1; // 当前仅 1001；其他值返回 BAD_SCENARIO。
+}
+
+// 已结算的 Server 事件；位置及路线点使用毫米世界坐标。
+message BattleEvent {
+  uint32 seq = 1;                     // 本场从 1 连续递增。
+  uint32 logic_ms = 2;                // 固定 Tick 的逻辑时间，毫秒。
+  string type = 3;                    // 稳定事件类型名。
+  uint32 unit_id = 4;                 // 无主体事件为 0。
+  uint32 target_id = 5;               // 无目标为 0。
+  uint32 attacker_id = 6;             // 非攻击事件为 0。
+  uint32 killer_id = 7;               // 非死亡事件为 0。
+  uint32 damage = 8;                  // 权威伤害，非攻击事件为 0。
+  uint32 target_hp = 9;               // 本次结算后的权威 HP。
+  uint32 speed_mm_per_sec = 10;       // MOVE_PATH 的表现速度。
+  string reason = 11;                 // 停止原因；无则空串。
+  string result = 12;                 // BATTLE_END 结果；无则空串。
+  WorldPosition position = 13;        // 有权威位置的事件才设置。
+  repeated WorldPosition points = 14; // MOVE_PATH 世界路线点。
+}
+
+// 一次完整战斗结果；预期业务拒绝通过 result 返回。
+message RunAutoBattleResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    BAD_SCENARIO = 2;
+    BUSY = 3;
+    BATTLE_FAILED = 4;
+    RESULT_TOO_LARGE = 5;
+  }
+  ResultCode result = 1;             // 稳定机器结果码。
+  string message = 2;                // 限长诊断，不返回内部堆栈。
+  uint32 battle_id = 3;              // OK 时有效。
+  uint32 battle_version = 4;         // OK 时有效。
+  uint32 map_id = 5;                 // OK 时有效。
+  uint32 map_version = 6;            // OK 时有效。
+  sint64 seed = 7;                   // OK 时有效。
+  string battle_result = 8;          // FINISHED 或 TIMEOUT。
+  uint32 end_logic_ms = 9;           // 结束逻辑时间，毫秒。
+  repeated BattleEvent events = 10; // 按 seq 排列的权威事件。
+}
+
+service BattleService {
+  // command_id=1002；"RunAutoBattle" 与 QueryCell 使用同一 Envelope。
+  rpc RunAutoBattle(RunAutoBattleRequest) returns (RunAutoBattleResponse);
 }

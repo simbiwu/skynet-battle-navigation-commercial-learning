@@ -12,7 +12,7 @@ return {
 
     descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 运行路径。
     registry_module = "protocol.navigation_registry",                            -- FlyWow 构建生成的 command registry。
-    protocol_version = 1,                          -- Envelope 兼容版本。
+    protocol_version = 2,                          -- Envelope 兼容版本。
 
     max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
     max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。

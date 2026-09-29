@@ -85,6 +85,11 @@ doctor() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing; run run_server.sh build"
     [[ -f "$SERVER_ROOT/config/skynet_gateway.lua" && -f "$SERVER_ROOT/config/skynet_battle.lua" ]] || fail "process configs missing"
     [[ -f "$SERVER_ROOT/service/gateway_main.lua" && -f "$SERVER_ROOT/service/battle_main.lua" && -f "$SERVER_ROOT/service/gateway_proxy.lua" ]] || fail "process services missing"
+    # 双进程 READY 依赖真正的 Battle 分发入口与已实现的 Manager/Worker。
+    [[ -f "$SERVER_ROOT/service/battle_dispatch.lua" &&
+       -f "$SERVER_ROOT/service/battle/battle_mgr.lua" &&
+       -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
+        fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
     [[ -s "$SERVER_ROOT/lualib/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=$FLYWOW_ROOT"
