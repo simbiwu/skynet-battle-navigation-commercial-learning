@@ -33,9 +33,30 @@ Server 决定：
 
 Client 不得提交权威位置、命中、伤害或死亡结果。
 
-## Lua 工程目录延续
+## Gateway / Battle 通信与责任边界
 
-第三课新增的在线入口、BattleWorker 等真实 Skynet Service 放在 `service/`；技能、AI、弹丸、事件编码等由 Service 在同一 Lua State 内 `require` 的模块放在 `lualib/`。目录取决于运行身份，不取决于文件名听起来是否像 Worker、Gateway 或 System。
+第二课已经实现 Gateway Proxy 与 Battle Dispatch 之间的双向异步 `cluster.send` 转发：Gateway 把请求透明发送到 Battle，Battle 通过独立回推入口返回关联结果。本课沿用该边界，Gateway 仍只拥有连接、通用 framing/协议接入和连接级资源限制；不根据玩家 ID 决定玩家属于哪个 Battle/BattleWorker，也不拥有玩家归属、Battle 路由、命令顺序、去重、业务重试或战斗状态。
+
+Battle 侧是玩家归属、Battle/Worker 路由、指令接受与可靠性策略、战斗状态的权威 owner。第三课将第二课的请求-响应底座用于在线命令流，并由 Battle 生成快照/Event 响应；Gateway 只按传输会话标识投递，不决定事件业务含义。Battle 负责定义命令 ID/序号、重复与过期命令、确认、丢失检测和重连后的恢复语义。Gateway 只保存维持客户端连接和回送结果所需的传输会话信息；不得把 fd 或可复用的临时连接号当成 Battle 身份。
+
+`cluster.send` 是单向传输，不自带送达确认或业务重试。第二课已用 route token 和有限超时把两个单向 send 组合为客户端可关联的结果响应，但这不提供自动重试或端到端业务可靠性。第三课复用该边界并为在线命令定义序号、重复/过期处理、确认和重连恢复；在线命令仍不能让 Gateway 同步等待整段模拟。Skynet Cluster/Harbor 的机制细节见独立参考文档 [Skynet Cluster 与 Harbor](../docs/SKYNET_CLUSTER_AND_HARBOR.md)；本 Spec 只规定第三课新增的在线战斗行为和可靠性目标。
+
+## 按进程组织 Skynet Lua 代码目录
+
+第三课按进程分组 Service 入口和进程专属普通 Lua 模块，便于读者看出部署与 ownership 边界。Gateway 与 Battle 的代码不混放；两个进程真正共用的少量模块才放在共享目录：
+
+```text
+service/gateway/   Gateway 进程入口及其接入/转发 Service
+service/battle/    Battle 进程入口、battle_dispatch、BattleMgr/Worker
+                   以及由 Battle composition root 启动的 navigation_query
+lualib/gateway/    Gateway 进程专属、由其中 Service require 的普通 Lua 模块
+lualib/battle/     Battle 进程专属、由其中 Service require 的普通 Lua 模块
+lualib/shared/     确实被两个进程复用且不依赖任一进程状态的普通 Lua 模块
+```
+
+`navigation_query` 由 `battle_main` 启动并归 Battle Process 管理，因此 Lesson 3 按进程整理时，它的 Service 入口放在 `service/battle/`；供它调用的 Battle 专属 Lua 模块放在 `lualib/battle/`。可复用的导航算法仍按实际模块边界放在 Battle 模块或 Native 库中，不因为“可能复用”就默认挪入共享目录。
+
+目录只是源码组织方式，不会自行创建 OS 进程或决定 Service 生命周期。`config/skynet_gateway.lua` 与 `config/skynet_battle.lua` 分别设置 `start = "gateway/gateway_main"`、`start = "battle/battle_main"`；对应 composition root 再通过 `skynet.newservice()` 组装同一进程内的子 Service。Skynet 的 `luaservice`/`lua_path` 将模块名映射到 `service/`、`lualib/` 下的文件。Lua 的 `require` 只在当前 Service 的 Lua State 中加载并缓存模块，不会跨进程共享 Lua 对象。文档出现路径迁移时，必须同步更新 `start`、Service 名称、模块 `require`、构建/启动脚本检查和后续代码步骤。
 
 ## 地面与空中导航
 
@@ -85,6 +106,8 @@ Client 分段发送命令
 -> 持续发送 Event
 -> 周期 Snapshot 用于加入、重连和状态校正
 ```
+
+在线链路中 Gateway 只负责客户端连接和透明转发；玩家到 Battle/Worker 的权威归属与命令可靠性由 Battle 侧处理。自动快速模拟请求仍可采用请求-响应，不得据此把实时命令改成由 Gateway 同步等待 Battle。
 
 自动 SLG 战斗：
 

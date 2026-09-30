@@ -440,7 +440,7 @@ max application payload: 65535 bytes
 
 第二课保留单进程入口作为本地调试默认，同时增加可运行的双进程验收入口：Gateway Process 由 `gateway_main` 组装 FlyWow Gateway 和本地 `gateway_proxy`；Map/Battle Process 由 `battle_main` 组装 `navigation_query`，并通过 Skynet cluster 注册 `battle_dispatch`。Gateway 只拥有客户端 fd、连接、framing 和协议编解码，Map/Battle Process 只拥有地图查询以及后续 BattleMgr/BattleWorker 的状态。
 
-跨进程边界只传输已解码的 request/result record。cluster 节点地址、监听端口和入口名放在 `config/process_gateway.lua`、`config/process_battle.lua`，由 composition root 注入；不通过全局名字隐藏单节点依赖。`battle_dispatch` 例外属于明确的跨启动树发现合同，并要求 Battle Process 先完成 `ready` 再发布 READY 日志。远程不可用必须转换为结构化 `REMOTE_UNAVAILABLE`，不能让接入层吞掉错误。
+跨进程边界只传输已解码的 request/result record。cluster 节点地址、监听端口和入口名放在 `config/process_gateway.lua`、`config/process_battle.lua`，由 composition root 注入；不通过全局名字隐藏单节点依赖。`battle_dispatch` 例外属于明确的跨启动树发现合同，并要求 Battle Process 先完成 `ready` 再发布 READY 日志。Gateway Proxy 使用 `cluster.send` 转发请求，Battle 完成后向已注册的 Gateway Proxy 入口发送关联结果；route token 只用于传输关联，不是 Battle 身份。`RunAutoBattle` 客户端等待最终响应，但跨进程请求和回推均为异步 send，超时和在途数量有界。
 
 本地脚本 `server/scripts/linux/run_lesson2_processes.sh` 负责有序启动、停止、状态检查和 doctor；默认 Gateway 端口为 19011，两个 cluster 端口为 2527/2528。该进程拆分验证部署边界，不提前创建尚未被当前行为使用的 BattleWorker 抽象；后续 BattleMgr/BattleWorker 接入 `battle_dispatch` 后，Gateway 合同保持不变。
 
@@ -470,17 +470,21 @@ ordered BattleEvent
 
 ## D032 - Skynet Service 入口与 Lua 模块按运行身份分目录
 
-`service/` 只存放由 `skynet.newservice()` 或 `skynet.uniqueservice()` 启动的入口。这里的文件拥有独立 Service Context、消息队列、Lua State、生命周期和 dispatch。
+`service/` 只存放由 `skynet.newservice()` 或 `skynet.uniqueservice()` 启动的入口。这里的文件拥有独立 Service Context、消息队列、Lua State、生命周期和 dispatch。课程按进程角色分为 `service/gateway/` 与 `service/battle/`；其中子目录用于代码归类，OS 进程仍由 `config/skynet_*.lua` 的 `start` 入口决定。
 
-`lualib/` 存放某个 Service 内部通过 `require` 加载的普通模块。`require` 只在当前 Lua State 执行并缓存模块，不创建 Service，也不产生消息边界。
+`lualib/` 存放某个 Service 内部通过 `require` 加载的普通模块，并按消费进程归类到 `lualib/gateway/` 或 `lualib/battle/`。真正跨两类进程复用的无状态模块才放在 `lualib/shared/`。`require` 只在当前 Lua State 执行并缓存模块，不创建 Service，也不产生消息边界；即便模块源文件位于 shared 目录，进程之间也不会共享 Lua 对象。
 
-因此第一课固定为：
+当前目录示例：
 
 ```text
-service/navigation_query.lua       Query Service 入口
-service/flywow_gateway.lua         FlyWow Gateway Service 入口；统一持有 TCP/WebSocket transport、连接和协议生命周期
-lualib/navigation/query_logic.lua  Query 内部业务模块
-lualib/protocol/navigation_registry.lua  构建阶段从 proto service/rpc 生成的 command registry
+service/gateway/gateway_main.lua          Gateway 进程 composition root
+service/gateway/gateway_proxy.lua         Gateway 的 Battle 转发 adapter
+service/battle/battle_main.lua             Battle 进程 composition root
+service/battle/navigation_query.lua        Battle 进程中的地图 Query Service
+service/battle/battle_dispatch.lua         Battle 对外 Cluster 分发入口
+service/flywow_gateway.lua                 FlyWow Gateway Service（来自框架仓库）
+lualib/gateway/protocol/navigation_registry.lua  Gateway 构建阶段生成的 command registry
+lualib/battle/navigation/query_logic.lua   Query 内部业务模块
 ```
 
 启动者保存 `newservice()` 返回的 handle，并显式注入依赖。单节点内不通过全局名字隐藏地址关系，也不让一个 Service 用 `skynet.call` 调用自己。后续 BattleWorker、AI、技能和 Replay 文件继续按同一规则判断目录，不能按“看起来像业务组件”决定是否放入 `service/`。
@@ -536,3 +540,15 @@ FlyWow 的目标是面向 MMO/SLG 的 Skynet Server 框架，并提供配套的�
 Map、Navigation、Battle、Skill 同在 FlyWow，不意味着互相强制依赖。Navigation 使用地图查询；技能核心处理施放、冷却、目标与效果结算。单体回血或 Buff 无须地图和寻路；范围目标查询需要 Battle 单位位置及空间查询，遮挡类技能按需查询地图，冲刺/瞬移类技能按需调用导航。由 Battle 的组装入口接入这些能力，FlyWow 可以提供整套接入示例，但技能核心不依赖具体 GridMap 或 A* 实现。
 
 常见技能可由配置组合已验证的目标选择和效果，特殊规则由业务扩展；业务仍负责伤害公式、阵营关系、特殊目标条件等项目语义。第三课不包含完整 Buff 系统，因此抽取时不能把 Buff 叠加、刷新、驱散等未验证规则宣称为现成功能。各端以 `map_id`、`map_version`、内容 hash、协议与技能配置版本对齐；公开合同、ownership、资源上限、错误路径和独立/集成测试按 `docs/FLYWOW_EXTRACTION_POLICY.md` 收口。
+
+## D038 - Gateway 只做接入转发，在线玩家路由与指令可靠性归 Battle
+
+Gateway 的职责是持有客户端连接、处理通用 framing/协议接入、维护把响应写回当前连接所需的会话路由，并把客户端命令转交给 Battle。Gateway 不负责权威查询玩家属于哪个 Battle/BattleWorker，也不决定命令的业务接受顺序、去重、重试、确认或恢复策略；这些状态和规则由 Battle 侧负责。
+
+Battle 是玩家归属、战斗路由、命令可靠性和战斗状态的权威 owner。Gateway 可以保留连接生命周期和转发所需的非权威传输信息，但不能把客户端 fd、Gateway Service handle 或可复用的临时连接编号当作 Battle 身份。Battle 发回事件/响应时使用明确的逻辑会话标识和关联信息；Gateway 仅将结果投递给仍然匹配的连接，旧会话结果不得误投给重连后的新会话。
+
+第二课已经建立双向跨进程异步转发合同：Gateway Proxy 用 `cluster.send` 将已解码请求交给 Battle Dispatch；Battle Dispatch 处理后再向注册的 Gateway Proxy 入口 `cluster.send` 结果。route token 将回包与原本地请求协程关联，Gateway 再按原 `request_id` 写回客户端。等待表/超时/并发有界，重复或迟到回包不复用旧请求。Gateway 不持有 Battle 路由或状态，也不解释 Event。第三课复用既有 Gateway/Battle 进程边界扩展在线命令语义，不重新设计 Gateway 业务路由。
+
+第三课在线命令不能让 Gateway 为每条实时指令同步等待整段 Battle 逻辑。Battle 侧定义命令序号、重复请求、确认、丢失检测与重连恢复合同；具体采用 `cluster.send`、`cluster.call` 或组合协议时，必须区分传输机制和业务可靠性。特别是 `cluster.send` 本身不提供送达确认，不能仅凭使用它就宣称指令可靠。
+
+第二课 `RunAutoBattle` 的客户端仍等待完整模拟和 Replay 结果；Gateway/Battle 间使用异步 `cluster.send` + 反向 `cluster.send`，不使用 `cluster.call` 承载业务请求。

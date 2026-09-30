@@ -57,7 +57,7 @@ Server 算完以后怎样验证客户端只负责表现？
 ```text
 Unity RunAutoBattle(scenario_id=1001)
   -> FlyWow Gateway Process（只拥有连接、framing、Protobuf）
-  -> gateway_proxy -> cluster.call("battle", "@battle_dispatch", ...)
+  -> gateway_proxy -> cluster.send("battle", "@battle_dispatch", ...)
   -> Map/Battle Process 的 battle_dispatch
   -> 从 Server 场景配置构造 immutable snapshot
   -> BattleMgr
@@ -120,7 +120,8 @@ Gateway Process
   gateway_main
     -> gateway_proxy
     -> FlyWow Gateway（TCP/WebSocket、frame、Protobuf、连接生命周期）
-    -> skynet.cluster.call("battle", "@battle_dispatch", "gateway_dispatch", request_record)
+    -> skynet.cluster.send("battle", "@battle_dispatch", "gateway_dispatch", request_record, route_token)
+    <- skynet.cluster.send("gateway", "@gateway_proxy", "battle_result", route_token, result_record)
 
 Map/Battle Process
   battle_main
@@ -128,7 +129,7 @@ Map/Battle Process
     -> battle_dispatch（当前先指向 Query Service；第 23.5 节改为独立分发 Service）
 ```
 
-这里的 `cluster.call` 只传递已经解码的 request record；fd、frame buffer、Protobuf codec 和 Lua State 都不会跨进程传递。`battle_dispatch` 是明确存在跨启动树发现需求时才使用的名字，Map/Battle Process 启动完成后注册它，Gateway Process 先等待 `ready` 再监听客户端端口。远程进程不可用时，Proxy 返回 `REMOTE_UNAVAILABLE`，由 FlyWow Gateway 按统一错误合同记录并关闭当前请求连接。
+业务请求通过 `cluster.send` 传递已经解码的 request record；Battle 处理后用独立 `cluster.send` 把 `result_record` 和 `route_token` 回推至 Gateway Proxy。fd、frame buffer、Protobuf codec 和 Lua State 都不会跨进程传递。`battle_dispatch` 与 `gateway_proxy` 是明确的跨启动树入口；Battle Process 启动并注册后，Gateway Process 先等待 `ready` 再监听客户端端口。Proxy 的在途表与等待时限有上限；远程进程不可用或回包超时会返回结构化错误。
 
 本节涉及的文件操作如下：
 
@@ -138,9 +139,9 @@ Map/Battle Process
 | `server/config/process_battle.lua` | [新建文件] | Battle cluster 监听端口和入口名 |
 | `server/config/skynet_gateway.lua` | [新建文件] | Gateway Process 的 Skynet bootstrap |
 | `server/config/skynet_battle.lua` | [新建文件] | Map/Battle Process 的 Skynet bootstrap |
-| `server/service/gateway_main.lua` | [新建文件] | 创建 Proxy 和 FlyWow Gateway |
-| `server/service/gateway_proxy.lua` | [新建文件] | 把已解码请求转成 cluster RPC |
-| `server/service/battle_main.lua` | [新建文件] | 创建 Query、开放 cluster 并注册入口 |
+| `server/service/gateway/gateway_main.lua` | [新建文件] | 创建 Proxy 和 FlyWow Gateway |
+| `server/service/gateway/gateway_proxy.lua` | [新建文件] | 异步转发并关联 Battle 回推结果 |
+| `server/service/battle/battle_main.lua` | [新建文件] | 创建 Query、开放 cluster 并注册入口 |
 | `server/scripts/linux/run_lesson2_processes.sh` | [新建文件] | 统一启动、停止、状态和诊断两个进程 |
 
 这些文件属于 Server 编辑源 `~/workspace/skynet-battle-navigation-commercial-learning/server/`。Windows 主工作区只同步 Git 提交，不复制 WSL 目录。
@@ -5265,7 +5266,7 @@ end
 -- 等待同进程地图加载完成，然后在当前 Lua State 执行同步 Native 查询。
 -- 无参数；成功输出 marker；启动阶段可 yield，导航调用本身不 yield。
 skynet.start(function()
-local query_service = skynet.newservice("navigation_query")
+local query_service = skynet.newservice("battle/navigation_query")
 assert(skynet.call(query_service, "lua", "ready"))
 
 local profiles = {
@@ -6964,7 +6965,7 @@ end
 skynet.start(function()
     -- Query Service 在同一进程完成地图加载；ready 返回后才创建 Worker，
     -- 避免 new_context 在空 MapRegistry 上查询。批量入口不启动 Gateway。
-    local query_service = skynet.newservice("navigation_query")
+    local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     local mgr = skynet.newservice("battle/battle_mgr")
     local first, err1 = skynet.call(mgr, "lua", "simulate", snapshot())
@@ -7029,7 +7030,7 @@ Shell（当前目录必须是 server/）
        │    ├─ include "skynet.lua"：加载共同的进程设置和搜索路径
        │    └─ start = "battle/batch_runner"：选择本次进程的业务入口
        └─ Skynet Bootstrap 启动 battle/batch_runner Service
-            ├─ newservice("navigation_query")
+            ├─ newservice("battle/navigation_query")
             │    └─ 加载 BMAP -> 注册只读 GridMap -> ready 响应
             ├─ newservice("battle/battle_mgr")
             │    └─ 创建固定数量的 battle_worker Service
@@ -7052,7 +7053,7 @@ Shell（当前目录必须是 server/）
 | `server/config/skynet_batch.lua` | `include`、`start` | 复用通用配置，并选择 Batch Runner 为进程入口。 |
 | `server/config/skynet.lua` | `bootstrap`、`luaservice`、`lua_path`、`lua_cpath` | 定义 Skynet 如何启动 Lua Service、查找 Lua 模块和 Native `.so`。 |
 | `server/service/battle/batch_runner.lua` | `snapshot`、`skynet.start`、`assert_same_result` | 构造输入、等待服务、顺序运行两次并比较结果。 |
-| `server/service/navigation_query.lua`、`server/lualib/navigation/query_logic.lua` | `query_logic.start(config)`、`ready` dispatch | 在当前进程加载/校验 BMAP，并在就绪后回复 Runner。 |
+| `server/service/battle/navigation_query.lua`、`server/lualib/battle/navigation/query_logic.lua` | `query_logic.start(config)`、`ready` dispatch | 在当前进程加载/校验 BMAP，并在就绪后回复 Runner。 |
 | `server/service/battle/battle_mgr.lua` | `choose_worker`、`simulate`、`dispatch` | 创建 Worker Pool，按轮询分配请求并转发结果。 |
 | `server/service/battle/battle_worker.lua` | `simulate`、`dispatch` | 创建/关闭本场 Context，在错误边界内调用 Battle Core。 |
 | `server/lualib/battle/battle_core.lua` | `M.create`、`M.step`、`M.simulate`、`M.finish` | 不依赖 Skynet 地推进 fixed-tick Battle 并生成 Event Log。 |
@@ -7090,12 +7091,12 @@ FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
 关键启动代码先确保地图加载完成：
 
 ```lua
-local query_service = skynet.newservice("navigation_query")
+local query_service = skynet.newservice("battle/navigation_query")
 assert(skynet.call(query_service, "lua", "ready"))
 local mgr = skynet.newservice("battle/battle_mgr")
 ```
 
-`server/service/navigation_query.lua` 是独立 Service/Lua State。它的 `start()` 调用 `server/lualib/navigation/query_logic.lua` 中的 `query_logic.start(config)`，由 `battle_nav.load_map()` 读取和校验 BMAP；完成后才安装 `ready` dispatch 并回 `true`。Runner 的 `skynet.call(..., "ready")` 在这段时间会 yield；响应回来代表 Query Service 已经完成启动，之后才创建 Manager，避免 Battle Worker 抢先创建 Context 时地图尚未注册。
+`server/service/battle/navigation_query.lua` 是独立 Service/Lua State。它的 `start()` 调用 `server/lualib/battle/navigation/query_logic.lua` 中的 `query_logic.start(config)`，由 `battle_nav.load_map()` 读取和校验 BMAP；完成后才安装 `ready` dispatch 并回 `true`。Runner 的 `skynet.call(..., "ready")` 在这段时间会 yield；响应回来代表 Query Service 已经完成启动，之后才创建 Manager，避免 Battle Worker 抢先创建 Context 时地图尚未注册。
 
 随后 Runner 顺序发两次模拟请求：
 
@@ -7841,7 +7842,7 @@ service BattleService {
 
 当前 `Envelope.protocol_version=3`，`WorldPosition` 三轴统一为 `sint64` 毫米。协议版本 2 曾将字段收窄为 `sint32`；本次恢复已确认的 int64 合同，因此递增版本号而不复用旧号。Gateway 和 Unity 必须同时使用版本 3。协议源及 Server descriptor/registry、Unity C# 生成物必须作为同一发布版本验证；双工作区先串行同步协议提交，不能手工把某工作区的 `.proto` 覆盖到另一侧。
 
-[只读] `server/protocol/build_server_descriptor.sh`、`shared/protocol/build_unity_cs.ps1` 和 FlyWow 的 `tools/generate_gateway_registry.py`。它们已有固定生成职责，不复制或手改 registry。协议修改后，在 WSL 的仓库根目录执行 `./server/protocol/build_server_descriptor.sh`，在 `server/` 执行 `./scripts/linux/run_server.sh build`；同步同一协议提交到 Windows 工作区后执行 `shared/protocol/build_unity_cs.ps1`。核对生成的 registry 有 `[1001] QueryCell` 与 `[1002] RunAutoBattle`，而不是改 `server/lualib/protocol/navigation_registry.lua` 的生成代码。正式部署只消费已发布 descriptor、registry 和 Unity 生成类型。
+[只读] `server/protocol/build_server_descriptor.sh`、`shared/protocol/build_unity_cs.ps1` 和 FlyWow 的 `tools/generate_gateway_registry.py`。它们已有固定生成职责，不复制或手改 registry。协议修改后，在 WSL 的仓库根目录执行 `./server/protocol/build_server_descriptor.sh`，在 `server/` 执行 `./scripts/linux/run_server.sh build`；同步同一协议提交到 Windows 工作区后执行 `shared/protocol/build_unity_cs.ps1`。核对生成的 registry 有 `[1001] QueryCell` 与 `[1002] RunAutoBattle`，而不是改 `server/lualib/gateway/protocol/navigation_registry.lua` 的生成代码。正式部署只消费已发布 descriptor、registry 和 Unity 生成类型。
 
 #### 23.5.2 把固定 Snapshot 从 batch 入口提取为两个调用者共用的输入
 
@@ -7924,7 +7925,7 @@ if command == "ready" then
 end
 ```
 
-[新建文件] `server/service/battle_dispatch.lua`
+[新建文件] `server/service/battle/battle_dispatch.lua`
 
 学习导航：精读 `configure()` 的 handle 注入、`dispatch_gateway()` 的命令分支、`run_auto_battle()` 的并发限额和结果大小限额；可以略读事件数组的机械计数。输入是 FlyWow 已解码的 request record；输出 `{ok=true,response=<对应 Proto table>}` 或不可恢复协议错误 record。预期业务拒绝使用 `RunAutoBattleResponse.result`，让客户端得到稳定错误码；远程进程故障仍由现有 `gateway_proxy` 转成 `REMOTE_UNAVAILABLE` 并关闭连接。跨 Service call 会 yield，核心状态始终归 Worker。
 
@@ -8059,7 +8060,7 @@ end)
 
 `MAX_EVENTS=100`、`MAX_POINTS=200` 与限长字符串是这个一次性 Demo RPC 的保守输出预算；第 17 节 Battle 核心自己的 20000 Event 上限仍用于保护模拟内存，两者不是同一个预算。完整结果超出网络预算时返回 `RESULT_TOO_LARGE`，仍可通过第 22 节离线 Writer 检查。FlyWow 在真正编码后再次检查 frame 长度；若以后放大场景，应先设计分页或战报资产拉取，不能悄悄提高 TCP uint16 上限。
 
-[完整替换] `server/service/battle_main.lua`：它现在创建 Query、Manager、分发 Service 三个 owner，并只把分发 Service 注册为 `@battle_dispatch`。`gateway_main.lua` 与 `gateway_proxy.lua` 仍然只读，不需要了解 Battle 业务。
+[完整替换] `server/service/battle/battle_main.lua`：它现在创建 Query、Manager、分发 Service 三个 owner，并只把分发 Service 注册为 `@battle_dispatch`。`gateway_main.lua` 与 `gateway_proxy.lua` 仍然只读，不需要了解 Battle 业务。
 
 ```lua
 -- 职责：组装 Lesson 2 Map/Battle Process 的 Query、Manager 和跨进程分发入口。
@@ -8074,11 +8075,11 @@ local process = require "config.process_battle"
 -- 先完成地图加载和 Worker Pool 初始化，再对外发布跨进程入口。
 -- 无参数/返回；创建 Service、执行本地 call/cluster I/O，可 yield；失败阻止 READY。
 skynet.start(function()
-    local query_service = skynet.newservice("navigation_query")
+    local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     local mgr = skynet.newservice("battle/battle_mgr")
     assert(skynet.call(mgr, "lua", "ready"))
-    local dispatcher = skynet.newservice("battle_dispatch")
+    local dispatcher = skynet.newservice("battle/battle_dispatch")
     assert(skynet.call(dispatcher, "lua", "configure", {
         query_service = query_service,
         battle_mgr = mgr,
@@ -8096,13 +8097,13 @@ skynet.start(function()
 end)
 ```
 
-[局部修改] `server/scripts/linux/run_lesson2_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua`、`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 均为[只读]：它们现有的 handle 注入、远程节点名和端口无需改动。
+[局部修改] `server/scripts/linux/run_lesson2_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua` 保持[只读]；`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 按本课边界调整：Proxy 使用 `cluster.send` 转发请求并用反向 `cluster.send` 接收 Battle 结果，通过有界 route token 等待表关联原请求；两端进程配置需互相声明 Cluster 节点、监听地址和回推服务名。不得把 Battle 路由或状态放入 Gateway。
 
 在 `doctor()` 已有的 Service 文件检查后加入：
 
 ```bash
 # 双进程 READY 现在依赖真正的 Battle 分发入口和已实现的 Manager/Worker。
-[[ -f "$SERVER_ROOT/service/battle_dispatch.lua" &&
+[[ -f "$SERVER_ROOT/service/battle/battle_dispatch.lua" &&
    -f "$SERVER_ROOT/service/battle/battle_mgr.lua" &&
    -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
     fail "battle dispatch or worker services missing"
@@ -8525,6 +8526,12 @@ Play：看到 BATTLE_GATEWAY_RESULT_LOADED、单位移动、攻击和死亡
 这次不运行 batch，也不复制 `battle_replay.json`；Unity 的一次请求必须实际经过独立 Gateway/cluster/BattleMgr/Worker。`BATTLE_GATEWAY_RESULT_LOADED` 只证明拿到并校验了完整响应，还要观察整个 Replay 到 `BATTLE_END`。再把 Inspector 的 `Scenario Id` 改为 `9999`：预期得到 `BAD_SCENARIO`，没有 Spawn/Replay；改回 1001 后重新成功。启动日志应先出现 `LESSON2_BATTLE_PROCESS_READY`，再出现 `LESSON2_GATEWAY_PROCESS_READY`；Gateway 仍不加载 BMAP，Battle Process 仍不拥有客户端 fd。
 
 本课 `RunAutoBattle` 只接受固定场景，并限制同时请求数、Event 数、Path 点数及最终 Gateway frame。可预期业务拒绝返回 `ResultCode`；远程进程不可用时现有 Proxy 记录 `REMOTE_UNAVAILABLE`，Gateway 关闭该请求连接，Unity 显示连接异常。要支持大规模战报、分页/资产拉取、账号鉴权、限流、取消与 drain 编排，需要另立阶段；不能把当前一次性 65,535-byte 响应称为生产级实时同步。
+
+#### 本课已经完成 Gateway 与 Battle 的双向消息链路
+
+请求方向为 `Gateway -> gateway_proxy -> cluster.send -> battle_dispatch`；Battle 处理完成后通过反向 `cluster.send` 把 `route_token + result_record` 发回 Gateway Proxy。Proxy 用 token 唤醒对应的本地请求协程，通用 Gateway 再使用原 `request_id` 编码并写入原连接。Gateway 只转发请求和结果，不推断玩家归属、不解释 Battle Event，也不保存 Battle 状态。Battle 负责产生 Query/战斗结果；跨进程只传可序列化且有大小上限的 record。
+
+这里的“双向”指两个进程之间请求与结果都能通过明确的调用链传输；本课的一次性自动战斗仍等待完整响应。第三课增加在线指令流、Battle 主动发送周期 Snapshot/Event，以及对应的业务可靠性与重连恢复规则，不会重新实现 Gateway 的 Battle 路由。
 
 
 ---
@@ -9059,7 +9066,7 @@ Gateway Process                         Map/Battle Process（另一个进程）
 
 ```text
 battle_main.lua 的 skynet.start
-  ├─ skynet.newservice("navigation_query")
+  ├─ skynet.newservice("battle/navigation_query")
   │    └─ navigation_query.lua 的 skynet.start
   │         └─ query_logic.start(config)
   │              └─ battle_nav.load_map(bmap_path) -> Binding l_load_map

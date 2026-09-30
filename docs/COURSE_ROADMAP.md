@@ -190,6 +190,8 @@ clearance、slope、area cost 和 dynamic occupancy 怎样组合；
 
 第三课把前两课的地图、寻路和 BattleWorker 组合成一个可人工操作的战斗验证场景：
 
+通信边界按 `docs/ENGINEERING_DECISIONS.md` D038 执行：第二课已经完成 Gateway Proxy 与 Battle Dispatch 之间的双向异步转发，双方分别用 `cluster.send` 发送请求与结果，并用 route token 关联回包；Gateway 透明转发 Battle 生成的有界响应。第三课复用这条进程边界加入在线命令流，由 Battle 持有玩家归属、Battle/Worker 路由和命令可靠性。第二课自动模拟的客户端仍等待单个最终响应，但不让 Gateway 用 `cluster.call` 同步占住跨进程调用。第三课新增范围见 `codex/LESSON_03_SPEC.md`；Cluster 与 Harbor 的机制参考见 [独立专题文档](SKYNET_CLUSTER_AND_HARBOR.md)。
+
 ```text
 Player       地面单位，人工输入移动和施法意图
 GroundEnemy  地面单位，Server AI 控制
