@@ -95,7 +95,7 @@ y_mm
 z_mm
 ```
 
-使用毫米整数作为规则输入。
+三个字段使用有符号 64 位整数毫米，坐标由 `map_id` 限定在单张地图内。Unity `long`、Protobuf `sint64`、Native `std::int64_t`、Lua 5.4 `lua_Integer` 和 Replay `long` 遵循同一位宽；地图外部的全局分区/寻址不能复用这三个字段冒充连续 MMO 全局坐标。`GridPos` 与 BMAP V1 磁盘字段属于内部索引/资产格式合同，不替代业务 WorldPosition。
 
 ### NavLocation
 

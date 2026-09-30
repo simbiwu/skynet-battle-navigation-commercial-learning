@@ -11,11 +11,13 @@
 ```cpp
 struct WorldPositionMm
 {
-    int32_t x;
-    int32_t y;
-    int32_t z;
+    int64_t x_mm;
+    int64_t y_mm;
+    int64_t z_mm;
 };
 ```
+
+三个分量在所有业务边界统一为有符号 64 位整数毫米。坐标属于 `map_id` 指定的地图；Lua Binding 验证输入为整数，不把坐标窄化为 32 位。当前 BMAP V1 的磁盘原点/高度字段仍是 `i32`，因此 GridMap 在转换坐标时执行资产格式范围检查；这不改变 WorldPosition 的跨端 `int64` 业务合同。
 
 GridPos 是 GridMap 内部或 Debug 数据。
 

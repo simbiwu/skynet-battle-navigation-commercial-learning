@@ -518,3 +518,21 @@ Unity Authoring、协议生成和 Server 运行可能位于不同机器。仓库
 第一类共同合同是整数世界/逻辑坐标、`map_id`、`map_version` 和内容 hash。地图 manifest 还必须声明 `space_type`、坐标轴、原点、Cell 尺寸和资产格式版本。长期 Path、BattleEvent 和业务位置不能暴露 `GridPos`、`grid_z` 或某个客户端的坐标轴；2.5D 的高度、2D 的固定平面和客户端坐标转换由地图空间 Adapter 负责。
 
 Unity BMAP 和 H5/Tiled/JSON 等输入属于离线资产生产链，不能让 Server 运行时读取客户端工程目录。俯视角 2D 可以复用 Grid A* 的共同语义；横版平台的重力、跳跃和多层平台属于不同运动模型，不能把 `y=0` 当作完整支持。第二个真实地图消费者出现并通过独立测试后，才从两种实现的共同调用面提取稳定接口，不提前创建空的多维导航框架。
+
+## D036 - WorldPosition 三轴业务坐标统一使用有符号 64 位
+
+`WorldPosition.x_mm/y_mm/z_mm` 的业务合同统一为有符号 64 位整数毫米：Unity C# 使用 `long`，Protobuf 使用 `sint64`，Native 使用 `std::int64_t`，Lua 5.4 使用 64 位 `lua_Integer`，Replay 使用 `long`。各层传递位置时不得窄化或静默截断。Lua Binding 验证输入是整数，并依赖本项目固定的 Lua 5.4 64 位整数配置。
+
+`GridPos` 是算法内部的 Cell 下标，仍使用独立的 32 位整数，不属于世界坐标。BMAP V1 磁盘格式的原点与 Cell 高度字段仍按既有 i32 格式读取；当前 GridMap 会把业务 WorldPosition 显式检查在 BMAP V1 可表达范围内，再做 Cell 转换。扩大资产格式范围必须另行升级 BMAP 版本，不能暗中改变文件布局。
+
+协议兼容版本 2 曾把 WorldPosition 收窄为 `sint32`；为恢复已经确认的跨端 `int64` 合同，当前协议版本升至 3，不复用旧版本号。Gateway 与 Unity 必须同时使用版本 3；混跑版本会按 Envelope 版本校验拒绝请求。Server descriptor、Unity C# 与校验 hash 必须从同一个 `.proto` 生成并共同发布。第三课完成后可以把已验证的 Grid 地图与导航能力抽入 FlyWow；跨多种地图实现的统一导航接口仍要等真实调用者和第二种实现验证后再定。游戏专属 Battle DTO 不进入 FlyWow `common`。
+
+## D037 - 第三课完成后将已验证能力抽入 FlyWow，不增设课程
+
+FlyWow 的目标是面向 MMO/SLG 的 Skynet Server 框架，并提供配套的客户端接入能力。第三课完成 Server 权威在线战斗与自动战斗闭环后，再集中评估和抽取课程中已运行、已验证的通用能力；抽取不设第 3.5 课，也不作为第三课验收条件。可选第四课仍讲 Recast/Detour，不以完成 FlyWow 抽取或 H5 2D 接入为前置条件。
+
+抽取目标是一套可分别接入、可配套使用的模块：Unity Package 同时包含地图 Bake、BMAP 导出/校验/发布等 Editor 能力，以及服务端地图、路径和战斗事件的客户端 Runtime 适配；Server 提供地图加载与版本校验、Native Grid 导航、Lua/Skynet 接入、Battle 运行机制和已验证的通用技能能力。未来 H5 俯视角 2D 客户端按同一版本化业务合同接入，其具体实现需要真实 H5 消费者验证。游戏项目保留实际地图资产、AgentProfile 数值、单位/技能规则、表现资源与项目协议配置；客户端不能覆盖 Server 权威结果。
+
+Map、Navigation、Battle、Skill 同在 FlyWow，不意味着互相强制依赖。Navigation 使用地图查询；技能核心处理施放、冷却、目标与效果结算。单体回血或 Buff 无须地图和寻路；范围目标查询需要 Battle 单位位置及空间查询，遮挡类技能按需查询地图，冲刺/瞬移类技能按需调用导航。由 Battle 的组装入口接入这些能力，FlyWow 可以提供整套接入示例，但技能核心不依赖具体 GridMap 或 A* 实现。
+
+常见技能可由配置组合已验证的目标选择和效果，特殊规则由业务扩展；业务仍负责伤害公式、阵营关系、特殊目标条件等项目语义。第三课不包含完整 Buff 系统，因此抽取时不能把 Buff 叠加、刷新、驱散等未验证规则宣称为现成功能。各端以 `map_id`、`map_version`、内容 hash、协议与技能配置版本对齐；公开合同、ownership、资源上限、错误路径和独立/集成测试按 `docs/FLYWOW_EXTRACTION_POLICY.md` 收口。

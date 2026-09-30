@@ -1,53 +1,91 @@
 # Codex Start Here
 
-## 服务目标
+本文件负责**任务路由**，不要求每次会话完整阅读整个 `docs/`、`codex/` 或全部实操教程。
 
-学习者目标岗位是 Skynet SLG Server 主程/高级工程师，已有多年 C++、Lua、MySQL 和团队技术管理经验。Codex 默认作为面试项目工程教练：不讲基础语法，不把课程扩展成完整 Unity 客户端教学，也不只给结论。
+## 1. 默认工作方式
 
-每个阶段都要帮助学习者形成：
-
-```text
-可以运行的代码
-可以复现的测试证据
-可以说明的架构取舍
-可以回答追问的失败路径
-```
-
-Unity 名词和操作需要从 Server 视角解释，但 Unity 只服务于资产生产、联调和 Replay。教学重心是 Skynet ownership/yield、Native 并发安全、确定性、协议、性能、可观测性和演进边界。
-
-不能让学习者通过通读 C# 反推 Unity 空间概念。坐标轴、World/Local Space、Transform、Unity Unit、Inspector 序列化、NavMesh Query、SceneView 等概念必须在首次使用前完成 Server 视角桥接。
-
-## 这是全新三课主线项目
-
-不合并：
+每个任务先：
 
 ```text
-Skynet-slg-learning
+1. 读根目录 AGENTS.md。
+2. 判断任务类型与 Lesson。
+3. 只加载下面路由中与当前任务直接相关的文档。
+4. 读取受影响源码、调用方和测试。
+5. 修改后按影响范围 build / test / run。
 ```
 
-## 阅读顺序
+禁止为了“理解项目”默认遍历：
 
-先读：
+```text
+docs/ 全目录
+codex/ 全目录
+所有 Lesson 实操正文
+整个仓库所有源码
+```
+
+需要扩大阅读范围时，必须由当前调用链、错误现象或架构问题驱动。
+
+## 2. 新会话建立项目基本上下文
+
+第一次接手本仓库、且任务不是一个已经给出明确文件/函数的小修复时，先读：
 
 ```text
 AGENTS.md
 README.md
 docs/PROJECT_CONTEXT.md
-docs/COURSE_ROADMAP.md
-docs/TARGET_ARCHITECTURE.md
-docs/ENGINEERING_DECISIONS.md
-docs/TEST_STRATEGY.md
 ```
 
-Lesson 1 再读：
+然后进入具体任务路由。
+
+不要默认再把 `TARGET_ARCHITECTURE`、`ENGINEERING_DECISIONS`、`TEST_STRATEGY` 全部加载；只有任务需要时再读。
+
+## 3. 代码修改通用路由
+
+任何 C# / C++ / Lua / Shell / PowerShell / Proto / CMake / 配置 / 测试修改：
 
 ```text
-docs/BMAP_FORMAT.md
-docs/Skynet_BattleNavigation第一课_从Unity地图到Skynet查询_实操.md
+.agents/skills/skynet-battle-navigation-coding-standard/SKILL.md
+```
+
+然后读取：
+
+```text
+受影响源码
+直接调用方
+对应测试
+当前模块 API/格式文档（如果存在）
+```
+
+普通修 Bug、补测试、局部实现到这里通常就够了。
+
+## 4. Lesson 1
+
+目标：
+
+```text
+Unity Scene
+-> 2.5D Grid/BMAP
+-> C++ GridMap
+-> Skynet Query
+```
+
+规格：
+
+```text
 codex/LESSON_01_SPEC.md
 ```
 
-**不要在 Lesson 1 主动展开：**
+按任务选择：
+
+```text
+BMAP/Exporter/Loader     -> docs/BMAP_FORMAT.md
+Native Binding/API      -> docs/NATIVE_NAV_API.md + docs/LUA_C_API_BINDING_GUIDE.md
+协议/Gateway            -> docs/ENGINEERING_DECISIONS.md 中 D029/D033 及相关源码
+测试/验收               -> docs/TEST_STRATEGY.md Lesson 1
+完整教学/重写教程        -> 对应 Lesson 1 实操 + docs/CODEX_TEACHING_GUIDE.md
+```
+
+Lesson 1 不主动展开：
 
 ```text
 AgentProfile
@@ -57,216 +95,187 @@ INavigationBackend
 Detour
 ```
 
-`docs/NAVIGATION_ABSTRACTION.md` 在 Lesson 1 仅作为 Codex 自己的架构约束参考，不作为学习者当前学习内容。
+## 5. Lesson 2
 
-只有学习者明确要求开始生成 Lesson 2 实操时，再完整读：
+规格：
 
 ```text
-docs/NAVIGATION_ABSTRACTION.md
-docs/NATIVE_NAV_API.md
-docs/Skynet_BattleNavigation第二课_从Grid寻路到Skynet自动战斗_实操.md
 codex/LESSON_02_SPEC.md
 ```
 
-Lesson 3：
+按任务选择：
+
+```text
+A*/Path/NavigationContext  -> docs/NATIVE_NAV_API.md + docs/NAVIGATION_ABSTRACTION.md
+BattleWorker/确定性        -> Lesson 2 Spec + docs/TEST_STRATEGY.md
+双进程/Gateway-Battle      -> docs/ENGINEERING_DECISIONS.md D030/D033
+完整教学/重写教程          -> 对应 Lesson 2 实操 + docs/CODEX_TEACHING_GUIDE.md
+```
+
+只有任务确实涉及某个章节时才读取 300KB+ 的 Lesson 2 实操全文；局部代码任务优先读取相关源码、Spec 和 API 文档。
+
+Lesson 2 不提前创建：
+
+```text
+SkillRuntime
+Projectile
+AirNavigationMap
+Detour Backend
+```
+
+## 6. Lesson 3
+
+规格：
 
 ```text
 codex/LESSON_03_SPEC.md
 ```
 
-Lesson 3 主线是人工控制 Player、Server AI GroundEnemy/FlyingEnemy、技能、状态/事件同步和 Unity 表现。不要读取旧 Polygon NavMesh 实操草稿来生成第三课。
+重点：
 
-可选 Lesson 4 才读：
+```text
+PlayerCommand
+GroundEnemy / FlyingEnemy AI
+Air Grid / NoFly
+Server-authoritative Skill / Projectile
+Battle Snapshot / Event
+同一 BattleWorker 支持在线 fixed tick 与批量快速模拟
+```
+
+按任务选择：
+
+```text
+确定性/回归/交互测试 -> docs/TEST_STRATEGY.md Lesson 3
+架构边界            -> docs/ENGINEERING_DECISIONS.md D031/D035
+教学正文            -> docs/CODEX_TEACHING_GUIDE.md
+```
+
+Lesson 3 不读取旧 Polygon NavMesh 草稿来驱动主线实现。
+
+## 7. Lesson 4 optional
+
+只有用户明确进入 Polygon NavMesh / Recast / Detour 时读：
 
 ```text
 codex/LESSON_04_OPTIONAL_RECAST_SPEC.md
 docs/POLYGON_NAV_ASSET_FORMAT.md
-docs/LESSON_03_PRACTICAL.md（旧文件名，仅作为 Recast 草稿参考）
+docs/NAVIGATION_ABSTRACTION.md
+docs/TARGET_ARCHITECTURE.md
 docs/REFERENCES.md
 ```
 
-## 第一课教学门禁
-
-第一课学习者应该主要看到：
+需要旧 Recast 草稿时再读：
 
 ```text
-WorldPosition
-GridPos
-NavCell
-GridMap
-MapRegistry
+docs/LESSON_03_PRACTICAL.md
 ```
 
-如果你的第一课教程出现大量：
+该文件名属于历史遗留，只作为 Lesson 4 参考，不决定前三课主线。
+
+## 8. 架构/全仓 Review
+
+用户要求：
 
 ```text
-INavigationBackend
-AgentProfile
-NavigationContext
-Path
-Detour
-PolyRef
+重新设计
+全仓 Review
+模块边界审计
+Grid/Detour/H5 2D 演进
+ownership/yield/依赖方向检查
 ```
 
-说明教学顺序错了。
-
-架构可以在内部预留，但不要把未来抽象当当前知识点。
-
-## 现场检查
-
-Windows：
+再读取：
 
 ```text
-Unity exact version
-AI Navigation package
-workspace
-Git
+docs/TARGET_ARCHITECTURE.md
+docs/ENGINEERING_DECISIONS.md
+docs/NAVIGATION_ABSTRACTION.md
+相关 Lesson Spec
+相关源码与测试
 ```
 
-WSL：
-
-```bash
-uname -a
-g++ --version
-cmake --version
-make --version
-git --version
-gdb --version
-```
-
-固定：
+如果涉及 FlyWow 抽取/框架复用，再增加：
 
 ```text
-Skynet v1.8.0
+docs/FLYWOW_EXTRACTION_POLICY.md
 ```
 
-Lesson 4 optional：
+## 9. Windows / WSL / Git / Submodule
+
+涉及：
 
 ```text
-Recast Navigation v1.6.0
+在哪个工作区修改
+跨工作区同步
+commit / push
+远端分叉
+submodule 更新
 ```
 
-## 工作方式
+读取：
 
 ```text
-当前真实行为
--> 只引入当前必需概念
--> 实现
--> build
--> run
--> debug
--> test
--> next
+docs/WORKSPACE_WORKFLOW.md
 ```
 
-不要为了后续课程，第一课就创建最终架构所有空类。
-
-每个 Stage 结束时追加三个口头检查：
+涉及 FlyWow 仓库本身，再读：
 
 ```text
-你现在能观察到什么行为？
-为什么边界放在这里？
-如果输入损坏、并发增加或版本不匹配，会怎样失败？
+docs/FLYWOW_EXTRACTION_POLICY.md
 ```
 
-每个核心源码文件在贴出完整代码前，先给学习导航：
+## 10. 教程和工程教练模式
+
+只有用户要求：
 
 ```text
-为什么现在需要这个文件
-本文件只负责什么、不负责什么
-必须形成的概念
-精读哪些代码
-哪些 Unity/C#/工具样板可以略读
-如何运行和破坏验证
-脱离代码应能回答什么
+写/重写教程
+逐阶段辅导
+解释第一次出现的 Skynet/Unity 概念
+生成可学习的完整实操章节
 ```
 
-注释解决局部语义，学习导航解决学习目标；二者不能互相替代。
-
-## 工程目录也渐进
-
-Lesson 1：
+才加载：
 
 ```text
-native/grid_map/                 C++ 静态地图
-service/navigation_query.lua    真正的 Query Service 入口
-server/third_party/skynet-flywow/service/flywow_gateway.lua  FlyWow Gateway Service 入口；由 Git submodule 固定版本，统一使用 TCP/WebSocket transport 和生成 registry
-lualib/navigation/              Query Service 内普通模块
-lualib/protocol/                运行期 Protobuf codec/生成 registry
-config/gateway.lua              Gateway 默认配置；协议路径和 transport 可覆盖
+docs/CODEX_TEACHING_GUIDE.md
 ```
 
-`service/` 只放 `newservice/uniqueservice` 启动的入口；普通 `require` 模块必须放入 `lualib/`。后续课程延续这一规则，不能用文件名把普通模块伪装成 Worker、Agent 或 Gateway。
+课程目标岗位是 Skynet SLG Server 主程/高级工程师；默认不讲 C++/Lua 基础语法，但 Unity/团结引擎空间和 Authoring 概念第一次出现时必须从 Server 视角桥接。
 
-Lesson 2 业务成熟后，再根据实际代码迁移/整理为：
+## 11. 验证路由
+
+需要定义验收、回归、损坏资产、并发、确定性或 Benchmark 时读取：
 
 ```text
-native/navigation/common/
-native/navigation/grid/
+docs/TEST_STRATEGY.md
 ```
 
-这次迁移本身就是教学内容：
-
-> 如何从一个工作实现抽出稳定接口。
-
-Lesson 3 按真实战斗需求增加：
+完成报告必须分别写清：
 
 ```text
-PlayerCommand
-SkillDefinition / SkillRuntime
-Projectile
-AirNavigationMap / NoFly
-Battle Snapshot / Event Sync
+静态检查
+编译
+单元测试
+集成运行
+并发/确定性/Benchmark（适用时）
+未验证项
 ```
 
-可选 Lesson 4 才加：
+## 12. Git 提交建议
+
+提交信息继续按实际阶段和变更内容组织，不为匹配课程章节强行拆提交。
+
+常见前缀：
 
 ```text
-native/navigation/detour/
-tools/nav_builder/
+feat:
+fix:
+test:
+perf:
+docs:
+refactor:
+chore:
 ```
 
-## Git
-
-Lesson 1：
-
-```text
-chore: initialize battle navigation project
-feat: add unity 2.5d map authoring
-feat: export validated bmap
-feat: add native grid map loader
-feat: expose grid map queries to skynet
-test: complete lesson one
-```
-
-Lesson 2：
-
-```text
-feat: add native astar
-feat: add agent-aware navigation
-feat: add battle navigation context
-feat: add battle worker simulation
-feat: add unity replay
-perf: add grid benchmark
-```
-
-Lesson 3：
-
-```text
-feat: add player battle commands
-feat: add ground and flying enemy ai
-feat: add air grid and no-fly navigation
-feat: add authoritative skills and projectiles
-feat: stream battle snapshots and events
-test: complete interactive and batch battle replay
-```
-
-Lesson 4 optional：
-
-```text
-feat: add nav source exporter
-feat: add recast nav builder
-feat: add detour backend
-feat: add multilayer and off-mesh traversal
-perf: compare navigation backends
-```
+只有用户明确要求时才执行 commit 或 push。

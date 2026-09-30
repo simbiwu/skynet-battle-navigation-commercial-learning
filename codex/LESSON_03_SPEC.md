@@ -134,3 +134,7 @@ Recast / Detour
 ```
 
 Recast/Detour 保留为 Lesson 4 可选高级专题，不是前三课战斗闭环的前置条件。
+
+## 第三课完成后的 FlyWow 抽取提醒
+
+本课验收完成后，按 `docs/ENGINEERING_DECISIONS.md` 的 D037 和 `docs/FLYWOW_EXTRACTION_POLICY.md` 评估并抽取已验证的 Unity Package、Server Map/Navigation、Battle 与通用技能能力。抽取是课程完成后的跨仓库工作，不另设第 3.5 课，也不改变本课完成条件或可选第四课范围。H5 2D 接入与完整 Buff 系统按真实需求和测试另行推进。

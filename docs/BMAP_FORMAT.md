@@ -159,7 +159,7 @@ Client Debug 可以除以 1000 恢复米。
 
 ## Origin
 
-`origin_x_mm / origin_z_mm` 是 Logic Grid 的 world-space 左下基准。
+`origin_x_mm / origin_z_mm` 是 Logic Grid 的 world-space 左下基准，按 BMAP V1 格式存储为 `i32` 毫米。业务层 `WorldPosition` 仍统一使用 `int64` 毫米；当前 GridMap 在转换时检查坐标是否落在 BMAP V1 可表达范围内。坐标由 `map_id` 限定在单张地图内，不表示跨所有地图的连续 MMO 全局坐标。
 
 Grid cell center：
 
