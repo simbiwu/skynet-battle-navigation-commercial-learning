@@ -125,8 +125,8 @@ Gateway 使用 8818，Query 使用 8819。两个 Service 是两个独立 Lua Sta
 第二课保留 `run_server.sh` 的单进程入口作为本地调试路径，同时提供 Gateway 与 Map/Battle 分离的真实进程边界：
 
 ```text
-Gateway Process : gateway_main -> gateway_proxy -> FlyWow Gateway :19011
-Map/Battle     : battle_main -> navigation_query -> cluster :2528
+Gateway Process : gateway/gateway_main -> gateway/gateway_proxy -> FlyWow Gateway :19011
+Map/Battle     : battle/battle_main -> battle/navigation_query -> cluster :2528
 Gateway cluster :2527
 ```
 

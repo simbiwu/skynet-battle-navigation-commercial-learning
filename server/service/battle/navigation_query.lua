@@ -1,12 +1,12 @@
--- 职责：拥有第一课静态地图查询入口，并响应 Gateway 发来的 QueryCell 消息。
+-- 职责：加载 Battle 进程共享静态地图，并响应内部 QueryCell 查询消息。
 -- 边界：Skynet Service；拥有独立 Lua State 和消息队列，不处理 TCP/Protobuf。
 -- 输入/输出：Gateway dispatch payload + 已解码 request table -> response result record。
 -- 生命周期：进程启动时创建一次；启动阶段加载 BMAP，运行期只读查询。
 -- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
 local skynet = require "skynet"
 local config = require "config.game"
-local query_logic = require "navigation.query_logic"
-local luapanda_debug = require "debug.luapanda_debug"
+local query_logic = require "battle.navigation.query_logic"
+local luapanda_debug = require "battle.debug.luapanda_debug"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- 本 Service 的 gateway_dispatch handler 内部不 yield，响应 record 由 skynet.retpack 复制发送。

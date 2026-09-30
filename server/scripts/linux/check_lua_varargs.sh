@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # 职责：阻止项目自有 Lua 源码把可变参数用作稳定接口或继续向业务层传播。
 # 边界：Build/Test 静态策略检查；只扫描当前 server 的自有 Lua 源码，不扫描 third_party/generated。
-# 输入/输出：service/lualib/protocol/config/tests 下的 .lua -> LUA_VARARG_POLICY_OK 或违规位置。
+# 输入/输出：service/、lualib/、config/、tests/ 下的 .lua -> LUA_VARARG_POLICY_OK 或违规位置。
 # 生命周期：由 run_server.sh build/rebuild 调用，也可由开发者单独执行；不修改任何文件。
 # 不负责：不解析第三方 Lua、不替代 Lua 语法检查，也不对性能作无基准结论。
 set -euo pipefail

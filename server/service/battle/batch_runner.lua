@@ -54,7 +54,7 @@ end
 skynet.start(function()
     -- Query Service 在同一进程完成地图加载；ready 返回后才创建 Worker，
     -- 避免 new_context 在空 MapRegistry 上查询。批量入口不启动 Gateway。
-    local query_service = skynet.newservice("navigation_query")
+    local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     local mgr = skynet.newservice("battle/battle_mgr")
     local first, err1 = skynet.call(mgr, "lua", "simulate", assert(scenario.make_snapshot(1001)))

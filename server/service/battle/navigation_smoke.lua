@@ -16,7 +16,7 @@ end
 -- 等待同进程地图加载完成，然后在当前 Lua State 执行同步 Native 查询。
 -- 无参数；成功输出 marker；启动阶段可 yield，导航调用本身不 yield。
 skynet.start(function()
-local query_service = skynet.newservice("navigation_query")
+local query_service = skynet.newservice("battle/navigation_query")
 assert(skynet.call(query_service, "lua", "ready"))
 
 local profiles = {

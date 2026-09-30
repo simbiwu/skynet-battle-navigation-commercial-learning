@@ -6,7 +6,10 @@
 return {
     cluster = {
         local_listen = 2528,             -- 本进程 cluster 监听端口；Skynet 默认绑定 0.0.0.0。
-        service_name = "battle_dispatch", -- 跨进程发现的明确入口。
+        service_name = "battle_dispatch", -- Gateway 发起 cluster.send 的明确入口。
+        gateway_node = "gateway",       -- Battle 回推结果的 Gateway 节点名。
+        gateway_address = "127.0.0.1:2527", -- Gateway Process cluster 地址。
+        gateway_proxy_service = "gateway_proxy", -- Battle 结果回推的固定接收 Service。
         max_clients = 64,                 -- cluster 连接上限。
     },
 }

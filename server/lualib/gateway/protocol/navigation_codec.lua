@@ -1,7 +1,7 @@
--- 职责：集中封装导航协议的 Protobuf descriptor 加载和消息编解码。
--- 边界：Server Runtime Library；只处理 Protobuf bytes，不处理 TCP framing。
+-- 职责：保留旧导航 Protobuf codec 实现，供历史实现对照；当前运行链不加载它。
+-- 边界：Gateway 专属遗留 Lua 模块；只处理 Protobuf bytes，不处理 TCP framing。
 -- 输入/输出：Lua table <-> Protobuf bytes。
--- 生命周期：每个使用者的 Lua State 各自加载 descriptor；类型名是只读常量。
+-- 生命周期：当前 Gateway Runtime 不 require；历史代码按需在当前 Lua State 加载 descriptor。
 -- 不负责：不打开 Socket、不调用地图、不吞掉解码错误。
 local pb = require "pb"
 

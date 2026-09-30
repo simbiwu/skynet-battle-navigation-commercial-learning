@@ -17,4 +17,4 @@ core.*
 /third_party/luasocket/
 /third_party/luasocket-runtime/
 # FlyWow 构建阶段从 shared/protocol/*.proto 生成；业务仓库不手工维护。
-/lualib/protocol/*_registry.lua
+/lualib/gateway/protocol/*_registry.lua

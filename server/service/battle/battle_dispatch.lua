@@ -1,9 +1,11 @@
 -- 职责：把 Battle Process 的 Gateway 请求分给地图查询或自动战斗 Manager。
 -- 边界：Server RPC Adapter；不持有 fd、frame、descriptor 或 Battle Context。
--- 输入/输出：已解码 gateway_dispatch record -> 对应的响应或错误 record。
+-- 输入/输出：已解码 gateway_dispatch message -> cluster.send 的单向处理；结果另发 battle_result。
 -- 生命周期：battle_main 注入两个 Service handle 后注册为 cluster 入口。
 -- 不负责：不实现寻路、AI 或战斗结算，不接受客户端 Snapshot。
+local cluster = require "skynet.cluster"
 local skynet = require "skynet"
+local process = require "config.process_battle"
 local scenario = require "battle.scenario_1001"
 
 local query_service = nil    -- 本进程 Query Service，由 battle_main 注入一次。
@@ -109,8 +111,38 @@ local function dispatch_gateway(payload)
     } }
 end
 
--- 固定签名的 Service 分发；session/source 是 Skynet 元数据。
--- configure/ready 无 yield；gateway_dispatch 中的跨 Service call 可 yield。
+-- 执行业务分发后单向回推结果；transport token 只关联 Gateway 请求，不成为 Battle 身份。
+-- payload：Gateway Proxy 转发的已解码请求；Battle 结果送往配置的 Gateway Proxy；可能 yield。
+-- 失败：请求/业务错误转成受控错误 record；回推失败由 Gateway timeout 收敛。
+local function forward_result(payload)
+    assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
+    assert(type(payload) == "table" and type(payload.route_token) == "string" and
+        #payload.route_token > 0 and #payload.route_token <= 128,
+        "invalid gateway route token")
+    local route_token = payload.route_token
+    local call_ok, result = pcall(dispatch_gateway, payload)
+    if not call_ok then
+        skynet.error("Battle gateway dispatch failed: ", tostring(result))
+        result = {
+            ok = false,
+            error = { code = "BATTLE_FAILED", message = "battle request failed" },
+        }
+    end
+    local send_ok, send_error = pcall(
+        cluster.send,
+        process.cluster.gateway_node,
+        "@" .. process.cluster.gateway_proxy_service,
+        "battle_result",
+        route_token,
+        result
+    )
+    if not send_ok then
+        skynet.error("Battle result forward failed: ", tostring(send_error))
+    end
+end
+
+-- 固定签名的 Service 分发；Cluster data-plane 用 send，结果另发 battle_result 消息。
+-- configure/ready 使用本地 call；gateway_dispatch 单向接收且会 yield，不 retpack。
 skynet.start(function()
     skynet.dispatch("lua", function(_session, _source, command, payload)
         if command == "configure" then
@@ -118,7 +150,7 @@ skynet.start(function()
         elseif command == "ready" then
             skynet.retpack(query_service ~= nil and battle_mgr ~= nil)
         elseif command == "gateway_dispatch" then
-            skynet.retpack(dispatch_gateway(payload))
+            forward_result(payload)
         else
             error("unknown battle_dispatch command: " .. tostring(command))
         end

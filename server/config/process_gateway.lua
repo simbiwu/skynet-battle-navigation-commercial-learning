@@ -10,6 +10,8 @@ return {
         transport = "tcp",        -- 当前验收先使用 TCP。
     },
     cluster = {
+        local_node = "gateway",         -- Battle 回推结果所连接的本进程节点名。
+        proxy_service = "gateway_proxy", -- Battle 结果回推的固定接收 Service。
         local_listen = 2527,              -- 本进程 cluster 监听端口；Skynet 默认绑定 0.0.0.0。
         remote_node = "battle",          -- Battle Process 节点名。
         remote_service = "battle_dispatch", -- Battle Process 的显式 cluster Service 名。

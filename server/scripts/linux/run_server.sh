@@ -23,7 +23,7 @@ MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
 # GATEWAY_REGISTRY_OUTPUT 允许不同协议 bundle 使用不同生成文件；默认输出到运行时 Lua module 目录。
-REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/protocol/navigation_registry.lua}"
+REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua}"
 # source：在当前 Shell 进程加载固定版本配置，使后续变量和校验使用同一份清单。
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
@@ -73,7 +73,7 @@ Environment:
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
   FLYWOW_ROOT=/path/to/skynet-flywow
-  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/protocol/navigation_registry.lua
+  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/gateway/protocol/navigation_registry.lua
 USAGE
 }
 
