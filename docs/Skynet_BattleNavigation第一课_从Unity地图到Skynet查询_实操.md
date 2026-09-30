@@ -544,9 +544,10 @@ cd "$(git rev-parse --show-toplevel)/server"
 
 mkdir -p \
   config \
-  lualib/navigation \
+  lualib/battle/navigation \
+  lualib/battle/debug \
+  lualib/gateway/protocol \
   lualib/network \
-  lualib/protocol \
   native/grid_map/include \
   native/grid_map/src \
   native/grid_map/tests \
@@ -6638,14 +6639,19 @@ lualib/   只放同一 Lua State 内由 require 加载的普通模块
 
 ### 26.1 服务目录
 
+源码按 Gateway/Battle 的运行职责分组；Lesson 1 的 `config/skynet.lua` 仍使用一个组合进程入口 `service/main.lua`，由它在同一进程中启动 Gateway 和 Battle 侧的 Query Service。目录表达代码归属，不代表这里已经拆成两个 OS 进程。
+
 ```text
 service/
   main.lua
-  navigation_query.lua
+  battle/
+    navigation_query.lua
 lualib/
-  navigation/
-    query_logic.lua
-  protocol/                         # 构建时生成的 registry 输出目录，不手工维护
+  battle/
+    navigation/
+      query_logic.lua
+  gateway/
+    protocol/                        # 构建时生成的 Gateway registry，不手工维护
 protocol/
   navigation_query.proto
   generated/server/navigation_query.pb
@@ -6655,7 +6661,7 @@ config/
   skynet.lua
 ```
 
-`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
+`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -6679,7 +6685,7 @@ return {
     websocket_protocol = "ws",                  -- 当前只支持 ws；TLS 由宿主前置终止。
 
     descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 路径。
-    registry_module = "protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
+    registry_module = "gateway.protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
     protocol_version = 3,                          -- 与 sint64 WorldPosition 跨端合同一致的 Envelope 版本。
 
     max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
@@ -6694,9 +6700,9 @@ return {
 
 ### 26.3 Protobuf codec
 
-这个文件是 Gateway Lua State 内的普通运行库。它不拥有 Socket 和 Service 生命周期，因此放入 `lualib/protocol/`。
+这个文件是 Gateway Lua State 内的普通运行库。它不拥有 Socket 和 Service 生命周期，因此放入 `lualib/gateway/protocol/`。
 
-历史阅读材料：下面的旧 codec 代码只用于解释 descriptor 与 Protobuf bytes 的关系。当前运行链不再创建或移动业务专用 `navigation_codec.lua`；Protobuf codec 由 FlyWow Gateway 按生成的 `protocol.navigation_registry` 自动加载，也不要求业务 Service 注册 command。
+历史阅读材料：下面的旧 codec 代码只用于解释 descriptor 与 Protobuf bytes 的关系。遗留实现保留在 `server/lualib/gateway/protocol/navigation_codec.lua` 供对照，不属于当前运行链且不会被 require；当前 Protobuf codec 由 FlyWow Gateway 按生成的 `gateway.protocol.navigation_registry` 自动加载，也不要求业务 Service 注册 command。
 
 ```lua
 -- 职责：集中封装导航协议的 Protobuf descriptor 加载和消息编解码。
@@ -6757,7 +6763,7 @@ return M
 
 操作：把已经创建的查询模块移动并完整替换为下面内容。
 
-移动并完整替换：`service/nav/query_worker.lua` -> `lualib/navigation/query_logic.lua`
+移动并完整替换：`service/nav/query_worker.lua` -> `lualib/battle/navigation/query_logic.lua`
 
 ```lua
 -- 职责：校验 QueryCell 业务请求并调用 Native 静态地图查询。
@@ -6848,7 +6854,7 @@ return M
 
 ### 26.5 创建真正的 Query Service
 
-这里需要独立消息队列和独立 Lua State，所以使用真正的 Service 入口。它由后面的 `main.lua` 通过 `skynet.newservice("navigation_query")` 创建。
+这里需要独立消息队列和独立 Lua State，所以使用真正的 Service 入口。它由后面的 `main.lua` 通过 `skynet.newservice("battle/navigation_query")` 创建。
 
 已经创建的 `service/nav/bootstrap.lua` 不再使用，请删除。它只是被 `require` 的普通模块，却注册了当前 `main` Service 的名字，随后导致 Gateway 按名字 `skynet.call` 自己。
 
@@ -6856,18 +6862,18 @@ return M
 
 ```text
 删除文件：service/nav/bootstrap.lua
-新建文件：service/navigation_query.lua
+新建文件：service/battle/navigation_query.lua
 ```
 
 ```lua
--- 职责：拥有第一课静态地图查询入口，并响应 Gateway 发来的 QueryCell 消息。
+-- 职责：加载 Battle 进程共享静态地图，并响应内部 QueryCell 查询消息。
 -- 边界：Skynet Service；拥有独立 Lua State 和消息队列，不处理 TCP/Protobuf。
 -- 输入/输出：Lua 协议 query_cell + request table -> response table。
 -- 生命周期：进程启动时创建一次；启动阶段加载 BMAP，运行期只读查询。
 -- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
 local skynet = require "skynet"
 local config = require "config.game"
-local query_logic = require "navigation.query_logic"
+local query_logic = require "battle.navigation.query_logic"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- gateway_dispatch handler 只接收已完成 Protobuf 解码的 request table。
@@ -6929,7 +6935,7 @@ git submodule status
 Unity TCP / WebSocket
 -> flywow_gateway
 -> Envelope 校验
--> 生成的 protocol.navigation_registry
+-> 生成的 gateway.protocol.navigation_registry
 -> Protobuf request 解码
 -> navigation_query.gateway_dispatch
 -> QueryCell response table
@@ -6944,7 +6950,7 @@ Unity TCP / WebSocket
 
 run_server.sh 只负责调用独立的 Skynet-FlyWow 生成器；生成器实现不复制到学习工程。若框架仓库不在当前 workspace 的约定位置，设置 FLYWOW_ROOT=/path/to/skynet-flywow。
 
-需要替换协议 bundle 时，可以用 `GATEWAY_REGISTRY_OUTPUT` 改变 registry 生成路径，并同步让 `config/gateway.lua` 的 `registry_module` 指向相同的 Lua 模块；默认值是 `server/lualib/protocol/navigation_registry.lua`。
+需要替换协议 bundle 时，可以用 `GATEWAY_REGISTRY_OUTPUT` 改变 registry 生成路径，并同步让 `config/gateway.lua` 的 `registry_module` 指向相同的 Lua 模块；默认值是 `server/lualib/gateway/protocol/navigation_registry.lua`。
 
 运行时不解析 `.proto`，也不要求业务代码调用 `gateway.register_command`。业务 Service 只处理：
 
@@ -7298,7 +7304,7 @@ local skynet = require "skynet"
 local socketdriver = require "skynet.socketdriver"
 local netpack = require "skynet.netpack"
 local config = require "config.game"
-local codec = require "protocol.navigation_codec"
+local codec = require "gateway.protocol.navigation_codec"
 
 local query_service       -- main 注入；start 成功后只读。
 local listen_fd           -- 当前监听 fd；nil 表示未监听或已停止。
@@ -7900,7 +7906,7 @@ local skynet = require "skynet"
 
 -- Query 先完成地图加载，Gateway 再监听，避免端口就绪时依赖尚未可用。
 skynet.start(function()
-    local query_service = skynet.newservice("navigation_query")
+    local query_service = skynet.newservice("battle/navigation_query")
     -- ready call 等待 Query 完成 BMAP 加载并注册 dispatch，随后 Gateway 才开始监听。
     assert(skynet.call(query_service, "lua", "ready"))
     local gateway_service = skynet.newservice("flywow_gateway")
@@ -7979,7 +7985,7 @@ cpath = skynet_root .. "cservice/?.so"
 #!/usr/bin/env bash
 # 职责：阻止项目自有 Lua 源码把可变参数用作稳定接口或继续向业务层传播。
 # 边界：Build/Test 静态策略检查；只扫描当前 server 的自有 Lua 源码，不扫描 third_party/generated。
-# 输入/输出：service/lualib/protocol/config/tests 下的 .lua -> LUA_VARARG_POLICY_OK 或违规位置。
+# 输入/输出：service/、lualib/、config/、tests/ 下的 .lua -> LUA_VARARG_POLICY_OK 或违规位置。
 # 生命周期：由 run_server.sh build/rebuild 调用，也可由开发者单独执行；不修改任何文件。
 # 不负责：不解析第三方 Lua、不替代 Lua 语法检查，也不对性能作无基准结论。
 set -euo pipefail
@@ -8049,7 +8055,7 @@ SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
-REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/protocol/navigation_registry.lua}"
+REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua}"
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
@@ -8097,7 +8103,7 @@ Environment:
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
   FLYWOW_ROOT=/path/to/skynet-flywow
-  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/protocol/navigation_registry.lua
+  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/gateway/protocol/navigation_registry.lua
 USAGE
 }
 
@@ -10348,7 +10354,7 @@ send_response
 文件：
 
 ```text
-server/service/navigation_query.lua
+server/service/battle/navigation_query.lua
 ```
 
 建议断在：
@@ -10360,7 +10366,7 @@ local response = query_logic.query(assert(payload, "query payload is required"))
 继续进入：
 
 ```text
-server/lualib/navigation/query_logic.lua
+server/lualib/battle/navigation/query_logic.lua
 ```
 
 断在：
