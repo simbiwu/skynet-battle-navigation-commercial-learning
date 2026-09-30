@@ -1,12 +1,12 @@
 # LuaPanda 快速配置与调试
 
-本文是第一课的独立补充，面向已经准备好 Server 工程、只想快速接入 LuaPanda 的开发者。第一课正文不依赖本文，也不需要为了使用本文重新阅读完整课程。
+本文汇总第一课和第二课的 LuaPanda 本地调试入口。命令均在 WSL 工作区执行，VS Code 打开 WSL 仓库根目录。
 
 ## 1. 当前调试边界
 
 LuaPanda 调试的是 Skynet Service 各自的 Lua State。一个 Service 一个 Lua State；同时调试多个 Service 时，每个 Lua State 必须连接不同的 TCP 端口。
 
-当前第一课端口约定：
+第一课已有的端口约定：
 
 ```text
 Navigation Gateway Service -> 8818
@@ -50,9 +50,9 @@ ls -l .vscode/launch.json
 
 `pwd` 必须是上述 WSL 仓库根目录。LuaPanda 扩展也必须安装在当前 WSL 窗口；Windows 侧单独安装不够。
 
-## 3. 第一次准备 LuaPanda 依赖
+## 3. 准备 LuaPanda 依赖
 
-在 WSL 中进入 Server 目录：
+第一课的 `debug_luapanda.sh` 会执行此脚本。第二课的 `run_server.sh debug` 在本地依赖缺失时也会执行。需要单独修复调试依赖时，在 WSL 中进入 Server 目录运行：
 
 ```bash
 cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
@@ -79,7 +79,7 @@ mkdir -p .vscode
 cp server/debug/luapanda/launch.json.example .vscode/launch.json
 ```
 
-当前配置应包含三个名称：
+仓库内的模板只包含第一课的两个 target 和一个 compound：
 
 ```text
 LuaPanda Lesson1 Gateway       8818
@@ -89,7 +89,7 @@ LuaPanda Lesson1 Gateway + Query   compound
 
 如果运行和调试下拉框只显示 `LuaPanda` 和 `LuaPanda-IndependentFile`，那是扩展的配置模板，不是课程 target。检查当前打开的目录是否为 WSL 仓库根目录，以及 `.vscode/launch.json` 是否确实存在。
 
-## 5. 启动调试
+## 5. 第一课：启动调试
 
 先在 VS Code 的 Run and Debug 中启动：
 
@@ -120,6 +120,39 @@ LUA_PANDA_CONNECT host=127.0.0.1 port=8819
 LUA_PANDA_READY port=8819
 ```
 
+## 5.1 第二课：Gateway/Battle 双进程
+
+`debug` 是 `run_server.sh` 的动作，不带 `--debug` 或 `--start` 参数。它准备 Server 运行环境，按需调用 `bootstrap_luapanda.sh`，导出 `LUA_PANDA_ENABLE=1` 和默认的 `LUA_PANDA_HOST=127.0.0.1`，再由 `run_lesson2_processes.sh` 启动 Battle 与 Gateway 两个 Skynet 进程。首次准备依赖可能需要一些时间。
+
+先在 VS Code 的 Run and Debug 中启动要调试的 LuaPanda target，再在 WSL 终端执行：
+
+```bash
+cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
+./scripts/linux/run_server.sh debug
+```
+
+第二课的进程状态、日志和停止操作由双进程脚本管理：
+
+```bash
+./scripts/linux/run_lesson2_processes.sh status
+./scripts/linux/run_lesson2_processes.sh stop
+```
+
+日志分别位于 `server/logs/lesson2/battle.log` 和 `server/logs/lesson2/gateway.log`。当前 `run_server.sh status/stop` 管理的是单进程 `server.pid`，不能用来查看或停止上述两个进程。
+
+仓库根目录的 `.vscode/launch.json` 已列出以下端口；`server/debug/luapanda/launch.json.example` 仍只提供第一课的 8818/8819 示例：
+
+| Target | 端口 | 当前接入情况 |
+| --- | ---: | --- |
+| Lesson1 Gateway | 8818 | 第二课由 Gateway Proxy Service 连接此 target |
+| Lesson1 Query | 8819 | 第二课 Query Service 复用此 target |
+| `battle_dispatch` | 8821 | Service 入口调用 `luapanda_debug.start(8821)` |
+| `battle_mgr` | 8822 | Service 入口调用 `luapanda_debug.start(8822)` |
+| `work1` | 8823 | 第一个 Worker 由 Manager 分配端口 |
+| `work2` | 8824 | 第二个 Worker 由 Manager 分配端口 |
+
+`LuaPanda Lesson2 Gateway + Battle` compound 包含表中六个 target。Gateway Main 负责创建 Proxy 和 FlyWow Gateway；它会退出，因此 8818 连接在长期运行的 Gateway Proxy Service 中。每个目标必须在对应 Service 的 Lua State 内调用 `start(端口)`，并在对应日志中出现 `LUA_PANDA_READY port=...` 后，才算真正连接成功。这里的配置和源码已做静态核对，实际连接和断点命中仍需启动 VS Code target 与双进程验证。
+
 ## 6. 新增 Service 的配置
 
 普通 Service 不需要 LuaPanda 时，不修改任何调试配置。
@@ -128,7 +161,7 @@ LUA_PANDA_READY port=8819
 
 ```lua
 local skynet = require "skynet"
-local luapanda_debug = require "debug.luapanda_debug"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 skynet.start(function()
     -- 8820 只属于 battle_worker 的 Lua State。
@@ -157,7 +190,7 @@ end)
 不需要修改：
 
 ```text
-server/lualib/debug/luapanda_debug.lua
+server/lualib/shared/debug/luapanda_debug.lua
 server/scripts/linux/debug_luapanda.sh
 ```
 
