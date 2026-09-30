@@ -4587,7 +4587,7 @@ nav_result.h    成功/失败的统一返回值
 nav_result.cpp  稳定错误码到日志字符串的映射
 ```
 
-`WorldPosition` 是 Server 业务位置，单位固定为整数毫米。`GridPos` 是当前地图内的 Cell 下标，只服务于导航查询和调试。负世界坐标仍然合法；例如 `x_mm=-14750` 表示世界原点左侧 14.75 米，是否越界由地图的 `origin + size` 判断。
+`WorldPosition` 是 Server 业务位置，三个分量统一为有符号 `int64` 毫米，并由 `map_id` 限定到单张地图。Unity 使用 `long`，Protobuf 使用 `sint64`，Native 使用 `std::int64_t`，Lua 使用 64 位 `lua_Integer`。`GridPos` 是当前地图内的 Cell 下标，只服务于导航查询和调试。负世界坐标仍然合法；例如 `x_mm=-14750` 表示地图坐标原点左侧 14.75 米，是否越界由地图的 `origin + size` 判断。
 
 ### 19.1 BMAP 常量和 Native record
 
@@ -4657,11 +4657,11 @@ struct NavCell {
     }
 };
 
-// Server 业务位置：世界坐标、整数毫米，可进入协议和战斗快照。
+// Server 业务位置：世界坐标、整数毫米；三轴均为 int64，可进入协议和战斗快照。
 struct WorldPosition {
-    std::int32_t x_mm = 0; // 世界 X，毫米；允许负数。
-    std::int32_t y_mm = 0; // 世界高度 Y，毫米。
-    std::int32_t z_mm = 0; // 世界 Z，毫米；允许负数。
+    std::int64_t x_mm = 0; // 世界 X，int64 毫米；允许负数。
+    std::int64_t y_mm = 0; // 世界高度 Y，int64 毫米。
+    std::int64_t z_mm = 0; // 世界 Z，int64 毫米；允许负数。
 };
 
 // 当前地图内的二维 Cell 下标，只用于 Native 查询和 Debug API。
@@ -4875,7 +4875,7 @@ public:
     // 地图外或结果无法用 GridPos 表示时返回 kOutOfBounds；不分配共享状态。
     NavResult<GridPos> WorldToGrid(const WorldPosition& world) const;
     // 返回指定 Cell Center 的毫米制世界坐标；Y 取该 Cell 的静态表面高度。
-    // grid 越界返回 kOutOfBounds，中心坐标溢出 int32 返回 kSizeOverflow。
+    // grid 越界返回 kOutOfBounds，中心超出 BMAP V1 坐标范围返回 kSizeOverflow。
     NavResult<WorldPosition> GridToWorldCenter(const GridPos& grid) const;
     // 先执行 WorldToGrid，再返回对应 NavCell 的副本；失败原样向上传递。
     NavResult<NavCell> QueryWorld(const WorldPosition& world) const;
@@ -4931,10 +4931,18 @@ std::size_t GridMap::memory_bytes() const noexcept {
 }
 
 NavResult<GridPos> GridMap::WorldToGrid(const WorldPosition& world) const {
+    // BMAP V1 元数据坐标仍是 i32；先拒绝该资产格式不能表示的世界范围，避免 int64 相减溢出。
+    if (world.x_mm < std::numeric_limits<std::int32_t>::min() ||
+        std::numeric_limits<std::int32_t>::max() < world.x_mm ||
+        world.z_mm < std::numeric_limits<std::int32_t>::min() ||
+        std::numeric_limits<std::int32_t>::max() < world.z_mm) {
+        return NavResult<GridPos>::Failure(
+            NavError::kOutOfBounds, "world position outside BMAP V1 range");
+    }
     const std::int64_t relative_x = // 相对 Grid 起点的世界 X 偏移，毫米；允许负数。
-        static_cast<std::int64_t>(world.x_mm) - metadata_.origin_x_mm;
+        world.x_mm - metadata_.origin_x_mm;
     const std::int64_t relative_z = // 相对 Grid 起点的世界 Z 偏移，毫米；允许负数。
-        static_cast<std::int64_t>(world.z_mm) - metadata_.origin_z_mm;
+        world.z_mm - metadata_.origin_z_mm;
 
     const std::int64_t grid_x = FloorDiv(relative_x, metadata_.cell_size_mm);
     const std::int64_t grid_z = FloorDiv(relative_z, metadata_.cell_size_mm);
@@ -4983,9 +4991,9 @@ NavResult<WorldPosition> GridMap::GridToWorldCenter(const GridPos& grid) const {
     }
 
     return NavResult<WorldPosition>::Success(WorldPosition{
-        static_cast<std::int32_t>(x),
+        x,
         cell.height_mm,
-        static_cast<std::int32_t>(z),
+        z,
     });
 }
 
@@ -5621,9 +5629,9 @@ message Envelope {
 }
 
 message WorldPosition {
-  sint64 x_mm = 1; // 世界 X，毫米；负数合法，ZigZag 编码负值。
+  sint64 x_mm = 1; // 地图内世界 X，毫米；负数合法，ZigZag 编码负值。
   sint64 y_mm = 2; // 世界高度 Y，毫米；ZigZag 编码。
-  sint64 z_mm = 3; // 世界 Z，毫米；负数合法，ZigZag 编码负值。
+  sint64 z_mm = 3; // 地图内世界 Z，毫米；负数合法，ZigZag 编码负值。
 }
 
 message QueryCellRequest {
@@ -5721,9 +5729,9 @@ sint64                    -> ZigZag + Varint，负数也能保持较短编码
 string / bytes / message  -> length-delimited，先长度再内容
 ```
 
-世界坐标使用 `sint64`，因为世界 X/Z 可以为负数。普通 `int64` 也能正确表达负数，但负值通常会占用 10 bytes；`sint64` 先做 ZigZag 编码，更适合正负值都常见的坐标。
+地图内世界坐标使用 `sint64` 毫米，负数合法；`sint64` 通过 ZigZag 编码后再用 Varint 编码，正负值都常见时比普通 `int64` 更合适。地图由 `map_id` 区分，每张地图使用自己的坐标范围。
 
-协议使用 64-bit 坐标，Native 第一课使用 `int32_t` 毫米。Lua C Binding 转换前必须检查数值是否落在 `int32_t` 范围内，不能依赖截断转换。
+Unity 生成类型、Protobuf、Native `WorldPosition`、Lua 和 Replay 都使用有符号 64 位坐标字段。Lua Binding 验证坐标为整数，再传入 Native，不做位宽缩窄。协议字段范围变化时必须提升 `NAVIGATION_PROTOCOL_VERSION` 并重新生成两端代码；当前协议版本为 3。
 
 #### 24.1.4 一次 QueryCell 怎样装包
 
@@ -5844,7 +5852,7 @@ RESULT_UNSPECIFIED = 0;
 ```bash
 # 职责：锁定跨 Unity/Server 协议生成链使用的合同与工具版本。
 # 边界：共享 Build 配置；只声明版本，不自动安装、升级或加载 Runtime。
-NAVIGATION_PROTOCOL_VERSION=1
+NAVIGATION_PROTOCOL_VERSION=3
 PROTOC_VERSION=36.2
 LUA_PROTOBUF_COMMIT=ee4beb3865e2b82ea94b8a4314d78875c550ce20
 GOOGLE_PROTOBUF_VERSION=3.36.2
@@ -6429,19 +6437,17 @@ MapRegistry* registry(lua_State* L) {
 }
 
 // 从 index 指向的 Lua table 读取 int32 字段；缺失、类型错误或越界触发 luaL_error。
-// WorldPosition 的协议字段是 sint64，进入 Native int32 前必须显式检查范围。
-std::int32_t int32_field(lua_State* L, int index, const char* name) {
+// Lua table 是动态输入；WorldPosition 合同为 sint64，需确认整数且 Lua_Integer 为 64 位。
+std::int64_t int64_field(lua_State* L, int index, const char* name) {
+    static_assert(std::numeric_limits<lua_Integer>::digits == 63,
+                  "WorldPosition requires a 64-bit Lua integer");
     lua_getfield(L, index, name);
     if (!lua_isinteger(L, -1)) {
         luaL_error(L, "field '%s' must be integer", name);
     }
     const lua_Integer value = lua_tointeger(L, -1);
     lua_pop(L, 1);
-    if (value < std::numeric_limits<std::int32_t>::min() ||
-        value > std::numeric_limits<std::int32_t>::max()) {
-        luaL_error(L, "field '%s' is outside int32 range", name);
-    }
-    return static_cast<std::int32_t>(value);
+    return static_cast<std::int64_t>(value);
 }
 
 // 向 Lua 栈压入 nil 和 {code,message} 两个返回值；message bytes 由 Lua 复制持有。
@@ -6491,9 +6497,9 @@ int l_query_cell(lua_State* L) {
     luaL_checktype(L, 3, LUA_TTABLE);
 
     battle_nav::WorldPosition position;
-    position.x_mm = int32_field(L, 3, "x_mm");
-    position.y_mm = int32_field(L, 3, "y_mm");
-    position.z_mm = int32_field(L, 3, "z_mm");
+    position.x_mm = int64_field(L, 3, "x_mm");
+    position.y_mm = int64_field(L, 3, "y_mm");
+    position.z_mm = int64_field(L, 3, "z_mm");
 
     const auto found = maps->Find(map_id, version);
     if (!found.ok()) {
@@ -6674,7 +6680,7 @@ return {
 
     descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 路径。
     registry_module = "protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
-    protocol_version = 1,                          -- Envelope 兼容版本。
+    protocol_version = 3,                          -- 与 sint64 WorldPosition 跨端合同一致的 Envelope 版本。
 
     max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
     max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。
@@ -8928,7 +8934,7 @@ namespace BattleNavigation.Client
 {
     public sealed class ServerQueryClient : IDisposable
     {
-        private const uint ProtocolVersion = 1;
+        private const uint ProtocolVersion = 3;
         private const uint QueryCellCommand = 1001;
         private static ulong nextRequestId = 1;
         private readonly TcpClient client;

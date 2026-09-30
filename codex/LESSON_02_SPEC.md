@@ -1,6 +1,6 @@
 # Lesson 02 Spec
 
-本文件只规定第二课目标和验收边界。当前不要生成或扩写第二课实操正文；学习者完成第一课并明确提出后再编写。
+本文件规定第二课目标和验收边界；第二课实操正文位于下方主文档。勾选表示对应实现与课程说明已完成，不代表所有部署环境都无需再做集成验证。
 
 主文档：
 
@@ -38,24 +38,24 @@ FindPath need
 ## 完成
 
 ```text
-[ ] Grid A*
-[ ] binary heap
-[ ] generation stamp
-[ ] AgentProfile
-[ ] clearance
-[ ] slope
-[ ] area
-[ ] Path userdata
-[ ] NavigationContext
-[ ] dynamic occupancy
-[ ] attack position
-[ ] smoothing
-[ ] BattleWorker
-[ ] no-yield simulate
-[ ] deterministic event
-[ ] simple ground target/move/attack AI
-[ ] Unity replay
-[ ] benchmark
-[ ] concurrency stress
-[ ] ALL_TESTS_OK
+[x] Grid A*
+[x] binary heap
+[x] generation stamp
+[x] AgentProfile
+[x] clearance
+[x] slope
+[x] area
+[x] Path userdata
+[x] NavigationContext
+[x] dynamic occupancy
+[x] attack position
+[x] smoothing
+[x] BattleWorker
+[x] no-yield simulate
+[x] deterministic event
+[x] simple ground target/move/attack AI
+[x] Unity replay
+[x] benchmark
+[x] concurrency stress
+[x] ALL_TESTS_OK
 ```

@@ -1,13 +1,10 @@
 {
-  "name": "BattleNavigation.Client.Editor",
-  "rootNamespace": "BattleNavigation.Client.Editor",
+  "name": "BattleNavigation.Replay",
+  "rootNamespace": "BattleNavigation.Client",
   "references": [
-    "BattleNavigation.Client",
-    "BattleNavigation.Replay"
+    "BattleNavigation.Client"
   ],
-  "includePlatforms": [
-    "Editor"
-  ],
+  "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,

@@ -20,11 +20,11 @@ namespace BattleNavigation.Editor
         private uint mapId = 1001; // BMAP Header 和 QueryCell 协议共用的地图 ID。
         // 客户端期望的地图资产版本。
         private uint mapVersion = 1;
-        // 查询 WorldPosition X，单位毫米。
+        // WorldPosition X，整数毫米，业务接口为 int64。
         private long xMm;
-        // 查询 WorldPosition Y，单位毫米。
+        // WorldPosition Y，整数毫米，业务接口为 int64。
         private long yMm;
-        // 查询 WorldPosition Z，单位毫米。
+        // WorldPosition Z，整数毫米，业务接口为 int64。
         private long zMm;
         // 最近一次响应或异常的可读显示文本。
         private string result = "not queried";

@@ -203,9 +203,9 @@ server/native/lua_battle_nav/src/lua_battle_nav.cpp
 
 ```cpp
 struct WorldPosition {
-    std::int32_t x_mm; // 世界 X，整数毫米；业务位置允许为负数。
-    std::int32_t y_mm; // 世界高度 Y，整数毫米；来自地表高度事实。
-    std::int32_t z_mm; // 世界 Z，整数毫米；业务位置允许为负数。
+    std::int64_t x_mm; // 世界 X，int64 毫米；业务位置允许为负数。
+    std::int64_t y_mm; // 世界高度 Y，int64 毫米；来自地表高度事实。
+    std::int64_t z_mm; // 世界 Z，int64 毫米；业务位置允许为负数。
 };
 
 struct GridPos {
@@ -1382,6 +1382,8 @@ server/native/grid_map/src/grid_pathfinder.cpp
 #include <vector>
 
 namespace battle_nav {
+// 匿名 namespace 的作用：把本文件的辅助名称限制在 grid_pathfinder.cpp 内部。
+// 例如 CanTraverseStatic() 只供本文件的 A* 主循环使用，不是其他 .cpp 可调用的公开 API。
 namespace {
 
 constexpr std::uint32_t kStraightCost = 1000;
@@ -1751,7 +1753,7 @@ NavResult<Path> GridPathfinder::FindPathStatic(
     HeapPush(context, map, start_index, end_grid.value);
 
     while (context.heap_size() > 0) {
-        // HeapPop 取出当前 f 最小的候选；同一节点被重复入堆时，Closed 状态会过滤旧条目。
+        // HeapPop 取出当前 f 最小的候选并标记为 Closed；Decrease-Key 原地调整堆，不会留下重复旧条目。
         const std::int32_t current_index = HeapPop(context, map, end_grid.value);
         auto& current_node = context.TouchNode(current_index);
         if (current_node.state == NavigationContext::NodeState::kClosed) {
@@ -1830,6 +1832,8 @@ goal_index
 -> Path(WorldPosition[0..N-1])
 ```
 
+这里的 parent 链可以把它想成“每个路点只记住从哪里来”。`BuildPath()` 从终点沿记录倒着走，所以先得到倒序列表，再翻转成单位实际行走的顺序；它不是第二次寻路。
+
 例如：
 
 ```text
@@ -1881,7 +1885,7 @@ reversed = [2, 1, 0]
 4. start/end Cell 合法，为什么仍可能返回 NO_PATH？
 ```
 
-> 说明：`BuildPath()` 为了输出精确毫米折线长度使用 `sqrt`。它不参与 A* 排序、通行判定和确定性 tie-break；真正的搜索成本全部是整数。若项目要求跨不同 CPU/标准库得到 bit-for-bit 相同的 `length_mm`，把这里替换成项目统一的整数平方根即可。逻辑 Event 的确定性不要依赖这个统计字段。
+> 说明：`BuildPath()` 为了输出整数毫米折线长度使用 `sqrt`。在第 6 节它不参与 A* 排序、通行判定和 tie-break；真正的搜索成本全部是整数。第 17.3 节加入 Path 跟随后，Native 也会用每段长度把 Tick 距离预算换算成线段进度，因此长度取整可能影响移动进度。当前课程验证同一 Server 构建环境下的重复结果；若项目要求跨 CPU/编译器也逐毫米完全一致，应统一替换为确定性的整数长度算法，并让 Path 长度和移动进度共用它。
 
 ### 6.8 为什么现在还没有 DynamicOccupancy
 
@@ -2722,6 +2726,10 @@ direct_segment_cost <= original_subpath_cost
 [只读] `server/native/grid_map/include/grid_pathfinder.h`
 
 `SegmentCheck`、`ValidateGridSegment()` 和 `SmoothGridPath()` 都是 `.cpp` 匿名 namespace 内的实现细节，位置在 `CanTraverse()`、`MoveCost()` 之后。不要把它们放进 `.h`：`QueryPolicy`、`CanTraverse()`、`MoveCost()` 也只定义在这个 `.cpp` 的匿名 namespace 中。头文件只声明公开的 `ValidatePathStatic()` 和 `ValidatePath()`。这样可以避免头文件引用不可见类型，也避免每个包含头文件的编译单元重复生成实现。
+
+直白地说，匿名 namespace 就是“只在这个 `.cpp` 文件里可见的一组名字”。它不创建对象，也不改变函数执行方式，只限制可见范围。`ValidateGridSegment()` 是 A* 和 smoothing 共用、但不应成为项目公开 API 的 helper，适合放在这里；其他 `.cpp` 看不到它，公开调用者只能使用头文件声明的 `ValidatePath()` 等入口。
+
+`ValidateGridSegment()` 的作用先记成一句话：判断“从一个 Grid Cell 到另一个 Cell 的直线，沿途每一步是否都合法”。只检查两个端点不够，中间可能穿过障碍、窄 clearance、陡坡或动态占位。Supercover 会逐格检查线段经过的 Cell，再对每条相邻边复用 `CanTraverse()`。例如 `(0,0) -> (3,0)` 会检查 `(1,0)、(2,0)、(3,0)`，而不是只检查起点和终点；斜线碰到格子角时，也要纳入对应侧格，避免切角。下面的整数比较代码负责决定下一步先跨 X 边还是 Z 边。
 
 ```cpp
 struct SegmentCheck {
@@ -4386,7 +4394,7 @@ LuaNavigationContext userdata ownership
 LuaPath userdata ownership
 __gc / close
 profile 解析与校验
-WorldPosition int32 range check
+WorldPosition int64 integer validation
 nil,error 返回合同
 ```
 
@@ -4580,6 +4588,7 @@ struct LuaPath {
 // 这些 helper 的实现保留在文件后部；先声明，供前面的 Binding 入口调用。
 // 从 Lua table 读取 int32 字段；缺失、类型错误或越界会通过 luaL_error 失败。
 std::int32_t int32_field(lua_State* L, int index, const char* name);
+std::int64_t int64_field(lua_State* L, int index, const char* name);
 
 // 压入 nil 和 {code,message}；message 由 Lua 复制持有，返回两个 Lua 结果。
 void push_error(lua_State* L, const char* code, const std::string& message);
@@ -4612,13 +4621,13 @@ const battle_nav::AgentProfile* find_profile(
     return nullptr;
 }
 
-// 从 Lua table 读取 int32 毫米 WorldPosition；字段缺失或越界 luaL_error。
+// 从 Lua table 读取 int64 毫米 WorldPosition；字段缺失或类型错误 luaL_error。
 battle_nav::WorldPosition world_position(lua_State* L, int index) {
     luaL_checktype(L, index, LUA_TTABLE);
     battle_nav::WorldPosition p;
-    p.x_mm = int32_field(L, index, "x_mm");
-    p.y_mm = int32_field(L, index, "y_mm");
-    p.z_mm = int32_field(L, index, "z_mm");
+    p.x_mm = int64_field(L, index, "x_mm");
+    p.y_mm = int64_field(L, index, "y_mm");
+    p.z_mm = int64_field(L, index, "z_mm");
     return p;
 }
 
@@ -5698,7 +5707,8 @@ struct PathAdvanceResult {
 ```cpp
 // 沿同一实体独占的 Path 消耗一次 fixed-tick 距离预算。
 // context/agent/path/policy：同步借用；cursor 由该 Path userdata 独占并在成功子步后更新。
-// from：当前权威世界毫米位置；distance_mm：Battle 已结算的本 Tick 非负移动预算。
+// cursor、path、agent 和 from 必须始终属于同一单位；外力改位或换 Path 时应丢弃旧 cursor。
+// from：当前权威世界毫米位置，必须是上次成功结果的位置；distance_mm：Battle 已结算的本 Tick 非负移动预算。
 // 返回 moving/reached/blocked 和最后成功位置；blocked 是正常业务结果，不作为 NavError。
 // 参数非法才返回失败；函数不执行 I/O、加锁或 yield，但会修改 cursor 和 Occupancy。
 static NavResult<PathAdvanceResult> AdvancePath(
@@ -5712,11 +5722,16 @@ static NavResult<PathAdvanceResult> AdvancePath(
 ```
 
 在 `grid_pathfinder.cpp` 的匿名 namespace 增加安全插值 helper。它使用固定线段起点和
-累计进度；乘法无法由 `int64` 安全表示时显式失败，不允许坐标静默回绕：
+累计进度；它负责把“本 Tick 已经走了多少毫米”换成线段上的 X 或 Z 坐标。比如线段
+X 从 100mm 到 500mm、总长 400mm，已经消费 100mm 时，新 X 是 200mm。每次从固定
+起点计算，避免逐 Tick 累加整数取整误差。乘法无法由 `int64` 安全表示时显式失败，
+不允许坐标静默回绕：
 
 [局部修改：`server/native/grid_map/src/grid_pathfinder.cpp`。把 helper 放在匿名 namespace 内，与其他仅供本文件使用的几何辅助函数同层。]
 
 ```cpp
+// 用途：把沿 Path 线段的消费进度换算成一个 X 或 Z 世界坐标；避免逐 Tick 累加坐标。
+// 例如 origin=100、target=500、progress=100、length=400，结果是 200。
 // 按 progress/length 在线段单轴上做整数插值；除法向 0 截断且每次都相对固定 origin。
 // origin/target 是世界毫米坐标；progress 必须不大于 length，out 由调用方提供。
 // 成功返回 true；乘法或最终 int32 坐标越界返回 false；不分配、不修改共享状态。
@@ -5776,12 +5791,18 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
             NavError::kInvalidArgument,
             "AdvancePath requires valid agent and non-empty path");
     }
+    const auto valid_profile = ValidateAgentProfile(*agent.profile);
+    if (!valid_profile.ok()) {
+        return NavResult<PathAdvanceResult>::Failure(
+            valid_profile.error, valid_profile.detail);
+    }
     if (cursor.next_point_index > path.count() ||
         (path.count() > 1 && cursor.next_point_index == 0)) {
         return NavResult<PathAdvanceResult>::Failure(
             NavError::kInvalidArgument, "Path cursor is outside path");
     }
 
+    // position 从 Battle 的权威输入开始；返回前会更新为最后成功提交的位置。
     PathAdvanceResult output;
     output.position = from;
     if (cursor.next_point_index == path.count()) {
@@ -5799,9 +5820,11 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
             "distance budget exceeds bounded substep count");
     }
 
+    // 把本 Tick 的距离预算分成小步；每步复用 MoveUnit 重新验证并提交。
     std::uint64_t budget = distance_mm;
     std::uint64_t substeps = 0;
     while (budget > 0 && cursor.next_point_index < path.count()) {
+        // cursor 指向下一个路点；前一个点是当前线段的固定起点。
         const WorldPosition& origin =
             path.WorldPoint(cursor.next_point_index - 1);
         const WorldPosition& goal =
@@ -5818,9 +5841,9 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
                 "Path cursor progress is outside current segment");
         }
         if (++substeps > kMaxSubstepsPerCall) {
-            return NavResult<PathAdvanceResult>::Failure(
-                NavError::kInternalError,
-                "AdvancePath exceeded validated substep count");
+            // 短路段可能让同一预算需要很多次提交；达到工作上限时返回已完成进度，余量留给下个 Tick。
+            output.status = PathAdvanceStatus::kMoving;
+            return NavResult<PathAdvanceResult>::Success(output);
         }
 
         const std::uint64_t remaining =
@@ -5839,6 +5862,10 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
                    !InterpolateAxis(
                        origin.z_mm, goal.z_mm, progress, length,
                        &candidate.z_mm)) {
+            if (output.consumed_mm > 0) {
+                output.status = PathAdvanceStatus::kBlocked;
+                return NavResult<PathAdvanceResult>::Success(output);
+            }
             return NavResult<PathAdvanceResult>::Failure(
                 NavError::kInvalidArgument,
                 "Path segment interpolation exceeds integer range");
@@ -5846,11 +5873,39 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
 
         if (candidate.x_mm != output.position.x_mm ||
             candidate.z_mm != output.position.z_mm) {
+            // 先做只读坐标转换，确保可报告的坐标错误发生在 Occupancy 提交之前。
+            const auto checked_grid = context.map()->WorldToGrid(candidate);
+            if (!checked_grid.ok()) {
+                if (output.consumed_mm > 0) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                return NavResult<PathAdvanceResult>::Failure(
+                    checked_grid.error, checked_grid.detail);
+            }
+            const auto checked_world =
+                context.map()->GridToWorldCenter(checked_grid.value);
+            if (!checked_world.ok()) {
+                if (output.consumed_mm > 0) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                return NavResult<PathAdvanceResult>::Failure(
+                    checked_world.error, checked_world.detail);
+            }
+
             const auto moved = MoveUnit(
                 context, agent, output.position, candidate, policy);
             if (!moved.ok()) {
                 if (moved.error == NavError::kMoveBlocked ||
-                    moved.error == NavError::kDynamicOccupied) {
+                    moved.error == NavError::kDynamicOccupied ||
+                    moved.error == NavError::kOutOfBounds ||
+                    moved.error == NavError::kStartNotNavigable ||
+                    moved.error == NavError::kEndNotNavigable) {
+                    output.status = PathAdvanceStatus::kBlocked;
+                    return NavResult<PathAdvanceResult>::Success(output);
+                }
+                if (output.consumed_mm > 0) {
                     output.status = PathAdvanceStatus::kBlocked;
                     return NavResult<PathAdvanceResult>::Success(output);
                 }
@@ -5858,18 +5913,8 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
                     moved.error, moved.detail);
             }
 
-            // MoveUnit 提交的是 Grid footprint；权威 Y 必须重新取目标 Cell 地表高度。
-            const auto target_grid = context.map()->WorldToGrid(candidate);
-            if (!target_grid.ok()) {
-                return NavResult<PathAdvanceResult>::Failure(
-                    target_grid.error, target_grid.detail);
-            }
-            const auto normalized = context.map()->GridToWorldCenter(target_grid.value);
-            if (!normalized.ok()) {
-                return NavResult<PathAdvanceResult>::Failure(
-                    normalized.error, normalized.detail);
-            }
-            output.position = normalized.value;
+            // MoveUnit 已提交目标 footprint；权威 Y 使用提交前验证的目标 Cell 地表高度。
+            output.position = checked_world.value;
             output.position.x_mm = candidate.x_mm;
             output.position.z_mm = candidate.z_mm;
             output.moved = true;
@@ -5891,9 +5936,32 @@ NavResult<PathAdvanceResult> GridPathfinder::AdvancePath(
 }
 ```
 
-最后在 `lua_battle_nav.cpp` 修改 `push_path()`，保证每次查询结果都有自己独立的 cursor：
+单次调用还有 `kMaxSubstepsPerCall` 工作上限。遇到特别短而密集的 Path Segment、导致 4096 次子步仍未用完距离预算时，Native 返回 `moving` 和已提交的位置/`consumed_mm`，剩余预算不累积到下一个 Tick；这样可以有界地完成当前调用，不会在已经移动后再把它报告为内部错误。正常平滑路线通常不会触发这个保护上限。
 
-[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。先在 `LuaPath` 结构体中增加 `PathFollowCursor cursor` 字段；再用下面代码替换现有 `push_path()` 函数体。]
+最后在 `lua_battle_nav.cpp` 修改 `LuaPath` 和 `push_path()`，让每个 Path userdata 都拥有自己的跟随游标。
+
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。先定位文件前部的 `struct LuaPath`（紧邻 `LuaNavigationContext` 定义处），在 `path` 字段后增加 `cursor`；然后替换现有 `push_path()` 函数体。]
+
+当前 `LuaPath` 只有一条路线：
+
+```cpp
+struct LuaPath {
+    battle_nav::Path path; // userdata 独占的 immutable 路线。
+};
+```
+
+在它的 `path` 字段**下面**增加 `battle_nav::PathFollowCursor cursor`：
+
+```cpp
+struct LuaPath {
+    battle_nav::Path path;                   // userdata 独占的 immutable 路线。
+    battle_nav::PathFollowCursor cursor;     // 这条路线自己的跟随进度。
+};
+```
+
+`LuaPath` 是放在 Path full userdata 内的 C++ 对象，所以这个成员随 userdata 一起存在；每次创建新的 Path userdata，就会得到一份默认游标。不要把游标加到 `LuaNavigationContext`：一个 Context 可能服务多个单位，放在那里会让它们错误地共用跟随进度。
+
+因为结构体现在有两个字段，`push_path()` placement-new 时也要按字段顺序初始化：先移动传入的 `Path`，再构造默认游标。`sizeof(LuaPath)` 会自动包含新增字段，不需要手动调整大小。
 
 ```cpp
 // 把 immutable Path 和该实体私有 cursor move 进新 userdata；栈净增加 1。
@@ -5943,7 +6011,20 @@ const char* path_advance_status_name(
 }
 ```
 
-`l_context_advance_path()` 的完整 Binding 如下。所有可能 `luaL_error` 的 request 解析都在
+`l_context_advance_path()` 调用 `ExclusiveDynamicRule`，而该回调的函数定义位于本文件后部。
+C++ 在调用点之前必须先见到函数声明，因此先在匿名 namespace 顶部现有的 helper 前置声明区
+增加下面的声明；否则编译器会报 `ExclusiveDynamicRule was not declared in this scope`。
+
+[局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。在 `MapRegistry* registry(lua_State* L);` 后添加前置声明；保留文件后部原有的函数定义，不要重复实现。]
+
+```cpp
+// 检查目标 footprint 是否只被当前实体占用；函数定义位于后续的 DynamicOccupancy helper 区域。
+bool ExclusiveDynamicRule(
+    void*,
+    const battle_nav::DynamicNavigationQuery& query);
+```
+
+完成前置声明后，`l_context_advance_path()` 的完整 Binding 如下。所有可能 `luaL_error` 的 request 解析都在
 进入 Native 之前完成；一旦开始提交 Occupancy，就不再解析 Lua 输入：
 
 [局部修改：`server/native/lua_battle_nav/src/lua_battle_nav.cpp`。新增这个 Binding 函数，放在现有 `l_context_move_unit()` 和其他 Context 操作入口附近。]
@@ -6919,32 +7000,175 @@ start = "battle/batch_runner"
 
 `include` 的相对路径以当前配置文件所在目录为基准；固定 Skynet 的配置加载器
 会先展开 `config/skynet_batch.lua`，再从同目录读取 `skynet.lua`。
-从 `server/` 目录运行，先确认第一课依赖和 Native Binding 已构建，
-再启动批量入口：
+从 `server/` 目录运行。先构建 Native Binding，再启动 Skynet：
 
 ```bash
+./native/lua_battle_nav/make.sh
 FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
   ./third_party/skynet/skynet config/skynet_batch.lua
 ```
+
+`make.sh` 会根据当前 Native 源码重新生成 `build/lua_battle_nav/battle_nav.so`。
+只修改 C++ 源码而不重建时，Skynet 仍会加载旧 `.so`；旧模块可能缺少刚加入的
+`advance_path` 方法，导致 `attempt to call a nil value (method 'advance_path')`。
+如果构建阶段报错，先按编译器指出的源码位置修复并重新构建；不要继续启动旧产物。
 
 正常克隆需要先初始化 FlyWow submodule。若本机调试使用独立 FlyWow 源码，
 把 `FLYWOW_ROOT` 指向该已验证版本即可；不要改运行时 Lua 搜索路径来迁就工作区。
 预期日志包含 `BATTLE_DETERMINISM_OK`。批量入口不监听 Gateway 端口；
 进程仍有长驻 Query/Worker Service，验收后由终端停止它。
 
-### 20.1 这里故意没有“等待 30 秒”
+### 20.1 `skynet_batch` 的完整执行链
 
-`max_logic_ms=30000` 表示最多模拟 30 秒**逻辑时间**。CPU 可能几十毫秒就完成整场。
+`skynet_batch.lua` 是一份 **Skynet 进程启动配置**，不是 Service，也不是 Battle 逻辑。它复用正常进程配置中的线程数、Lua 搜索路径和 Native 模块路径，只把首个业务 Service 从 Gateway 的 `main` 换成 `battle/batch_runner`。因此这条命令启动的是一个用于本地验收的 Skynet 进程；同一进程里有 Query、BattleMgr 和 BattleWorker，但没有 Gateway，也不等待客户端连接。
 
-不能写：
-
-```lua
-for ... do
-    skynet.sleep(5) -- 等 50ms 墙钟
-end
+```text
+Shell（当前目录必须是 server/）
+  └─ FLYWOW_ROOT=... ./third_party/skynet/skynet config/skynet_batch.lua
+       ├─ 读取 skynet_batch.lua
+       │    ├─ include "skynet.lua"：加载共同的进程设置和搜索路径
+       │    └─ start = "battle/batch_runner"：选择本次进程的业务入口
+       └─ Skynet Bootstrap 启动 battle/batch_runner Service
+            ├─ newservice("navigation_query")
+            │    └─ 加载 BMAP -> 注册只读 GridMap -> ready 响应
+            ├─ newservice("battle/battle_mgr")
+            │    └─ 创建固定数量的 battle_worker Service
+            ├─ call Manager：用 snapshot A 模拟一次 Battle（yield 等响应）
+            │    └─ Manager round-robin 选 Worker -> call Worker（yield）
+            │         └─ 创建本场 Context -> battle_core.simulate
+            │              └─ fixed Tick：选目标 / 寻路 / 移动 / 攻击 / 产出 Events
+            │         -> close Context -> retpack(result)
+            ├─ call Manager：用内容相同但全新的 snapshot B 再模拟一次
+            ├─ 逐字段比较两份结果
+            └─ 输出 BATTLE_DETERMINISM_OK
 ```
 
-自动 Battle 的价值就是可以快速算完，再让 Unity 按逻辑时间慢慢播放。
+读图时把两种状态分开：只读 `GridMap` 在当前进程的 Native `MapRegistry` 中复用；每次 Battle 的 Snapshot、单位状态、Event Log 和 `NavigationContext` 都属于各自的模拟。每个 Worker 有独立 Lua State，Path/Context userdata 不会从 Runner 或 Manager 跨 State 传递；Service 之间传的是 Skynet 序列化后的普通 Lua 数据。这里 Query Service 先加载地图并回 `ready`，随后 Worker 的 Native Context 才能按 `map_id/map_version` 找到进程内已注册的地图。
+
+完整代码的入口位置如下，按这张表从上往下读，就能沿着实际执行顺序找到每个关键函数：
+
+| 文件 | 关键代码 | 作用 |
+| --- | --- | --- |
+| `server/config/skynet_batch.lua` | `include`、`start` | 复用通用配置，并选择 Batch Runner 为进程入口。 |
+| `server/config/skynet.lua` | `bootstrap`、`luaservice`、`lua_path`、`lua_cpath` | 定义 Skynet 如何启动 Lua Service、查找 Lua 模块和 Native `.so`。 |
+| `server/service/battle/batch_runner.lua` | `snapshot`、`skynet.start`、`assert_same_result` | 构造输入、等待服务、顺序运行两次并比较结果。 |
+| `server/service/navigation_query.lua`、`server/lualib/navigation/query_logic.lua` | `query_logic.start(config)`、`ready` dispatch | 在当前进程加载/校验 BMAP，并在就绪后回复 Runner。 |
+| `server/service/battle/battle_mgr.lua` | `choose_worker`、`simulate`、`dispatch` | 创建 Worker Pool，按轮询分配请求并转发结果。 |
+| `server/service/battle/battle_worker.lua` | `simulate`、`dispatch` | 创建/关闭本场 Context，在错误边界内调用 Battle Core。 |
+| `server/lualib/battle/battle_core.lua` | `M.create`、`M.step`、`M.simulate`、`M.finish` | 不依赖 Skynet 地推进 fixed-tick Battle 并生成 Event Log。 |
+
+Snapshot 中的 `seed=123456` 会被校验并保存在结果/Event 元数据中；当前这段最小战斗规则没有随机抽取，因此 seed 还不驱动目标选择、移动或伤害。
+
+#### 入口配置：选择启动哪个 Service
+
+`server/config/skynet_batch.lua` 只有两项关键动作：
+
+```lua
+include "skynet.lua"
+start = "battle/batch_runner"
+```
+
+`include` 复用 `server/config/skynet.lua` 的 `bootstrap`、`luaservice`、`lua_path` 和 `lua_cpath` 等设置；第二行只覆盖启动目标，不改正常的 Gateway 启动配置。
+
+命令前的：
+
+```bash
+FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
+  ./third_party/skynet/skynet config/skynet_batch.lua
+```
+
+是在告诉 Skynet：FlyWow 框架源码根目录在哪里。这里 `$PWD` 由 Bash 展开为当前工作目录；因为命令要求从 `server/` 运行，最终值就是当前仓库的 `server/third_party/skynet-flywow` 目录。`NAME=value command` 会把这个变量只传给本次启动的 Skynet 进程及其子进程，不会永久修改终端环境。
+
+为什么配置需要它：`server/config/skynet.lua` 中写有 `local flywow_root = "$FLYWOW_ROOT"`，并用这个根目录拼接 FlyWow 的 `service/?.lua`、`lualib/?.lua` 和 `lualib/?/init.lua` 搜索路径。Skynet v1.8.0 的配置加载器会在执行配置前把 `$FLYWOW_ROOT` 替换成进程环境变量的值；替换时要求变量已设置，因此漏掉命令前缀会在 Skynet 启动 Bootstrap 之前报 `os.getenv() failed: FLYWOW_ROOT`。路径填错时，配置虽然能展开，但后续需要 FlyWow 模块的 Service/`require` 会找不到文件。
+
+这个变量只提供框架文件的查找根目录：它不选择 `batch_runner`（由 `start` 决定），也不指定 Skynet 可执行文件（由命令路径决定）。即使本次 Batch 流程没有启动 Gateway，复用的 `skynet.lua` 仍包含 `$FLYWOW_ROOT` 占位符；配置加载器会无条件展开它，所以仍须设置。这里指向仓库固定的 FlyWow submodule；如果使用另一个已经验证的 FlyWow 工作区，才把值改成那个目录。
+
+#### Batch Runner：准备数据、等待服务就绪、做两次调用
+
+`server/service/battle/batch_runner.lua` 是这次验收的 orchestrator。它的 `snapshot()` 每次都创建全新的 table，字段内容固定为 `battle_id/map_id/map_version/seed/tick_ms/profiles/units` 等；两次调用数据相同，但可变 Lua table、模拟状态和 Native Context 不共用。当前 Snapshot 包含两支各一个单位，`tick_ms=50`、`max_logic_ms=30000`。
+
+关键启动代码先确保地图加载完成：
+
+```lua
+local query_service = skynet.newservice("navigation_query")
+assert(skynet.call(query_service, "lua", "ready"))
+local mgr = skynet.newservice("battle/battle_mgr")
+```
+
+`server/service/navigation_query.lua` 是独立 Service/Lua State。它的 `start()` 调用 `server/lualib/navigation/query_logic.lua` 中的 `query_logic.start(config)`，由 `battle_nav.load_map()` 读取和校验 BMAP；完成后才安装 `ready` dispatch 并回 `true`。Runner 的 `skynet.call(..., "ready")` 在这段时间会 yield；响应回来代表 Query Service 已经完成启动，之后才创建 Manager，避免 Battle Worker 抢先创建 Context 时地图尚未注册。
+
+随后 Runner 顺序发两次模拟请求：
+
+```lua
+local first, err1 = skynet.call(mgr, "lua", "simulate", snapshot())
+assert(first, err1 and err1.message)
+local second, err2 = skynet.call(mgr, "lua", "simulate", snapshot())
+assert(second, err2 and err2.message)
+assert_same_result(first, second)
+```
+
+每个 `skynet.call` 都等待对应响应，因此这里是“第一次完整结束后再开始第二次”，不是并发压测。Manager 内部的 `choose_worker()` 按 round-robin 轮流选择 Worker；默认池大小为 2。Manager 自己不持有 Battle 状态，只在 `skynet.call(worker, ...)` 处 yield 并转交 Snapshot。
+
+#### Worker 与 Battle Core：一次模拟在哪里真正发生
+
+`server/service/battle/battle_worker.lua` 接到 `simulate` 后调用 `battle_nav.new_context(map_id, map_version, profiles)`。这个 Context 在当前 Worker Lua State 创建并独占；它引用进程内已经加载的只读 GridMap，但拥有本场 A* scratch 和动态占位。Worker 用 `xpcall` 调用 `battle_core.simulate(snapshot, context)`，无论核心成功还是报错，随后都会执行 `context:close()`；成功结果或明确的 `nil,error` 再通过 `skynet.retpack()` 回给 Manager。
+
+`server/lualib/battle/battle_core.lua` 的 `M.simulate()` 是纯同步核心循环：
+
+```lua
+local state = M.create(snapshot, context)
+while not M.is_finished(state) do
+    M.step(state, context)
+end
+return M.finish(state)
+```
+
+`M.create()` 校验 Snapshot、按单位 ID 排序，并用 `context:place_unit()` 建立初始占位；`M.step()` 每次推进一个 50ms 逻辑 Tick，选择目标，必要时通过 `find_path_to_range()` 取得 Path，再用 `advance_path()` 消费当前 Tick 的移动距离，并处理普通攻击和死亡；`M.finish()` 封存胜负结果与有序 Event Log。核心不调用 `skynet.call`、`skynet.sleep` 或墙钟时间，因此 30 秒是模拟逻辑时长上限，不是进程要等待 30 秒；达到胜负条件时会更早结束，CPU 通常连续算完整场模拟。
+
+#### 响应返回与确定性断言
+
+结果沿原调用链返回：Worker 的 `skynet.retpack(result)` 唤醒 Manager 正在等待 Worker 的 `skynet.call`；Manager 的 dispatch 再用 `skynet.retpack(...)` 响应 Runner；Runner 的 `skynet.call(mgr, ...)` 恢复并得到 `first` 或 `second`。`retpack` 传递结果，不替业务判定成功；Runner 仍用 `assert` 检查错误，再调用 `assert_same_result()` 比较 Battle 元信息、结束时间、Event 数量、顺序、时间戳、字段和 Path 点。
+
+看到 `BATTLE_DETERMINISM_OK` 表示：**同一个当前构建和同一进程内，两个全新模拟对这份固定输入产生了相同的受检结果**。它不是跨编译器/机器的确定性证明，也不是并发压测。第 20 节此处只把结果留在内存中并比较；`battle_replay.json` 的写出属于后续 Replay Writer 步骤。
+
+这条链结束后，Runner 没有调用 `skynet.exit()`；Query、Manager、Worker 也都是长驻 Service。因此看到成功日志后 Skynet 进程仍会运行，验收完在终端按 `Ctrl+C` 停止即可。这不是还在等待 Battle，也不是 `max_logic_ms` 对应的墙钟计时。
+
+### 20.2 逻辑时间与墙钟时间：30 秒是怎样推进的
+
+`max_logic_ms=30000` 的单位是毫秒，但它表示 Battle 内部的**模拟时钟上限**，不表示 Skynet 进程要在现实中等待 30 秒。理解关键在于：`tick_ms` 规定每次逻辑更新让模拟时钟前进多少；它本身不会让 CPU 等待这么长时间。
+
+当前 Batch Snapshot 设置：
+
+```text
+tick_ms      = 50 ms       每次 M.step() 推进的逻辑时间
+max_logic_ms = 30000 ms    Battle 最多推进到的逻辑时间
+```
+
+`battle_core.M.create()` 将 `state.logic_ms` 初始化为 `0`；`M.step()` 每调用一次先执行 `state.logic_ms = state.logic_ms + state.tick_ms`，然后处理单位行为；`M.simulate()` 连续调用 `M.step()`，直到 `M.is_finished()` 返回 true。因此达到时间上限所需的 Tick 数是：
+
+```text
+最大 Tick 数 = max_logic_ms / tick_ms
+            = 30000 ms / 50 ms
+            = 600 次 M.step()
+```
+
+逻辑时钟这样变化：
+
+| 已执行的 `M.step()` 次数 | `state.logic_ms` | 含义 |
+| ---: | ---: | --- |
+| 0 | 0 ms | Battle 刚创建，还没有推进 Tick。 |
+| 1 | 50 ms | 完成第 1 个逻辑 Tick。 |
+| 2 | 100 ms | 完成第 2 个逻辑 Tick。 |
+| 200 | 10000 ms | Battle 内经过 10 秒逻辑时间。 |
+| 600 | 30000 ms | 到达上限，循环结束。 |
+
+这 600 次更新是普通的 CPU 工作：遍历单位、选目标、必要时运行寻路、推进移动、检查攻击并追加 Event。一次 `M.step()` 返回后，`while` 循环立刻开始下一次；代码没有每 Tick 调用 `skynet.sleep()`、定时器或其他墙钟等待。所以模拟 30 秒逻辑时间，实际墙钟耗时是 600 次更新的计算耗时之和，再加上 Native 寻路和调度开销，而不是固定的 30 秒。当前场景只有两个单位，工作量有限，可能很快算完；具体是几毫秒、几十毫秒还是更久，取决于机器、地图和战斗规模，教程没有对 CPU 耗时作保证。
+
+而且 600 次只是**最多**。`M.is_finished()` 还会在任一阵营没有存活单位时提前结束。例如实际结果的 `end_logic_ms` 若为 `10000`，表示模拟执行了 `10000 / 50 = 200` 个 Tick，Battle 在逻辑 10 秒时已经结束，不会继续空转到 30 秒。`M.create()` 还会检查 `max_logic_ms / tick_ms` 不超过 `MAX_TICKS=2000`，用来限制一次模拟的最大工作量；本例的 600 次低于这个上限。
+
+`batch_runner` 调用 Manager 的 `skynet.call()` 时会 yield，但它是在等**整场模拟的结果**。Worker 收到请求后，在 `battle_core.simulate()` 里连续计算这 600 次以内的 Tick，再一次性用 `skynet.retpack()` 回结果；这里没有 Runner 与 Worker 每 Tick 往返一次的消息。
+
+若要按现实时间播放/运行，外层驱动必须另外按时钟节奏安排 Tick。例如每完成一次 50ms 逻辑更新，再等待约 50ms 墙钟，600 次才会花约 30 秒现实时间，另加计算与调度耗时。本节故意不这样等待：Batch 只负责尽快生成最终 Event Log，之后由 Replay 按 `logic_ms` 还原节奏。不要把 `skynet.sleep(5)` 塞进 `battle_core.M.step()` 或 `M.simulate()`；那会让核心 yield，破坏本节规定的纯同步模拟边界。
 
 ---
 
@@ -7212,7 +7436,7 @@ Y 也来自 Server Path point；不要重新从 Unity NavMesh Sample 一个不�
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Client/BattleReplayPlayer.cs
+unity/BattleNavigation/Assets/BattleNavigation/client/BattleReplayPlayer.cs
 ```
 
 ```csharp
@@ -7231,9 +7455,9 @@ namespace BattleNavigation.Client
     [Serializable]
     public sealed class ReplayPosition
     {
-        public int x_mm; // Server 世界 X，毫米。
-        public int y_mm; // Server 权威地表 Y，毫米。
-        public int z_mm; // Server 世界 Z，毫米。
+        public long x_mm; // Server 世界 X，int64 毫米。
+        public long y_mm; // Server 权威地表 Y，int64 毫米。
+        public long z_mm; // Server 世界 Z，int64 毫米。
     }
 
     /// <summary>一个按 seq/logic_ms 排序的 Server 逻辑事件；字段名与 JSON 合同一致。</summary>
@@ -7615,7 +7839,7 @@ service BattleService {
 }
 ```
 
-这是增加命令的兼容扩展，当前 `Envelope.protocol_version=1` 不因新 RPC 自动加一；旧客户端仍只发 `1001`。不兼容字段变更才按协议版本策略升级。协议源及 Server descriptor/registry、Unity C# 生成物必须作为同一发布版本验证；双工作区先串行同步协议提交，不能手工把某工作区的 `.proto` 覆盖到另一侧。
+当前 `Envelope.protocol_version=3`，`WorldPosition` 三轴统一为 `sint64` 毫米。协议版本 2 曾将字段收窄为 `sint32`；本次恢复已确认的 int64 合同，因此递增版本号而不复用旧号。Gateway 和 Unity 必须同时使用版本 3。协议源及 Server descriptor/registry、Unity C# 生成物必须作为同一发布版本验证；双工作区先串行同步协议提交，不能手工把某工作区的 `.proto` 覆盖到另一侧。
 
 [只读] `server/protocol/build_server_descriptor.sh`、`shared/protocol/build_unity_cs.ps1` 和 FlyWow 的 `tools/generate_gateway_registry.py`。它们已有固定生成职责，不复制或手改 registry。协议修改后，在 WSL 的仓库根目录执行 `./server/protocol/build_server_descriptor.sh`，在 `server/` 执行 `./scripts/linux/run_server.sh build`；同步同一协议提交到 Windows 工作区后执行 `shared/protocol/build_unity_cs.ps1`。核对生成的 registry 有 `[1001] QueryCell` 与 `[1002] RunAutoBattle`，而不是改 `server/lualib/protocol/navigation_registry.lua` 的生成代码。正式部署只消费已发布 descriptor、registry 和 Unity 生成类型。
 
@@ -7911,7 +8135,7 @@ namespace BattleNavigation.Client
     /// <summary>一个调用线程独占的短连接 Envelope 客户端。</summary>
     public sealed class GatewayEnvelopeClient : IDisposable
     {
-        private const uint ProtocolVersion = 1; // 与 Gateway 配置一致的 Envelope 版本。
+        private const uint ProtocolVersion = 3; // 与 Gateway 配置及 sint64 WorldPosition 合同一致的 Envelope 版本。
         private static long nextRequestId;       // 当前客户端进程内单调增加，跨实例不重用。
         private readonly TcpClient client;       // 当前实例独占 Socket 生命周期。
         private readonly NetworkStream stream;   // 与 client 绑定的同步读写流。
@@ -8096,7 +8320,7 @@ namespace BattleNavigation.Client
 }
 ```
 
-[局部修改] `unity/BattleNavigation/Assets/BattleNavigation/Client/BattleReplayPlayer.cs`：第 23.3 节的 `ReplayDocument/ReplayEvent` 类型和 `Update/Apply/AdvanceMoves` 均保留。把原 `Start()` 完整替换为以下两个方法：有 TextAsset 时继续离线回放；未指定 TextAsset 时等待在线请求调用 `Play()`。`Play()` 每次先清掉旧显示对象，验证事件顺序后才发布新 Replay。
+[局部修改] `unity/BattleNavigation/Assets/BattleNavigation/client/BattleReplayPlayer.cs`：第 23.3 节的 `ReplayDocument/ReplayEvent` 类型和 `Update/Apply/AdvanceMoves` 均保留。把原 `Start()` 完整替换为以下两个方法：有 TextAsset 时继续离线回放；未指定 TextAsset 时等待在线请求调用 `Play()`。`Play()` 每次先清掉旧显示对象，验证事件顺序后才发布新 Replay。
 
 ```csharp
 /// <summary>有离线 TextAsset 时自动加载；联网模式留空并等待请求组件调用 Play。</summary>
@@ -8139,7 +8363,7 @@ public void Play(ReplayDocument document)
 
 为什么需要请求组件：`ServerBattleClient.Run()` 是同步 I/O，不能放在 Unity `Update()` 阻塞每一帧。这个组件只在 `Start` 发起一次后台请求，完成后回到 Unity 主线程把纯数据交给 `BattleReplayPlayer`。客户端只做字段转换，不计算寻路、伤害或死亡。
 
-[新建文件] `unity/BattleNavigation/Assets/BattleNavigation/Client/BattleReplayRequester.cs`
+[新建文件] `unity/BattleNavigation/Assets/BattleNavigation/client/BattleReplayRequester.cs`
 
 学习导航：精读 `Start()` 的后台 I/O 与 Unity 主线程分界、`ConvertResult()` 的字段映射和 checked 缩窄；可以略读 `Task` 轮询样板。输入是固定场景 ID/Gateway 地址；成功后播放器收到新的 `ReplayDocument`，业务失败/连接失败明确写日志。组件不保存 Server 战斗状态，不发位置或 HP。
 
@@ -8257,16 +8481,16 @@ namespace BattleNavigation.Client
             };
         }
 
-        /// <summary>把 Proto 的 sint64 毫米坐标缩窄到当前 Unity Replay 的 int 范围。</summary>
+        /// <summary>把 Proto 的 sint64 毫米坐标复制到使用相同范围的 Replay 字段。</summary>
         /// <param name="position">Server 世界坐标；只读，不保存引用。</param>
         /// <returns>新 ReplayPosition；越界抛 OverflowException，不静默截断。</returns>
         private static ReplayPosition ConvertPosition(WorldPosition position)
         {
             return new ReplayPosition
             {
-                x_mm = checked((int)position.XMm),
-                y_mm = checked((int)position.YMm),
-                z_mm = checked((int)position.ZMm),
+                x_mm = position.XMm,
+                y_mm = position.YMm,
+                z_mm = position.ZMm,
             };
         }
     }
@@ -8289,10 +8513,10 @@ BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
 
 确认生成 registry 中 `1001=QueryCell`、`1002=RunAutoBattle`，Server descriptor 的 source hash 与修改后的 `.proto` 一致。协议源码在 WSL 编辑源完成并按本课程双工作区规则串行同步后，Windows 工作区运行 `shared/protocol/build_unity_cs.ps1`，让 Unity 重新导入生成的 `NavigationQuery.cs`；Unity `.meta` 由 Editor 生成并随变更提交，不手改生成 C#。同一发布提交需要包含 `.proto`、Server descriptor/registry、Unity 生成物和哈希校验文件。
 
-先用第一课 `ServerQueryWindow` 指向双进程 Gateway 端口 `19011` 查询一个 Cell，确认原 `QueryCell` 没被 Battle 路由改坏。随后在 `Battle_1001` Scene：
+先用第一课 `ServerQueryWindow` 指向双进程 Gateway 端口 `19011` 查询一个 Cell，确认原 `QueryCell` 没被 Battle 路由改坏。随后在 `Battle_1001` Scene 接线：可按下面的 Inspector 步骤手动完成；`Scripts/Editor/BattleReplaySceneSetup.cs` 的 `AttachReplay()` 也提供幂等的一次性接入入口（菜单 `Tools/战斗导航/示例/91 接入 Battle_1001 回放`）。它只打开已有 Scene、复用或创建 `BattleReplayRuntime`、挂两个回放组件并连好引用；**不要重新执行 `CreateOrRebuild()`**，否则会重建静态地图并覆盖手工场景修改。`AttachReplay()` 不启动 Server、不 Bake，也不代替 Play 验证。
 
 ```text
-ReplayPlayer 对象：挂 BattleReplayPlayer，Replay Json 留空
+BattleReplayRuntime 对象：挂 BattleReplayPlayer，Replay Json 留空
 同一对象：挂 BattleReplayRequester，把 Replay Player 指向上面的组件
 Host=127.0.0.1，Port=19011，Scenario Id=1001
 Play：看到 BATTLE_GATEWAY_RESULT_LOADED、单位移动、攻击和死亡
