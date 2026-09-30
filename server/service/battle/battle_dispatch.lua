@@ -7,6 +7,7 @@ local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local process = require "config.process_battle"
 local scenario = require "battle.scenario_1001"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local query_service = nil    -- 本进程 Query Service，由 battle_main 注入一次。
 local battle_mgr = nil       -- 本进程 BattleMgr，由 battle_main 注入一次。
@@ -144,6 +145,7 @@ end
 -- 固定签名的 Service 分发；Cluster data-plane 用 send，结果另发 battle_result 消息。
 -- configure/ready 使用本地 call；gateway_dispatch 单向接收且会 yield，不 retpack。
 skynet.start(function()
+    luapanda_debug.start(8821)
     skynet.dispatch("lua", function(_session, _source, command, payload)
         if command == "configure" then
             skynet.retpack(configure(payload))

@@ -7,6 +7,7 @@
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local process = require "config.process_gateway"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local MAX_PENDING = 64          -- 同时等待 Battle 回推的请求数上限。
 local REPLY_TIMEOUT_TICKS = 1000 -- 1/100 秒为一个 Skynet tick；等待最多 10 秒。
@@ -184,6 +185,7 @@ end
 -- 参数：Skynet lua 消息的固定四个槽位；payload 是 Gateway 已解码 request record。
 -- 返回值：本地 handler 等待 reverse result 后 retpack；Cluster 请求使用 send 且不占用远程 session。
 skynet.start(function()
+    luapanda_debug.start(8818)
     skynet.dispatch("lua", function(_session, _source, command, payload, result)
         if command == "start" then
             skynet.retpack(start())

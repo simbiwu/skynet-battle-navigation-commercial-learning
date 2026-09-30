@@ -1,7 +1,7 @@
 -- 职责：按环境变量为指定 Skynet Service Lua State 启用 LuaPanda。
 -- 边界：Debug-only Runtime Library；默认完全不启动调试器。
--- 输入/输出：service role + LUA_PANDA_* 环境变量 -> 当前 Lua State 的 LuaPanda 连接。
--- 生命周期：Battle Query Service 的 Lua State 最多启动一次；若其他 Service 启用调试器，必须使用独立端口。
+-- 输入/输出：显式端口 + LUA_PANDA_* 环境变量 -> 当前 Lua State 的 LuaPanda 连接。
+-- 生命周期：每个 Service Lua State 最多启动一次，同时调试的 Service 必须使用独立端口。
 -- 不负责：不下载依赖、不修改业务请求、不跨 Lua State 共享 debugger 状态。
 local skynet = require "skynet"
 

@@ -3,7 +3,7 @@
 # 边界：Debug Tool Bootstrap；所有文件只写入 server/third_party，正常 Server 不依赖它。
 # 输入/输出：固定 LuaPanda commit + LuaSocket tag -> LuaPanda.lua + 本地 LuaSocket runtime。
 # 不负责：不启动 Server、不改系统 Lua、不 sudo 安装、不进入生产依赖链。
-# 生命周期：仅在 debug_luapanda.sh 启动前执行；产物与 Skynet bundled Lua 5.4 ABI 绑定。
+# 生命周期：供 debug_luapanda.sh 和 run_server.sh debug 准备本地调试产物；产物与 Skynet bundled Lua 5.4 ABI 绑定。
 set -euo pipefail
 # -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
 # -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。

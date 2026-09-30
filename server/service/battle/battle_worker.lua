@@ -6,6 +6,7 @@
 local skynet = require "skynet"
 local battle_nav = require "battle_nav"
 local battle_core = require "battle.battle_core"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 为一次可序列化 snapshot 创建并独占 Context，然后连续模拟到结束。
 -- 成功返回 result；创建或核心失败返回 nil,error；核心阶段不 I/O、不 yield。
@@ -37,6 +38,11 @@ end
 
 skynet.start(function()
     skynet.dispatch("lua", function(_, _, command, payload)
+        if command == "debug_start" then
+            assert(type(payload) == "number", "debug port is required")
+            skynet.retpack(luapanda_debug.start(payload))
+            return
+        end
         if command == "simulate" then
             skynet.retpack(simulate(assert(payload)))
             return

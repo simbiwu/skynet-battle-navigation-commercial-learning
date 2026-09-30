@@ -22,6 +22,50 @@
       "autoPathMode": true,
       "autoReconnect": true,
       "useCHook": false
+    },
+     {
+      "type": "lua",
+      "request": "launch",
+      "name": "battle_dispatch",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8821,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "battle_mgr",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8822,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "work1",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8823,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "work2",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8824,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
     }
   ],
   "compounds": [
@@ -30,6 +74,17 @@
       "configurations": [
         "LuaPanda Lesson1 Gateway",
         "LuaPanda Lesson1 Query"
+      ]
+    },
+    {
+      "name": "LuaPanda Lesson2 Gateway + Battle",
+      "configurations": [
+        "LuaPanda Lesson1 Gateway",
+        "LuaPanda Lesson1 Query",
+        "battle_dispatch",
+        "battle_mgr",
+        "work1",
+        "work2"
       ]
     }
   ]

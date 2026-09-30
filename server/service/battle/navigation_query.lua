@@ -6,7 +6,7 @@
 local skynet = require "skynet"
 local config = require "config.game"
 local query_logic = require "battle.navigation.query_logic"
-local luapanda_debug = require "battle.debug.luapanda_debug"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- 本 Service 的 gateway_dispatch handler 内部不 yield，响应 record 由 skynet.retpack 复制发送。

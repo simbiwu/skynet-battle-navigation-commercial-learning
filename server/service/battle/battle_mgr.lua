@@ -4,6 +4,7 @@
 -- 生命周期：Manager/Worker 长驻；snapshot 在消息发送时序列化复制。
 -- 不负责：不执行 AI/A*/伤害，不保存 NavigationContext userdata。
 local skynet = require "skynet"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local workers = {}
 local next_worker = 1
@@ -23,10 +24,12 @@ local function simulate(snapshot)
 end
 
 skynet.start(function()
+    luapanda_debug.start(8822)
     local count = tonumber(skynet.getenv("battle_worker_count")) or 2
     assert(count >= 1)
     for _ = 1, count do
         workers[#workers + 1] = skynet.newservice("battle/battle_worker")
+        skynet.call(workers[#workers], "lua", "debug_start", 8822 + #workers)
     end
 
     skynet.dispatch("lua", function(_, _, command, payload)

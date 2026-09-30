@@ -1,8 +1,8 @@
 #!/usr/bin/env bash
-# 职责：统一管理 Battle Navigation Server 的依赖准备、构建、后台启动、状态和安全停止。
+# 职责：统一管理 Battle Navigation Server 的依赖准备、构建、启动、LuaPanda 调试和单进程启停。
 # 边界：仓库级 Runtime/Build Launcher；只操作当前 server/ 下已知 build/run/log 目录和固定依赖脚本。
 # 输入/输出：源码、固定版本依赖、shared/ 已发布资产 -> 可运行 Skynet 进程及 logs/run 状态文件。
-# 生命周期：控制脚本本身短生命周期；后台 Server PID 写入 run/server.pid。
+# 生命周期：控制脚本短生命周期；单进程 PID 写入 run/server.pid，debug 由双进程脚本管理。
 # 不负责：不生成 Unity BMAP、不实现 FlyWow 协议生成器、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
 set -euo pipefail
 # -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
@@ -44,6 +44,7 @@ usage() {
 Usage:
   ./scripts/linux/run_server.sh [start] [--rebuild] [--foreground]
   ./scripts/linux/run_server.sh foreground [--rebuild]
+  ./scripts/linux/run_server.sh debug
   ./scripts/linux/run_server.sh stop [--force]
   ./scripts/linux/run_server.sh restart [--rebuild] [--foreground]
   ./scripts/linux/run_server.sh status
@@ -55,6 +56,7 @@ Usage:
 Actions:
   start       自动检查/修复项目依赖和缺失构建产物，后台启动并等待 NAV_SERVER_READY。
   foreground  与 start 相同，但以前台方式 exec Skynet，适合 gdb/LuaPanda/直接看日志。
+  debug       启用 LuaPanda，后台启动 Lesson 2 Gateway/Battle 双进程。
   stop        校验 PID 确实属于本仓库 Skynet 后发送 SIGTERM，并等待退出。
   restart     stop + start；可与 --rebuild 组合。
   status      显示 PID、运行状态和当前日志。
@@ -105,7 +107,7 @@ parse_args() {
         shift
     done
     case "$ACTION" in
-        start|foreground|stop|restart|status|doctor|prepare|build|rebuild) ;;
+        start|foreground|debug|stop|restart|status|doctor|prepare|build|rebuild) ;;
         *) usage >&2; fail "unknown action: $ACTION" ;;
     esac
     if [[ "$ACTION" == "foreground" ]]; then
@@ -510,6 +512,26 @@ status_server() {
 }
 
 # 根据动作调用唯一的生命周期入口，并在结束时返回准确退出码。
+# debug 准备固定版本调试依赖，并让两个 Skynet 进程继承 LuaPanda 环境变量。
+start_debug() {
+    ensure_not_running
+    prepare_runtime
+    check_runtime_assets
+    if [[ ! -s "$SERVER_ROOT/third_party/luapanda/LuaPanda.lua" ||
+          ! -f "$SERVER_ROOT/third_party/luapanda/.pinned-commit" ||
+          ! -f "$SERVER_ROOT/third_party/luasocket/.pinned-tag" ||
+          ! -s "$SERVER_ROOT/third_party/luasocket-runtime/lib/lua/5.4/socket/core.so" ]]; then
+        "$SCRIPT_DIR/bootstrap_luapanda.sh"
+    fi
+    export LUA_PANDA_ENABLE=1
+    export LUA_PANDA_HOST="${LUA_PANDA_HOST:-127.0.0.1}"
+    log "starting Lesson 2 Gateway/Battle with LuaPanda; start VS Code debugger first"
+    flock -u 9
+    exec 9>&-
+    "$SCRIPT_DIR/run_lesson2_processes.sh" start
+}
+
+# 根据动作调用唯一的生命周期入口，并返回准确退出码。
 main() {
     parse_args "$@"
     ensure_runtime_dirs
@@ -536,6 +558,9 @@ main() {
             ;;
         status)
             status_server
+            ;;
+        debug)
+            start_debug
             ;;
         stop)
             stop_server
