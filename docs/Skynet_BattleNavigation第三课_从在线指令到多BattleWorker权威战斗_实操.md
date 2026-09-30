@@ -2,7 +2,7 @@
 
 > 本课直接承接 `docs/Skynet_BattleNavigation第二课_从Grid寻路到Skynet自动战斗_实操.md` **全部完成后的工程状态**。
 >
-> 本课前置条件固定为：第二课实操已经全部完成并通过第二课验收。第三课只继承第二课文档定义的最终状态，不把任何中间实现状态当作课程基线。
+> 本课前置条件固定为：第二课实操已经全部完成并通过第二课验收。第三课只继承第二课文档定义的最终状态，不把任何中间实现状态当作课程基线。开始第 7 节前，先按第二课第 27 节重新运行 Native 测试、Batch Regression 和 Gateway/Battle 双进程验收；任一项未通过，先完成第二课，不把第三课代码用于修补第二课基线。
 
 本课不是“做一个大而全的商业 SLG”。目标是用一个足够小、但边界真实的战斗 Runtime，把以下知识真正串起来：
 
@@ -259,12 +259,13 @@ FlyWow Gateway Service
   v
 Gateway Proxy
   |
-  | skynet.cluster.call
+  | cluster.send(request + route_token)
   v
 Battle Process
   |
   v
 battle_dispatch
+  | cluster.send(battle_result + route_token) 回推 Gateway Proxy
   |
   v
 BattleMgr Service
@@ -637,6 +638,7 @@ Server 分配 battle_id
 -- 边界：Skynet Battle Orchestration；允许 skynet.call/yield，不推进 Battle mutable core。
 -- 输入/输出：纯 Lua request -> 指定 Worker 的纯 Lua result/error。
 -- 生命周期：Manager/Worker 随 Battle Process 长驻；worker_count 启动后固定。
+-- I/O：create_online 在进入 Worker 前读取 Linux OS 随机源签发短期恢复凭据；不进入 Battle Core。
 -- 不负责：不执行 AI/导航/技能、不保存 NavigationContext、不处理客户端 fd。
 local skynet = require "skynet"
 local battle_config = require "config.battle"
@@ -644,6 +646,19 @@ local scenario = require "battle.scenario_1001"
 
 local workers = {}                 -- 1-based Worker Service handle 数组；启动后只读。
 local next_battle_id = 70000       -- 课程单进程 ID 分配器；只由本 Manager 修改。
+
+-- 从 Linux OS 随机源取得一次性恢复凭据；只在创建在线 Battle 时调用，不进入 Battle Core。
+-- 32 字节编码为 64 位十六进制字符；读取失败拒绝创建，不能退化成时间戳或 math.random。
+-- 文件句柄在本函数内关闭；凭据只随 Start 响应交给当前客户端和目标 Worker，不写日志。
+local function new_resume_token()
+    local file = assert(io.open("/dev/urandom", "rb"), "OS random source unavailable")
+    local bytes = file:read(32)
+    file:close()
+    assert(bytes ~= nil and #bytes == 32, "OS random source short read")
+    return (bytes:gsub(".", function(char)
+        return string.format("%02x", string.byte(char))
+    end))
+end
 
 -- 根据 battle_id 选择稳定 Worker Shard。
 -- battle_id 必须为非负 Lua integer；返回 handle,index；不 I/O、不 yield。
@@ -678,11 +693,12 @@ local function call_worker(worker, command, payload)
 end
 
 -- 为一个客户端连接创建课程交互战斗。
--- connection_id 只是当前 Gateway 连接身份，不是账号 ID；ID 在 yield 前完成保留。
+-- connection_id 是 Proxy 封装的当前 Gateway 进程/连接作用域身份，不是账号 ID；ID 在 yield 前完成保留。
 -- 函数会调用 Worker，因此会 yield；失败允许 battle_id 出现空洞，不回滚计数器。
 local function create_online(request)
     assert(type(request) == "table", "create_online request must be table")
-    assert(math.type(request.connection_id) == "integer" and request.connection_id > 0,
+    assert(type(request.connection_id) == "string" and #request.connection_id > 0 and
+           #request.connection_id <= 128,
            "connection_id is required")
     assert(request.scenario_id == 1001, "only scenario 1001 is available")
 
@@ -694,15 +710,27 @@ local function create_online(request)
     end
 
     local worker, worker_index = worker_for(battle_id)
+    local resume_token = new_resume_token()
     local result, err = call_worker(worker, "create_online", {
         battle_id = battle_id,
         worker_index = worker_index,
         controller_connection_id = request.connection_id,
+        resume_token = resume_token,
         snapshot = snapshot,
     })
     if result == nil then return nil, err end
     result.worker_index = worker_index
+    result.resume_token = resume_token
     return result
+end
+
+-- 恢复到新的 Gateway 连接；Worker 校验凭据后原子替换临时控制连接，并返回即时 Snapshot。
+-- battle_id 决定 Shard；token 只是当前 Battle 的短期 bearer 凭据，不参与确定性模拟。
+-- 跨 Worker skynet.call 会 yield；认证失败由 Worker 返回稳定错误。
+local function resume_online(request)
+    assert(type(request) == "table", "resume_online request must be table")
+    local worker = worker_for(assert(request.battle_id))
+    return call_worker(worker, "resume_online", request)
 end
 
 -- 把 PlayerCommand 稳定路由回创建该 Battle 的同一个 Worker；会 yield。
@@ -783,6 +811,8 @@ skynet.start(function()
             skynet.retpack(#workers == battle_config.worker_count)
         elseif command == "create_online" then
             skynet.retpack(create_online(assert(payload)))
+        elseif command == "resume_online" then
+            skynet.retpack(resume_online(assert(payload)))
         elseif command == "submit_command" then
             skynet.retpack(submit_command(assert(payload)))
         elseif command == "sync" then
@@ -1267,6 +1297,7 @@ local function create_online(request)
     local runtime = {
         battle_id = battle_id,
         controller_connection_id = assert(request.controller_connection_id),
+        resume_token = assert(request.resume_token), -- 只由 BattleMgr 从 OS 随机源注入；不进入 Snapshot/Event。
         context = context,
         core_state = core_or_error,
         event_buffer = new_event_buffer(),
@@ -1285,6 +1316,30 @@ local function create_online(request)
         battle_id = battle_id,
         logic_tick = runtime.core_state.logic_tick,
         snapshot = runtime.latest_snapshot,
+    }
+end
+
+-- 新连接持有 Start 时收到的短期凭据时，重新绑定当前 Battle 的控制权。
+-- token 不来自日志/URL；失败统一返回 NOT_CONTROLLER，避免泄露 Battle 是否存在。
+-- 当前 Service 内比较和替换之间无 yield；返回即时 Snapshot 作为恢复锚点。
+local function resume_online(request)
+    assert(type(request) == "table", "resume_online request must be table")
+    local battle_id = assert(request.battle_id)
+    assert_shard(battle_id)
+    local runtime = state.battles[battle_id]
+    local token = request.resume_token
+    if runtime == nil or type(token) ~= "string" or #token ~= 64 or
+       token ~= runtime.resume_token then
+        return nil, { code = "NOT_CONTROLLER", message = "resume denied" }
+    end
+    assert(type(request.connection_id) == "string" and #request.connection_id > 0,
+           "invalid transport session")
+    runtime.controller_connection_id = request.connection_id
+    refresh_snapshot(runtime)
+    return {
+        battle_id = battle_id,
+        snapshot = runtime.latest_snapshot,
+        finished = runtime.finished_result ~= nil,
     }
 end
 
@@ -1431,6 +1486,8 @@ skynet.start(function()
             skynet.retpack(state.worker_index ~= nil and state.heartbeat_started)
         elseif command == "create_online" then
             skynet.retpack(create_online(assert(payload)))
+        elseif command == "resume_online" then
+            skynet.retpack(resume_online(assert(payload)))
         elseif command == "submit_command" then
             skynet.retpack(submit_command(assert(payload)))
         elseif command == "sync" then
@@ -7906,6 +7963,7 @@ function M.build_snapshot(state)
             max_hp = unit.max_hp,
             effective_move_speed_mm_per_sec = buff_runtime.effective_move_speed(unit),
             buffs = buffs,
+            last_accepted_command_seq = unit.last_received_command_seq,
         }
     end
 
@@ -8267,6 +8325,7 @@ StartInteractiveBattle
 SubmitBattleCommand
 SyncBattle
 StopInteractiveBattle
+ResumeInteractiveBattle
 ```
 
 Unity 以固定频率调用 `SyncBattle` 拉取增量 Event。
@@ -8278,6 +8337,21 @@ Unity 以固定频率调用 `SyncBattle` 拉取增量 Event。
 > 第二课已经打通 Gateway 与 Battle 的双向异步 send/回推链路。本课在该传输边界上加入在线命令与 Battle Snapshot/Event 响应；不把玩家路由、命令确认或恢复逻辑放进 Gateway。
 
 Gateway 仍只承载传输和协议；Battle Worker 产生权威 Event/Snapshot，Battle 侧决定投递对象与顺序。异步传输不可用时，按本课定义的确认、序号、Snapshot 恢复合同处理，不能把 `cluster.send` 本身视为可靠送达。
+
+FlyWow 固定版本的 `service/flywow_gateway.lua` 已把当前真实连接的数字 `connection_id` 放进 handler payload；第二课 `gateway_proxy.lua` 复制 payload 时会保留该字段。数字 ID 只在当前 Gateway Service 生命周期内唯一。第三课在 Proxy 转发前给它加进程作用域，避免 Gateway 重启后数字 ID 从 1 重新开始而误认旧 Battle 控制者。
+
+[局部修改] `server/service/gateway/gateway_proxy.lua` 的 `dispatch_remote(payload)`：在创建 `forwarded` 后、设置 `route_token` 前加入以下校验和赋值，替换复制来的数字 `connection_id`；Proxy 的其余 `cluster.send`/等待/回推代码保持第二课原样。
+
+```lua
+-- FlyWow 附加的连接号只在本次 Gateway Service 生命期唯一；route_epoch 把重启前后隔开。
+-- 这里仅封装传输身份，不解释 battle_id、玩家归属或技能。
+assert(math.type(payload.connection_id) == "integer" and payload.connection_id > 0,
+       "FlyWow connection_id is required")
+forwarded.connection_id = route_epoch .. ":" .. tostring(payload.connection_id)
+assert(#forwarded.connection_id <= 128, "transport session identity too long")
+```
+
+`route_token` 仍只关联一次请求；`connection_id` 关联当前 TCP 连接；`resume_token` 是 Battle 签发并只由持有者提交的短期恢复凭据。三者不能互相替代。这个临时凭据不写日志、不放 URL，也不进入 Snapshot/Replay；正式远程部署须让 Gateway 连接使用保密传输。
 
 ## 41. 修改 Protobuf
 
@@ -8301,6 +8375,7 @@ shared/protocol/navigation_query.proto
 1004 SubmitBattleCommand
 1005 SyncBattle
 1006 StopInteractiveBattle
+1007 ResumeInteractiveBattle
 ```
 
 新增消息按职责分成四组：
@@ -8316,6 +8391,7 @@ Online RPC
   SubmitBattleCommandRequest/Response
   SyncBattleRequest/Response
   StopInteractiveBattleRequest/Response
+  ResumeInteractiveBattleRequest/Response
 
 Authoritative Sync
   BattleSnapshot
@@ -8379,6 +8455,7 @@ Windows 同步同一协议提交以后：
 1004 SubmitBattleCommand
 1005 SyncBattle
 1006 StopInteractiveBattle
+1007 ResumeInteractiveBattle
 ```
 
 不手工改生成的 `navigation_registry.lua`。
@@ -8494,6 +8571,7 @@ message BattleUnitSnapshot {
   uint32 max_hp = 7;
   uint32 effective_move_speed_mm_per_sec = 8;
   repeated BattleBuffSnapshot buffs = 9;
+  uint32 last_accepted_command_seq = 10; // Server 已接受的最大 Player 命令号，恢复后用于消除丢失 Ack 歧义。
 }
 
 message BattleProjectileSnapshot {
@@ -8609,6 +8687,26 @@ message StartInteractiveBattleResponse {
   uint32 battle_id = 3;
   uint32 worker_index = 4; // 仅课程诊断；Client 不应依赖此值做路由。
   BattleSnapshot snapshot = 5;
+  string resume_token = 6; // Server 签发的当前 Battle 临时 bearer 凭据；只交给发起连接。
+}
+
+message ResumeInteractiveBattleRequest {
+  uint32 battle_id = 1;
+  string resume_token = 2; // 新连接必须持有 Start 返回的原始凭据。
+}
+
+message ResumeInteractiveBattleResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    NOT_CONTROLLER = 2;
+    WORKER_UNAVAILABLE = 3;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 battle_id = 3;
+  BattleSnapshot snapshot = 4; // 当前即时权威状态；其 last_event_seq 是恢复锚点。
+  bool finished = 5;
 }
 
 message SubmitBattleCommandRequest {
@@ -8705,6 +8803,10 @@ service BattleService {
   // command_id=1006
   rpc StopInteractiveBattle(StopInteractiveBattleRequest)
       returns (StopInteractiveBattleResponse);
+
+  // command_id=1007
+  rpc ResumeInteractiveBattle(ResumeInteractiveBattleRequest)
+      returns (ResumeInteractiveBattleResponse);
 }
 ```
 
@@ -9801,7 +9903,9 @@ server/service/battle/battle_dispatch.lua
 -- 输入/输出：FlyWow gateway_dispatch payload -> {ok=true,response=<Proto table>} / handler error。
 -- 生命周期：battle_main 注入 query_service/battle_mgr 后长驻并注册为 cluster 入口。
 -- 不负责：不执行 AI/A*/技能、不信任客户端 connection_id、不保存 NavigationContext。
+local cluster = require "skynet.cluster"
 local skynet = require "skynet"
+local process = require "config.process_battle"
 
 local query_service = nil
 local battle_mgr = nil
@@ -9846,6 +9950,12 @@ local STOP_RESULT = {
     WORKER_UNAVAILABLE = 4,
 }
 
+local RESUME_RESULT = {
+    OK = 1,
+    NOT_CONTROLLER = 2,
+    WORKER_UNAVAILABLE = 3,
+}
+
 -- 启动时显式注入本进程 Service handle；重复配置是 composition root bug。
 local function configure(handles)
     assert(query_service == nil and battle_mgr == nil,
@@ -9888,6 +9998,7 @@ local function proto_snapshot(value)
             max_hp = unit.max_hp,
             effective_move_speed_mm_per_sec = unit.effective_move_speed_mm_per_sec,
             buffs = buffs,
+            last_accepted_command_seq = unit.last_accepted_command_seq or 0,
         }
     end
 
@@ -10050,6 +10161,31 @@ local function start_interactive(payload)
         battle_id = result.battle_id,
         worker_index = result.worker_index,
         snapshot = proto_snapshot(result.snapshot),
+        resume_token = result.resume_token,
+    }
+end
+
+-- 新连接使用 Battle 签发的短期凭据恢复控制权；错误不泄露 Battle 是否存在。
+-- payload.connection_id 只能由 Gateway/Proxy 注入；Manager/Worker call 会 yield。
+local function resume_interactive(payload)
+    local request = assert(payload.request)
+    local result, err = manager_call("resume_online", {
+        battle_id = request.battle_id,
+        resume_token = request.resume_token,
+        connection_id = payload.connection_id,
+    })
+    if result == nil then
+        return {
+            result = RESUME_RESULT[err.code] or RESUME_RESULT.WORKER_UNAVAILABLE,
+            message = err.message or "resume failed",
+        }
+    end
+    return {
+        result = RESUME_RESULT.OK,
+        message = "",
+        battle_id = result.battle_id,
+        snapshot = proto_snapshot(result.snapshot),
+        finished = result.finished,
     }
 end
 
@@ -10103,7 +10239,7 @@ local function sync_battle(payload)
         snapshot = proto_snapshot(result.snapshot),
         events = proto_events(result.events),
         finished = result.finished,
-        battle_result = result.result or "",
+        battle_result = result.result and result.result.result or "",
     }
 end
 
@@ -10144,12 +10280,39 @@ local function dispatch_gateway(payload)
         return { ok = true, response = sync_battle(payload) }
     elseif payload.command == "StopInteractiveBattle" and payload.command_id == 1006 then
         return { ok = true, response = stop_battle(payload) }
+    elseif payload.command == "ResumeInteractiveBattle" and payload.command_id == 1007 then
+        return { ok = true, response = resume_interactive(payload) }
     end
 
     return { ok = false, error = {
         code = "UNKNOWN_COMMAND",
         message = "command/id mismatch",
     } }
+end
+
+-- 第二课已经把两个单向 cluster.send 组合成可关联响应；第三课必须保留同一反向回推。
+-- route_token 只用于 Gateway 本地等待表，不能用作 Battle/玩家身份。
+-- dispatch_gateway 内的 Manager/Query call 可能 yield；失败返回稳定包装错误。
+local function forward_result(payload)
+    assert(type(payload) == "table" and type(payload.route_token) == "string" and
+           #payload.route_token > 0 and #payload.route_token <= 128,
+           "invalid gateway route token")
+    local token = payload.route_token
+    local ok, result = pcall(dispatch_gateway, payload)
+    if not ok then
+        skynet.error("BATTLE_GATEWAY_DISPATCH_FAILED error=", tostring(result))
+        result = { ok = false, error = {
+            code = "BATTLE_FAILED", message = "battle request failed",
+        } }
+    end
+    local sent, send_error = pcall(
+        cluster.send,
+        process.cluster.gateway_node,
+        "@" .. process.cluster.gateway_proxy_service,
+        "battle_result", token, result)
+    if not sent then
+        skynet.error("BATTLE_RESULT_FORWARD_FAILED error=", tostring(send_error))
+    end
 end
 
 skynet.start(function()
@@ -10159,7 +10322,7 @@ skynet.start(function()
         elseif command == "ready" then
             skynet.retpack(query_service ~= nil and battle_mgr ~= nil)
         elseif command == "gateway_dispatch" then
-            skynet.retpack(dispatch_gateway(assert(payload)))
+            forward_result(assert(payload))
         else
             error("unknown battle_dispatch command: " .. tostring(command))
         end
@@ -10167,17 +10330,7 @@ skynet.start(function()
 end)
 ```
 
-上面 `simulate_scenario` 是为了让一次性 `RunAutoBattle` 继续只接收 `scenario_id`，而第三课 `BattleMgr` 的 `simulate(snapshot)` 仍用于内部 batch regression。Manager 可以增加一个极小入口：
-
-```lua
-local function simulate_scenario(request)
-    local snapshot, err = scenario.make_snapshot(request.scenario_id)
-    if snapshot == nil then return nil, { code = err, message = "scenario unavailable" } end
-    return simulate(snapshot)
-end
-```
-
-并在 dispatch 增加 `simulate_scenario`。这样客户端依然不能上传权威 Snapshot。
+第 8 节的完整 `battle_mgr.lua` 已包含 `simulate_scenario` 及其 dispatch 分支；这里不再重复追加。客户端依然不能上传权威 Snapshot。
 
 ---
 
@@ -10249,7 +10402,7 @@ skynet.start(function()
 end)
 ```
 
-`gateway_proxy.lua` 和 `gateway_main.lua` 不需要知道 Skill/Worker/AirMap。它们只会看到 registry 新增 1003～1006，并继续把已解码 payload 交给同一个远程 `battle_dispatch`。这正是前两课边界没有白做的证据。
+`gateway_main.lua` 不需要知道 Skill/Worker/AirMap。`gateway_proxy.lua` 只按第 40 节封装真实连接的作用域身份，继续使用第二课的 `cluster.send` 转发与 `battle_result` 回推；registry 新增 1003～1007。Proxy 不解释 Battle/Skill/Event 内容。
 
 ---
 
@@ -10424,7 +10577,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/GatewayEnvelopeC
 FlyWow Gateway connection_id
 ```
 
-`connection_id` 由 Gateway 创建，业务请求里只能读取，客户端不能上传伪造。于是：
+FlyWow 生成数字连接号，Proxy 给它加进程作用域后成为 Battle 使用的 `connection_id`；业务请求里只能读取，客户端不能上传伪造。于是：
 
 ```text
 StartInteractiveBattle
@@ -10433,7 +10586,7 @@ SyncBattle
 StopInteractiveBattle
 ```
 
-必须来自 **同一条 TCP 连接**。
+正常请求来自 **同一条 TCP 连接**；断线后必须先通过 `ResumeInteractiveBattle` 重新绑定新连接，随后才能继续 Command/Sync/Stop。
 
 不要这样写：
 
@@ -10443,18 +10596,19 @@ Command -> new GatewayEnvelopeClient -> Dispose
 Sync -> new GatewayEnvelopeClient -> Dispose
 ```
 
-每次重连都会得到新的 `connection_id`，Server 会正确返回 `NOT_CONTROLLER`。
+未经 Resume 的新连接有新的 `connection_id`，Server 会返回 `NOT_CONTROLLER`。
 
-本课不引入账号/登录/token，只把同一 Gateway connection 当作一个最小的临时控制会话。这正好能把边界讲清：
+本课不引入账号/登录；正常控制权先绑定当前 Gateway 连接。Start 额外返回一次短期 `resume_token`，仅用于把同一场 Battle 的控制权恢复到新连接。这正好能把边界讲清：
 
 ```text
 connection_id = transport session identity
 connection_id != player_id
 connection_id != account_id
 connection_id 不能持久化
+resume_token = 当前 Battle 的短期 bearer 凭据；不等于账号或长期会话
 ```
 
-断线后的账号级重连、重新绑定 Battle 控制权属于后续 Server 工程专题，不在第三课伪造一套半成品。
+断线恢复只在当前 Battle Runtime 仍存在时成功；Worker 关闭后返回拒绝，不能从 Snapshot 凭空重建已释放的 Context。账号级登录、跨进程故障恢复和持久化会话属于后续工程专题。
 
 ### 47.1 新建 `ServerInteractiveBattleClient.cs`
 
@@ -10467,11 +10621,11 @@ unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/ServerInteractiv
 它独占一个 `GatewayEnvelopeClient`，整个在线 Battle 生命周期只创建一次：
 
 ```csharp
-// 职责：在同一条 FlyWow Gateway TCP 连接上完成一场在线 Battle 的 Start/Command/Sync/Stop。
+// 职责：在当前 FlyWow Gateway TCP 连接上完成 Start/Resume/Command/Sync/Stop。
 // 边界：Unity Client Runtime RPC Adapter；只处理强类型 Protobuf，不计算任何权威战斗结果。
 // 输入/输出：交互战斗请求 -> 对应强类型响应；网络/协议错误抛异常。
 // 生命周期：构造时建立连接；整个在线 Battle 共用；Dispose 时关闭连接。
-// 不负责：不做重连、不缓存账号身份、不在 Unity 主线程每帧同步阻塞。
+// 不负责：不保存账号身份、不在 Unity 主线程每帧同步阻塞；重连由上层控制器创建新实例。
 using System;
 using Battle.Navigation.V1;
 
@@ -10487,6 +10641,7 @@ namespace BattleNavigation.Client
         private const uint SubmitCommand = 1004;
         private const uint SyncCommand = 1005;
         private const uint StopCommand = 1006;
+        private const uint ResumeCommand = 1007;
 
         private readonly GatewayEnvelopeClient gateway;
         private readonly object roundTripLock = new object();
@@ -10513,6 +10668,27 @@ namespace BattleNavigation.Client
                     StartCommand,
                     new StartInteractiveBattleRequest { ScenarioId = scenarioId });
                 return StartInteractiveBattleResponse.Parser.ParseFrom(envelope.Body);
+            }
+        }
+
+        /// <summary>
+        /// 在新 TCP 连接上提交当前 Battle 的短期恢复凭据；成功响应含即时 Snapshot。
+        /// 凭据只保存在本次运行的内存中，不写日志或 PlayerPrefs；本方法执行同步 Socket I/O。
+        /// </summary>
+        public ResumeInteractiveBattleResponse Resume(uint battleId, string resumeToken)
+        {
+            if (string.IsNullOrEmpty(resumeToken))
+                throw new ArgumentException("resume token is required", nameof(resumeToken));
+            lock (roundTripLock)
+            {
+                var envelope = gateway.RoundTrip(
+                    ResumeCommand,
+                    new ResumeInteractiveBattleRequest
+                    {
+                        BattleId = battleId,
+                        ResumeToken = resumeToken,
+                    });
+                return ResumeInteractiveBattleResponse.Parser.ParseFrom(envelope.Body);
             }
         }
 
@@ -10649,6 +10825,8 @@ namespace BattleNavigation.Client
             new ConcurrentQueue<StartInteractiveBattleResponse>();
         private readonly ConcurrentQueue<SyncBattleResponse> syncResponses =
             new ConcurrentQueue<SyncBattleResponse>();
+        private readonly ConcurrentQueue<BattleSnapshot> recoverySnapshots =
+            new ConcurrentQueue<BattleSnapshot>();
         private readonly ConcurrentQueue<string> errors =
             new ConcurrentQueue<string>();
 
@@ -10656,7 +10834,21 @@ namespace BattleNavigation.Client
         private Task networkTask;
         private uint nextCommandSeq = 1;
         private bool battleReady;
+        private volatile bool networkStopped;
         private Vector3 lastGroundPoint;
+        private const int MaxPendingCommands = 64;
+        private const int MaxPendingResponses = 128;
+
+        /// <summary>限制 Unity 到后台网络循环的命令积压；满时拒绝本次输入。</summary>
+        private void QueueCommand(BattleCommand command)
+        {
+            if (outboundCommands.Count >= MaxPendingCommands)
+            {
+                Debug.LogWarning("Battle command queue is full");
+                return;
+            }
+            outboundCommands.Enqueue(command);
+        }
 
         /// <summary>
         /// 启动唯一网络循环；不在主线程建立持续轮询逻辑。
@@ -10675,6 +10867,7 @@ namespace BattleNavigation.Client
         private void Update()
         {
             DrainNetworkResponses();
+            if (networkStopped) battleReady = false;
             if (!battleReady) return;
 
             UpdateGroundPoint();
@@ -10718,7 +10911,7 @@ namespace BattleNavigation.Client
         /// <summary>排队一个移动意图；真正路径由 Server Ground Navigation 决定。</summary>
         private void EnqueueMove(Vector3 target)
         {
-            outboundCommands.Enqueue(new BattleCommand
+            QueueCommand(new BattleCommand
             {
                 UnitId = playerUnitId,
                 CommandSeq = nextCommandSeq++,
@@ -10729,7 +10922,7 @@ namespace BattleNavigation.Client
         /// <summary>排队目标型技能；命中、距离、TargetMask 全部由 Server 再验证。</summary>
         private void EnqueueTargetSkill(uint skillId)
         {
-            outboundCommands.Enqueue(new BattleCommand
+            QueueCommand(new BattleCommand
             {
                 UnitId = playerUnitId,
                 CommandSeq = nextCommandSeq++,
@@ -10744,7 +10937,7 @@ namespace BattleNavigation.Client
         /// <summary>排队 FireWall；世界点和方向都只是意图。</summary>
         private void EnqueueFireWall(string orientation)
         {
-            outboundCommands.Enqueue(new BattleCommand
+            QueueCommand(new BattleCommand
             {
                 UnitId = playerUnitId,
                 CommandSeq = nextCommandSeq++,
@@ -10760,7 +10953,7 @@ namespace BattleNavigation.Client
         /// <summary>排队 Self Buff 技能。</summary>
         private void EnqueueSelfSkill(uint skillId)
         {
-            outboundCommands.Enqueue(new BattleCommand
+            QueueCommand(new BattleCommand
             {
                 UnitId = playerUnitId,
                 CommandSeq = nextCommandSeq++,
@@ -10769,60 +10962,110 @@ namespace BattleNavigation.Client
         }
 
         /// <summary>
-        /// 唯一后台网络循环。ServerInteractiveBattleClient 在整个函数期间只创建一次，
-        /// 因此 Start/Command/Sync/Stop 始终使用同一个 Gateway connection_id。
+        /// 唯一后台网络循环。正常请求复用同一连接；断线后使用短期凭据在新连接上恢复。
+        /// Socket I/O 只发生在本后台 Task；最多重试三次，避免无界重连。
         /// </summary>
         private void NetworkLoop(CancellationToken token)
         {
             uint battleId = 0;
             uint afterEventSeq = 0;
+            string resumeToken = null;
+            ServerInteractiveBattleClient client = null;
             try
             {
-                using var client = new ServerInteractiveBattleClient(host, port);
+                client = new ServerInteractiveBattleClient(host, port);
                 var started = client.Start(scenarioId);
                 startResponses.Enqueue(started);
                 if (started.Result != StartInteractiveBattleResponse.Types.ResultCode.Ok)
                     return;
 
                 battleId = started.BattleId;
+                resumeToken = started.ResumeToken;
+                if (string.IsNullOrEmpty(resumeToken) || started.Snapshot == null)
+                    throw new InvalidOperationException("Start response lacks recovery state");
                 afterEventSeq = started.Snapshot?.LastEventSeq ?? 0;
 
                 while (!token.IsCancellationRequested)
                 {
-                    while (outboundCommands.TryDequeue(out var command))
+                    try
                     {
-                        var submitted = client.Submit(battleId, command);
-                        if (submitted.Result != SubmitBattleCommandResponse.Types.ResultCode.Ok)
+                        // Ack 丢失时保留队首命令；恢复 Snapshot 的已接受 seq 决定是否可移除。
+                        while (outboundCommands.TryPeek(out var command))
                         {
-                            errors.Enqueue(
-                                $"Submit rejected seq={command.CommandSeq} result={submitted.Result} " +
-                                $"message={submitted.Message}");
+                            var submitted = client.Submit(battleId, command);
+                            if (submitted.Result != SubmitBattleCommandResponse.Types.ResultCode.Ok &&
+                                submitted.Result != SubmitBattleCommandResponse.Types.ResultCode.StaleOrDuplicateCommand)
+                                errors.Enqueue($"Submit rejected seq={command.CommandSeq} result={submitted.Result}");
+                            outboundCommands.TryDequeue(out _);
                         }
-                    }
 
-                    var sync = client.Sync(battleId, afterEventSeq, false);
-                    if (sync.Result != SyncBattleResponse.Types.ResultCode.Ok)
-                    {
-                        errors.Enqueue("Sync rejected: " + sync.Result + " " + sync.Message);
-                        break;
-                    }
+                        var sync = client.Sync(battleId, afterEventSeq, false);
+                        if (sync.Result != SyncBattleResponse.Types.ResultCode.Ok)
+                            throw new InvalidOperationException("Sync rejected: " + sync.Result);
 
-                    // event_gap 的 Snapshot 表示“当前权威状态”。此时旧增量不能再重复应用。
-                    if (sync.EventGap)
-                    {
-                        afterEventSeq = sync.LatestEventSeq;
-                    }
-                    else if (sync.Events.Count > 0)
-                    {
-                        afterEventSeq = sync.Events[sync.Events.Count - 1].Seq;
-                    }
-                    syncResponses.Enqueue(sync);
+                        // Event 缺口时以即时 Snapshot 为恢复点，旧 Event 不再应用。
+                        if (sync.EventGap)
+                            afterEventSeq = sync.Snapshot?.LastEventSeq ??
+                                throw new InvalidOperationException("Event gap lacks Snapshot");
+                        else if (sync.Events.Count > 0)
+                            afterEventSeq = sync.Events[sync.Events.Count - 1].Seq;
+                        if (syncResponses.Count >= MaxPendingResponses)
+                            throw new InvalidOperationException("Unity response queue is full");
+                        syncResponses.Enqueue(sync);
 
-                    if (sync.Finished) break;
-                    if (token.WaitHandle.WaitOne(100)) break;
+                        if (sync.Finished) break;
+                        if (token.WaitHandle.WaitOne(100)) break;
+                    }
+                    catch (Exception networkError) when (
+                        !token.IsCancellationRequested &&
+                        !(networkError is InvalidOperationException))
+                    {
+                        client.Dispose();
+                        client = null;
+                        bool resumed = false;
+                        for (int attempt = 1; attempt <= 3 && !token.IsCancellationRequested; attempt++)
+                        {
+                            if (token.WaitHandle.WaitOne(500)) break;
+                            try
+                            {
+                                client = new ServerInteractiveBattleClient(host, port);
+                                var recovery = client.Resume(battleId, resumeToken);
+                                if (recovery.Result != ResumeInteractiveBattleResponse.Types.ResultCode.Ok ||
+                                    recovery.Snapshot == null)
+                                    throw new InvalidOperationException("Resume denied: " + recovery.Result);
+                                afterEventSeq = recovery.Snapshot.LastEventSeq;
+                                uint acceptedSeq = 0;
+                                bool foundPlayer = false;
+                                foreach (var unit in recovery.Snapshot.Units)
+                                {
+                                    if (unit.UnitId != playerUnitId) continue;
+                                    acceptedSeq = unit.LastAcceptedCommandSeq;
+                                    foundPlayer = true;
+                                    break;
+                                }
+                                if (!foundPlayer)
+                                    throw new InvalidOperationException("Player missing from recovery Snapshot");
+                                while (outboundCommands.TryPeek(out var pending) &&
+                                       pending.CommandSeq <= acceptedSeq)
+                                    outboundCommands.TryDequeue(out _);
+                                while (syncResponses.TryDequeue(out _)) { }
+                                while (recoverySnapshots.TryDequeue(out _)) { }
+                                recoverySnapshots.Enqueue(recovery.Snapshot);
+                                resumed = true;
+                                break;
+                            }
+                            catch (Exception resumeError)
+                            {
+                                client?.Dispose();
+                                client = null;
+                                if (attempt == 3) errors.Enqueue("Resume failed: " + resumeError.Message);
+                            }
+                        }
+                        if (!resumed) break;
+                    }
                 }
 
-                if (battleId != 0)
+                if (battleId != 0 && client != null)
                 {
                     try { client.Stop(battleId); }
                     catch (Exception stopError)
@@ -10834,6 +11077,11 @@ namespace BattleNavigation.Client
             catch (Exception error)
             {
                 errors.Enqueue(error.ToString());
+            }
+            finally
+            {
+                client?.Dispose();
+                networkStopped = true;
             }
         }
 
@@ -10856,6 +11104,9 @@ namespace BattleNavigation.Client
                 view.ApplySnapshot(started.Snapshot);
                 battleReady = true;
             }
+
+            while (recoverySnapshots.TryDequeue(out var recoverySnapshot))
+                view.ApplySnapshot(recoverySnapshot);
 
             while (syncResponses.TryDequeue(out var sync))
             {
@@ -10924,26 +11175,26 @@ after_event_seq 已早于 first_available_seq
 
 因此 polling 只是本课为了复用现有 FlyWow request/response Gateway 的**传输简化**，不是让 Client 驱动模拟，也不是宣称商业 SLG 必须 polling。以后 Gateway 增加 Server Push 时，Battle Core、Worker Shard、Event/Snapshot 合同都不需要重写。
 
-### 48.2 为什么断线以后本课不自动重连回原 Battle
+### 48.2 断线后怎样恢复原 Battle
 
-当前控制权是：
+正常控制权是：
 
 ```text
 controller_connection_id
 ```
 
-断线重连会得到新 `connection_id`。没有账号认证和 session token 的情况下，Server 没有足够事实证明“新连接就是旧玩家”。
+断线重连会得到新 `connection_id`。Start 返回的 32 字节 OS 随机凭据是本课最小的持有者证明；Resume 成功后，Worker 在同一 no-yield 函数里把控制连接换成新连接，并返回即时 Snapshot。该 Snapshot 的 `last_event_seq` 是 Client 恢复点，Player 的 `last_accepted_command_seq` 用来判定丢失 Ack 的命令是否已被 Server 接受。
 
-所以本课选择明确失败，而不是为了看起来完整做一个不安全的伪重连：
+恢复失败时明确拒绝；不猜测旧连接的权限或战斗状态：
 
 ```text
-断线
--> 原 Battle 继续由 Server 推进
--> finished 后最多保留 finished_retention_cs
--> Runtime 最终自动回收
+断线 -> 原 Battle 继续由 Server 推进
+新连接 + battle_id + resume_token -> Worker 校验 -> 即时 Snapshot + 新连接取得控制权
+凭据错误/Runtime 已回收 -> NOT_CONTROLLER；Client 停止该场输入
+finished 后最多保留 finished_retention_cs -> Runtime 自动回收
 ```
 
-账号登录、断线重连、顶号、session 恢复放到后续 Skynet Server 工程专题。
+恢复只覆盖短时网络断线；账号登录、跨 Worker 故障恢复、持久化 session 和顶号策略放到后续专题。
 
 ### 48.3 `InteractiveBattleView.cs`：把 Event/Snapshot 真正投影到 Unity
 
@@ -11588,6 +11839,10 @@ command_seq 正常递增
 不存在 unit 拒绝
 死亡 unit command 拒绝
 错误 connection_id 拒绝
+Gateway Service 重启后相同数字 connection_id 不能取得旧 Battle 控制权
+错误 resume_token / 不存在 Battle 的 Resume 都返回 NOT_CONTROLLER
+正确 resume_token 可把控制权交给新连接，旧连接随后拒绝
+Submit Ack 丢失后，Resume Snapshot 的 last_accepted_command_seq 可消除重复提交歧义
 command queue 满明确拒绝
 非法 WorldPosition 拒绝
 未知 skill_id 拒绝
@@ -11676,6 +11931,8 @@ FlyingDragon_B
 ```
 
 这个 Case 的目的不是增加“飞龙系统”，而是给现有 Air Unit + TargetMask + Fireball + AI 四个模块增加一条真正的交叉证据。
+
+Golden 回归通过后，若要做第 69.2 节 Unity 人工回放，在同一测试入口的模拟结束并关闭 Context 后，调用第 41.6 节 `battle_replay_file.start(replay_config.descriptor_path)` 与 `battle_replay_file.write("tmp/air_combat.breplay", result)`，回读并核对 `battle_id/map_version/air_map_version/events`，再把这个文件交给 Unity Replay Player。`result` 必须是 `battle_core.simulate()` 的完整 batch 结果；不能把在线 Event ring 当作完整 Replay。该 BRPL 仅作测试产物，不进入线上 Gateway frame。
 
 建议在现有 Battle Core 回归入口中构造独立 Snapshot，例如：
 
@@ -11793,6 +12050,10 @@ Burning periodic damage
 ## 60. Event / Snapshot Tests
 
 ```text
+断线时 Server 继续 fixed tick；Resume 返回即时 Snapshot 与 last_event_seq
+Client 在 Resume 后以 Snapshot 为锚点继续拉 Event，不重复应用断线前的 Event
+事件 ring 覆盖后 Sync 的 event_gap 仍返回即时 Snapshot
+finished Runtime 保留期内可 Resume；回收后必须拒绝
 seq 连续
 logic_tick / logic_ms 不倒退
 Event ring overflow 后 first_seq 正确
@@ -12300,7 +12561,8 @@ BATTLE_SHARD_ROUTING_OK
   -> 多 battle_id 稳定命中 mod shard，Worker 内确实多 Battle 共存
 
 BATTLE_GATEWAY_INTERACTIVE_OK
-  -> Unity/FlyWow/cluster/dispatch/Manager/Worker 完整链能 Start/Command/Sync/Stop
+  -> Unity/FlyWow/cluster/dispatch/Manager/Worker 完整链能 Start/Command/Sync/Stop/Resume
+  -> 断线、Ack 丢失、错误凭据、Gateway 重启后数字连接号重用均有负向验证
 ```
 
 ---
@@ -12425,9 +12687,9 @@ L. 让一方全部死亡
 
 每个步骤都能对应到 Server 中一个明确 owner 和日志/测试层。这样联调出错时不会变成“Unity 看起来不对，不知道是网络、AI、Skill 还是表现”。
 
-### 69.2 AirCombat 人工验收：Flying Dragon 对 Flying Dragon
+### 69.2 AirCombat 回放人工验收：Flying Dragon 对 Flying Dragon
 
-默认 `Battle_1001` 保持三单位最小场景，不为了一个验收点把主场景继续膨胀。额外准备一个只用于回归/人工验证的 AirCombat 场景或固定 Server Scenario：
+默认 `Battle_1001` 保持三单位最小场景，不为了一个验收点把主场景继续膨胀。第 57.1 节的 AirCombat Golden 输入由 Server Batch 模拟并写成 BRPL；Unity 用同一 Replay Player 打开该产物验证表现。在线 `StartInteractiveBattle` 当前只允许 `scenario_id=1001`，所以本节不能要求它启动一个不存在的第二场景。
 
 ```text
 FlyingDragon_A camp=1 AIR
@@ -12436,10 +12698,10 @@ FlyingDragon_B camp=2 AIR
 双方只使用 Fireball
 ```
 
-Unity 只需要复用同一个 `InteractiveBattleController` 和 Unit View，按下面顺序看证据：
+Unity 复用 `BattleReplayPlayer` 和 Unit View，按下面顺序看证据：
 
 ```text
-A. Start AirCombat Battle
+A. 加载第 57.1 节 Golden 模拟得到的 BRPL
    -> Snapshot 中两只 Unit 的 movement_layer 都是 AIR
 
 B. 两只 Dragon 相互接近
@@ -12553,8 +12815,8 @@ cluster.register
 理解：
 
 ```text
-cluster.call 最终仍会进入 skynet.call
-所以它同样是 yield 点
+cluster.call 用于启动期 ready 检查，内部等待 skynet.call 响应，会 yield
+在线 data-plane 使用两个单向 cluster.send 与 route_token/超时表关联
 ```
 
 跨进程失败不能当成本地函数返回 nil 那么简单；本课由 Proxy/Dispatch/Manager 边界转换成结构化失败。
@@ -12660,7 +12922,8 @@ skynet.timeout
 [ ] heartbeat 使用 skynet.timeout，但 Battle 规则只用 logic_tick
 [ ] 理解 fork 不是线程
 [ ] 理解 queue 能解决什么，以及本课为什么不依赖它保护 Core
-[ ] cluster.call 失败有明确边界
+[ ] 启动期 cluster.call ready 失败会阻止对外监听
+[ ] 在线 cluster.send/反向结果丢失按 route_token 超时返回稳定错误
 [ ] Worker Service crash 不被伪装成业务成功
 [ ] debug_console 能观察 Service / task / mem / stat
 ```
@@ -12704,6 +12967,9 @@ skynet.timeout
 [ ] Online Event 使用有界 ring buffer
 [ ] Snapshot 带 last_event_seq
 [ ] event_gap 时能用 Snapshot 恢复
+[ ] Resume 在新连接上返回即时 Snapshot，旧连接失去控制权
+[ ] 丢失 Submit Ack 后按 last_accepted_command_seq 去重
+[ ] 错误凭据和已回收 Battle 的恢复明确拒绝
 [ ] Unity 不重新结算伤害/寻路
 [ ] Batch 与 Online 共用 create/step/skill/navigation
 [ ] 同 snapshot + recorded command stream + versions + seed 得到同 Event/final state
@@ -12716,7 +12982,7 @@ skynet.timeout
 [ ] 没有 AOI
 [ ] 没有联盟/跨服
 [ ] 没有世界地图行军
-[ ] 没有完整账号/重连体系
+[ ] 没有账号级登录、持久化会话或跨进程故障恢复体系
 [ ] 没有完整 Buff 框架
 [ ] 没有 Skill Editor / DSL
 [ ] 没有 Recast/Detour
@@ -12822,10 +13088,12 @@ FlyWow Gateway
 Gateway Proxy
         |
         v
-cluster.call
+cluster.send(request + route_token)
         |
         v
 battle_dispatch
+        |
+        +-- cluster.send(battle_result + route_token) --> Gateway Proxy 原请求协程
         |
         v
 BattleMgr
@@ -12990,8 +13258,9 @@ Unity
 -> SubmitBattleCommand
 -> FlyWow decode
 -> gateway_proxy
--> cluster.call
+-> cluster.send(request + route_token)
 -> battle_dispatch
+-> cluster.send(result + route_token) 回推 Gateway Proxy 原请求协程
 -> BattleMgr.submit_command
 -> worker_for(battle_id)
 -> skynet.call(BattleWorker)
