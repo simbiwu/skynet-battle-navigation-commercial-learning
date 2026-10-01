@@ -14,6 +14,8 @@ skynet.start(function()
     assert(skynet.call(proxy_service, "lua", "start"))
 
     local gateway_service = skynet.newservice("flywow_gateway")
+    -- 关闭命令可以在请求完成后到达；Proxy 必须显式持有 Gateway handle，不能依赖仍存在的 token。
+    assert(skynet.call(proxy_service, "lua", "bind_gateway", { gateway_service = gateway_service }))
     local gateway = assert(skynet.call(gateway_service, "lua", "start", {
         handler_service = proxy_service,
         host = process.gateway.host,

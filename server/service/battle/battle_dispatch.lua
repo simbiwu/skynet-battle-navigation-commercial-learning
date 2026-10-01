@@ -114,7 +114,7 @@ end
 
 -- 执行业务分发后单向回推结果；transport token 只关联 Gateway 请求，不成为 Battle 身份。
 -- payload：Gateway Proxy 转发的已解码请求；Battle 结果送往配置的 Gateway Proxy；可能 yield。
--- 失败：请求/业务错误转成受控错误 record；回推失败由 Gateway timeout 收敛。
+-- 失败：请求/业务错误转成受控错误 record；回推失败由项目 Proxy 路由超时收敛；Gateway 不等待业务。
 local function forward_result(payload)
     assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
     assert(type(payload) == "table" and type(payload.route_token) == "string" and

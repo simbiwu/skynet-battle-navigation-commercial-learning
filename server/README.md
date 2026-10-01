@@ -147,3 +147,29 @@ BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
 ```
 
 脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/process_gateway.lua`、`config/process_battle.lua` 和课程文档。
+
+
+## 异步 Gateway 接入合同（D039）
+
+FlyWow 读取完整帧并解码后，用本地 `skynet.send` 投递 `gateway_dispatch`，立即读下一帧。课程 Proxy 用 `cluster.send` 转发；Battle 处理后反向 send；Proxy 用薄的 `flywow.gateway.endpoint` 上下文发送 `gateway_response`。Gateway 依据响应携带的实例、连接、命令和请求编号编码并发送，不维护业务请求等待表。
+
+Proxy 最多64条返回路由、保留10秒；没有 wait/wakeup/请求协程结果槽。超限、超时和远端错误映射成已有业务响应，健康连接继续读取。断线清理项目路由，迟到结果丢弃，不自动取消 Battle 操作。第一课直接 Query 接入使用相同 endpoint，Battle 内部的本地 Query call 合同继续保留。
+
+当前 Unity GatewayEnvelopeClient 是单调用线程的短连接，一个请求对应一个响应，与异步 Server 兼容；它不是单连接多请求并发客户端。后续长连接客户端需要按 request_id 分发乱序响应，并接收编号0的已登记类型主动消息。
+
+FlyWow 先提交并 Push，课程再固定已验证的 submodule 提交；正常运行无需覆盖。开发独立 FlyWow 工作区时显式指定框架：
+
+```bash
+export FLYWOW_ROOT=/path/to/updated-skynet-flywow
+./scripts/linux/run_server.sh build
+./scripts/linux/run_lesson2_processes.sh doctor
+python3 tests/gateway_async_integration.py
+./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$FLYWOW_ROOT"
+```
+
+集成脚本使用专用19021/19022端口验证延迟/乱序、半包/WS fragment、推送、编码错误、业务失败、断线和网络限制；再使用19001、19011、2527、2528验证实际本地 Query 和双进程 Query/RunAutoBattle。已有进程占用端口时明确失败，不接管部署PID文件；finally只停止自己创建的进程。日志位于 `logs/gateway_async_tests/`。这不是商业容量或长时间 soak 验证。
+
+
+业务主动关闭使用 endpoint context:close。独立业务进程通过项目注入的 close 函数 cluster.send gateway_close 到 Proxy，Proxy 发给 gateway_main 显式 bind_gateway 的本地 Gateway。关闭 record 包含原实例与连接编号，不依赖 token。Gateway 核对来源与身份、摘除并通知 Proxy，再关闭 Socket/WS；重复和迟到关闭不影响新连接。通知目前只到 Proxy，由它清理返回路由，不自动继续传给 Battle。
+
+gateway_async_integration.py 还启动专用 gateway_close_battle_smoke 业务进程，覆盖真实跨 Cluster 主动关闭和关闭后新连接的正常往返，不需要在生产业务中增加测试 command 或客户端协议字段。

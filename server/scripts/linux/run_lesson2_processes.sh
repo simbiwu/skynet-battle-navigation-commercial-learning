@@ -91,6 +91,7 @@ doctor() {
        -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
+    [[ -f "$FLYWOW_ROOT/lualib/flywow/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
     [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=$FLYWOW_ROOT"
 }
@@ -116,7 +117,7 @@ start_one() {
     rm -f "$pid_file"
     (
         cd "$SERVER_ROOT"
-        if [[ "$role" == "gateway" ]]; then export FLYWOW_ROOT; fi
+        export FLYWOW_ROOT
         exec "$SKYNET_BIN" "$SERVER_ROOT/config/$config"
     ) >"$log_file" 2>&1 &
     pid="$!"; printf '%s\n' "$pid" > "$pid_file"

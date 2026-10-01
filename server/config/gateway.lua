@@ -15,6 +15,10 @@ return {
     protocol_version = 3,                          -- WorldPosition 统一为 sint64 后的 Envelope 兼容版本。
 
     max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
+    read_timeout_ticks = 3000,                    -- 每次 TCP 定长读取/WS 握手最多 30 秒，不等待业务响应。
+    idle_timeout_ticks = 30000,                   -- WS 完整消息空闲最多 300 秒。
+    max_requests_per_second = 200,                -- 单连接入站帧速率；超限关闭。
+    max_total_requests_per_second = 10000,        -- Gateway 实例总入站帧速率；超限关闭来源连接。
     max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。
     write_warning_close_kb = 1024,                -- 写缓冲 warning 达到该 KB 时关闭慢连接。
 }

@@ -276,6 +276,7 @@ find_flywow_root() {
 # 运行时不解析 .proto；生成器只原子替换完整输出，失败时 prepare 立即终止。
 build_gateway_registry() {
     find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT to its repository root"
+    [[ -f "$FLYWOW_ROOT/lualib/flywow/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
     python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
         --proto "$PROTO_SOURCE" \
