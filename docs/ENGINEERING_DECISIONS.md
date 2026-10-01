@@ -547,8 +547,24 @@ Gateway 的职责是持有客户端连接、处理通用 framing/协议接入、
 
 Battle 是玩家归属、战斗路由、命令可靠性和战斗状态的权威 owner。Gateway 可以保留连接生命周期和转发所需的非权威传输信息，但不能把客户端 fd、Gateway Service handle 或可复用的临时连接编号当作 Battle 身份。Battle 发回事件/响应时使用明确的逻辑会话标识和关联信息；Gateway 仅将结果投递给仍然匹配的连接，旧会话结果不得误投给重连后的新会话。
 
-第二课已经建立双向跨进程异步转发合同：Gateway Proxy 用 `cluster.send` 将已解码请求交给 Battle Dispatch；Battle Dispatch 处理后再向注册的 Gateway Proxy 入口 `cluster.send` 结果。route token 将回包与原本地请求协程关联，Gateway 再按原 `request_id` 写回客户端。等待表/超时/并发有界，重复或迟到回包不复用旧请求。Gateway 不持有 Battle 路由或状态，也不解释 Event。第三课复用既有 Gateway/Battle 进程边界扩展在线命令语义，不重新设计 Gateway 业务路由。
+第二课已经建立双向跨进程异步转发合同：Gateway Proxy 用 `cluster.send` 将已解码请求交给 Battle Dispatch；Battle Dispatch 处理后再向注册的 Gateway Proxy 入口 `cluster.send` 结果。D039 将本地 Gateway/Proxy 合同也改为双向 send；route token 只关联返回上下文，不关联等待协程。路由表/保留时限/业务并发有界，重复或迟到回包不复用旧请求。Gateway 不持有 Battle 路由或状态，也不解释 Event。第三课复用既有 Gateway/Battle 进程边界扩展在线命令语义，不重新设计 Gateway 业务路由。
 
 第三课在线命令不能让 Gateway 为每条实时指令同步等待整段 Battle 逻辑。Battle 侧定义命令序号、重复请求、确认、丢失检测与重连恢复合同；具体采用 `cluster.send`、`cluster.call` 或组合协议时，必须区分传输机制和业务可靠性。特别是 `cluster.send` 本身不提供送达确认，不能仅凭使用它就宣称指令可靠。
 
 第二课 `RunAutoBattle` 的客户端仍等待完整模拟和 Replay 结果；Gateway/Battle 间使用异步 `cluster.send` + 反向 `cluster.send`，不使用 `cluster.call` 承载业务请求。
+
+## D039 - Gateway 读取投递与响应发送独立运行
+
+同一连接按收到的帧顺序读取、校验、解码并通过本地 `skynet.send` 投递到显式注入的 `handler_service`。投递完成后立即读取下一帧；不使用 `skynet.call` 等待业务结果。结果通过独立的 `gateway_response` 消息进入 Gateway。Gateway 只保存连接与网络资源状态，不建立业务 request/token 等待表，不处理业务超时、Cluster 节点或玩家路由。
+
+内部响应携带 `gateway_epoch`、`connection_id`、`command_id`、`request_id` 和 `response`。Gateway 只允许配置的 handler 发送响应，拒绝旧实例或已关闭连接的结果；根据生成 registry 中的响应类型编码，按原请求编号发给客户端。实例内连接编号不复用、耗尽后拒绝接入；实例身份隔离重启前的结果。fd 不进入业务合同。
+
+现有 `.proto` 与协议版本3保持不变。请求编号保留既有 uint64 位模式，编号0保留给已登记响应类型的主动消息；高位在 pinned Lua 中表现为负整数，也必须原样回传，不能按正负过滤，不据此宣称已支持任意独立推送类型。A/B 业务结果可以乱序，业务顺序由 Battle 负责，客户端按请求编号匹配。当前 Unity 使用单调用线程的短连接，继续兼容，不把它包装成已支持单连接并发的客户端。
+
+课程 Proxy 保留最多64项的项目返回路由，10秒过期；记录返回上下文，不保存协程/result，不调用 wait/wakeup。容量、远程发送、结果结构或超时失败由项目映射为已有 QueryCell/RunAutoBattle 业务错误响应。失败不关闭健康连接；断线删除对应路由，重复和迟到回包丢弃。Battle 已接纳的操作不因断线自动取消。
+
+FlyWow 的 `flywow.gateway.endpoint` 是可选薄接入模块：构造响应上下文、携带内部返回信息并单向回复；不接管 dispatch、不 fork 业务任务、不依赖 Cluster。跨进程部署由项目适配器负责。网络侧保留连接/帧/读超时/写缓冲/单连接及实例入站速率限制；速率限制不是对任意下游 Skynet mailbox 的硬容量承诺，handler 必须快速消费并在项目层限制业务在途数量。
+
+业务主动断开使用 `context:close()` / `gateway_close`，仅携带实例与连接身份。Gateway 核对 handler 来源后先摘除连接、发出一次 disconnect，再关闭 transport；重复或失效命令忽略。跨进程通过项目 Proxy 转发，composition root 明确绑定 Gateway handle，关闭不依赖尚有效的请求 token。断线通知当前只到 handler/Proxy，不自动继续传给 Battle。响应后关闭不承诺客户端收到最后响应，业务可靠性仍归项目。
+
+发布时先形成已验证的 FlyWow 提交，再更新课程 submodule gitlink。未获 commit 授权时使用显式 `FLYWOW_ROOT` 联调，不能把未修改的 gitlink 宣称为已经发布；旧同步 Gateway API 必须连同调用方一起迁移。回滚也需要一起回滚框架、Server handler 和配置。

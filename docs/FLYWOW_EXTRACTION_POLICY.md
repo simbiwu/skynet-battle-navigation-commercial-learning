@@ -231,4 +231,6 @@ Gateway 不拥有地图或 Battle 状态
 Map/Battle Process 不接触客户端 fd、frame buffer 或 Protobuf codec
 ```
 
-协议、Gateway 和进程拆分的详细已确认决策以 `docs/ENGINEERING_DECISIONS.md` 中 D029、D030、D033 为准。
+Gateway 入站按帧顺序解码后用本地 `skynet.send` 投递，不等待业务响应；出站通过独立 `gateway_response` 接收响应并编码发送。Gateway 不保存业务请求等待表，也不依赖 Cluster；项目 Proxy 负责跨进程转发与有界返回路由。业务接入使用可选的 `flywow.gateway.endpoint` 薄模块。
+
+协议、Gateway 和进程拆分的详细已确认决策以 `docs/ENGINEERING_DECISIONS.md` 中 D029、D030、D033、D039 为准。

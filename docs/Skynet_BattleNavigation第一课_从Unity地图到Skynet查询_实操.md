@@ -6874,17 +6874,27 @@ return M
 local skynet = require "skynet"
 local config = require "config.game"
 local query_logic = require "battle.navigation.query_logic"
+local endpoint = require "flywow.gateway.endpoint"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- gateway_dispatch handler 只接收已完成 Protobuf 解码的 request table。
 skynet.start(function()
     query_logic.start(config)
 
-    skynet.dispatch("lua", function(_session, _source, command, payload)
+    skynet.dispatch("lua", function(session, source, command, payload)
+        if command == "ready" then skynet.retpack(true); return end
+        if command == "gateway_disconnect" then return end
         assert(command == "gateway_dispatch", "navigation_query only accepts gateway_dispatch")
         assert(payload.command == "QueryCell", "unsupported navigation command: " .. tostring(payload.command))
         local response = query_logic.query(assert(payload.request, "query request is required"))
-        skynet.retpack({ ok = true, response = response })
+        if session == 0 then
+            -- 外部 Gateway 单向投递，独立发送响应，不阻塞它读取下一帧。
+            local context = endpoint.new({ gateway_service = source, request = payload })
+            assert(context:reply(response))
+        else
+            -- Battle 内部本地查询仍可以使用 call，不属于 Gateway 网络读取路径。
+            skynet.retpack({ ok = true, response = response })
+        end
     end)
 
     skynet.error("NAV_QUERY_READY address=", skynet.address(skynet.self()),
@@ -6937,8 +6947,9 @@ Unity TCP / WebSocket
 -> Envelope 校验
 -> 生成的 gateway.protocol.navigation_registry
 -> Protobuf request 解码
--> navigation_query.gateway_dispatch
+-> skynet.send(navigation_query, gateway_dispatch)，随后继续读下一帧
 -> QueryCell response table
+-> endpoint context:reply -> skynet.send(gateway_response)
 -> FlyWow 自动编码 response Envelope
 ```
 
@@ -6955,11 +6966,15 @@ run_server.sh 只负责调用独立的 Skynet-FlyWow 生成器；生成器实现
 运行时不解析 `.proto`，也不要求业务代码调用 `gateway.register_command`。业务 Service 只处理：
 
 ```lua
-skynet.dispatch("lua", function(_, _, command, payload)
+-- 在已有 dispatch 中接入；source 为实际 Gateway handle，业务只产生响应 table。
+skynet.dispatch("lua", function(session, source, command, payload)
+    if command == "gateway_disconnect" then return end
     assert(command == "gateway_dispatch")
+    assert(session == 0)
     assert(payload.command == "QueryCell")
+    local context = endpoint.new({ gateway_service = source, request = payload })
     local response = query_logic.query(payload.request)
-    skynet.retpack({ ok = true, response = response })
+    assert(context:reply(response))
 end)
 ```
 
@@ -7012,7 +7027,7 @@ socket thread
 ```text
 Gateway Service 独占 listen fd、client fd、connections 和 transport 生命周期
 协议先完成 frame/version/command/body 校验，再进入 Query Service
-max_frame、max_clients 和写缓冲都有明确上限；同一连接按顺序处理请求
+max_frame、max_clients、入站速率和写缓冲都有明确限制；同一连接按顺序读取和投递，不等待业务结果
 Protobuf bytes 在跨 Service yield 前已经转换为 Lua table
 skynet.call 返回后重新确认 connection object，防止连接关闭后的误写
 close/error/stop 都有可重复、可观察的资源回收路径
@@ -7274,6 +7289,8 @@ SOCKET.open(fd, address)
 ```
 
 ### 27.7 替换 Gateway
+
+本节以下手写 `netpack` Gateway 用于机制阅读，保留 call/yield 与事件 ownership 的历史示例，不作为当前 FlyWow 的替换代码。当前运行实现采用 D039 的双向异步 send，按顺序读取和投递、不等待 Query 响应；实际文件与断点顺序见 [FlyWow 异步 Gateway 阅读与接入](FLYWOW_GATEWAY_ASYNC.md)。不要用本节历史 Service 覆盖当前框架。
 
 #### 学习导航
 
@@ -9237,7 +9254,7 @@ Skynet Process
   +-> flywow_gateway Service
   |     TCP/WebSocket transport + Envelope registry
   |     Protobuf decode
-  |     skynet.call(query_service, gateway_dispatch) <- yield boundary
+  |     skynet.send(query_service, gateway_dispatch) <- 不等待业务，继续读下一帧
   |
   +-> navigation_query Service
         query_logic.query                <- no-yield
@@ -9251,7 +9268,7 @@ Skynet Process
         QueryCellResponse
               |
               v
-        Gateway -> netpack.pack -> Unity
+        endpoint:reply -> Gateway -> uint16长度帧 -> Unity
 ```
 
 调试器分工：
@@ -10334,16 +10351,16 @@ accept_client
   看 accepted fd / address / Gateway connections
 
 dispatch_payload
-  看 netpack 已经切好的 payload
+  看 TCP 定长读取 / WS 拼接完成的 payload
 
 codec.decode_envelope 之后
   看 protocol_version / command / request_id
 
-skynet.call(query_service, "lua", "query_cell", request) 前
-  看最终跨 Service 的 request table
+skynet.send(handler_service, "lua", "gateway_dispatch", payload) 前
+  看最终跨 Service 的解码请求与返回元数据；发送后立即读下一帧
 
-skynet.call 返回后
-  看 response，以及 connections[fd] 是否还是原 conn
+deliver_response
+  看独立响应、handler 来源、gateway_epoch 和当前 connection_id
 
 send_response
   看 request_id 怎样原样带回
@@ -10734,20 +10751,20 @@ netpack 负责半包/粘包
 
 #### fd 关闭/复用
 
-当前 Gateway 在 `skynet.call` 后重新检查：
+当前 Gateway 不保存等待请求。收到独立响应时检查：
 
 ```lua
-connections[fd] == conn
+message.gateway_epoch == state.epoch
+state.connections[message.connection_id] ~= nil
 ```
 
 原因是：
 
 ```text
-request 已发给 Query
--> Gateway coroutine yield
+request 已异步发给 Query，Gateway 继续读下一帧
 -> client 断开
 -> fd 未来可能被系统复用
--> Query 返回
+-> Query 通过独立消息返回原实例/连接编号
 ```
 
 如果只看数字 fd，不看 connection object identity，旧请求可能把响应写给新连接。
@@ -10888,7 +10905,7 @@ clearance_cells
 [ ] max payload 为 65535 bytes。
 [ ] Envelope 有 protocol_version/command/request_id/body。
 [ ] malformed frame/envelope/body 不进入 Native。
-[ ] 半包/粘包由 netpack 正确处理。
+[ ] TCP 定长读取和 WebSocket 拼帧正确处理半包/粘包。
 [ ] fd close/reuse 不会发生旧响应误写新连接。
 [ ] Unity 和 Server 使用同一份 .proto。
 [ ] request_id 请求/响应一致。

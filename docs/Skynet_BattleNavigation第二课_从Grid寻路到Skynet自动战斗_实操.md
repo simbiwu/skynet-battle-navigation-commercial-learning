@@ -113,6 +113,8 @@ PlayerCommand
 
 ## 第一课到第二课的双进程运行模式
 
+当前 Gateway/Proxy 合同已按 D039 收口为双向 send；实际文件、接入代码和验证步骤见 [FlyWow 异步 Gateway 阅读与接入](FLYWOW_GATEWAY_ASYNC.md)。Gateway 不等待 Battle 结果；本课保留的业务内部 call 不属于客户端读包循环。
+
 第二课先把“接入层”和“地图查询”放到不同的 Skynet Process 中；此时跨进程请求仍只有 `QueryCell`。第 23.5 节在自动战斗通过 batch 验证后，把 BattleMgr/Worker 接入同一 Battle Process。默认的单进程 `main` 保留为第一课 QueryCell 调试入口；第二课最终自动战斗请求使用双进程入口。Gateway Process 只拥有客户端连接，Map/Battle Process 拥有地图查询和战斗状态。
 
 ```text
@@ -120,7 +122,7 @@ Gateway Process
   gateway_main
     -> gateway_proxy
     -> FlyWow Gateway（TCP/WebSocket、frame、Protobuf、连接生命周期）
-    -> skynet.cluster.send("battle", "@battle_dispatch", "gateway_dispatch", request_record, route_token)
+    -> skynet.cluster.send("battle", "@battle_dispatch", "gateway_dispatch", forwarded_record)
     <- skynet.cluster.send("gateway", "@gateway_proxy", "battle_result", route_token, result_record)
 
 Map/Battle Process
@@ -129,7 +131,7 @@ Map/Battle Process
     -> battle_dispatch（当前先指向 Query Service；第 23.5 节改为独立分发 Service）
 ```
 
-业务请求通过 `cluster.send` 传递已经解码的 request record；Battle 处理后用独立 `cluster.send` 把 `result_record` 和 `route_token` 回推至 Gateway Proxy。fd、frame buffer、Protobuf codec 和 Lua State 都不会跨进程传递。`battle_dispatch` 与 `gateway_proxy` 是明确的跨启动树入口；Battle Process 启动并注册后，Gateway Process 先等待 `ready` 再监听客户端端口。Proxy 的在途表与等待时限有上限；远程进程不可用或回包超时会返回结构化错误。
+业务请求通过 `cluster.send` 传递已经解码的 request record；Battle 处理后用独立 `cluster.send` 把 `result_record` 和 `route_token` 回推至 Gateway Proxy。fd、frame buffer、Protobuf codec 和 Lua State 都不会跨进程传递。`battle_dispatch` 与 `gateway_proxy` 是明确的跨启动树入口；Battle Process 启动并注册后，Gateway Process 先等待 `ready` 再监听客户端端口。Proxy 的返回路由表与保留时限有上限，不保存等待协程；远程进程不可用或回包超时由项目映射成已有业务响应。Gateway 本地入站与响应也使用双向 send，A 的业务结果不阻塞 B 的读取，见 D039。
 
 本节涉及的文件操作如下：
 
@@ -7927,7 +7929,7 @@ end
 
 [新建文件] `server/service/battle/battle_dispatch.lua`
 
-学习导航：精读 `configure()` 的 handle 注入、`dispatch_gateway()` 的命令分支、`run_auto_battle()` 的并发限额和结果大小限额；可以略读事件数组的机械计数。输入是 FlyWow 已解码的 request record；输出 `{ok=true,response=<对应 Proto table>}` 或不可恢复协议错误 record。预期业务拒绝使用 `RunAutoBattleResponse.result`，让客户端得到稳定错误码；远程进程故障仍由现有 `gateway_proxy` 转成 `REMOTE_UNAVAILABLE` 并关闭连接。跨 Service call 会 yield，核心状态始终归 Worker。
+学习导航：精读 `configure()` 的 handle 注入、`dispatch_gateway()` 的命令分支、`run_auto_battle()` 的并发限额和结果大小限额；可以略读事件数组的机械计数。输入是 FlyWow 已解码的 request record；输出 `{ok=true,response=<对应 Proto table>}` 或不可恢复协议错误 record。预期业务拒绝使用 `RunAutoBattleResponse.result`，让客户端得到稳定错误码；远程进程故障由项目 `gateway_proxy` 映射成已有业务失败响应，不关闭健康连接。跨 Service call 会 yield，核心状态始终归 Worker。
 
 ```lua
 -- 职责：把 Battle Process 的已解码 Gateway 请求分给 Query 或自动战斗 Manager。
@@ -8097,7 +8099,7 @@ skynet.start(function()
 end)
 ```
 
-[局部修改] `server/scripts/linux/run_lesson2_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua` 保持[只读]；`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 按本课边界调整：Proxy 使用 `cluster.send` 转发请求并用反向 `cluster.send` 接收 Battle 结果，通过有界 route token 等待表关联原请求；两端进程配置需互相声明 Cluster 节点、监听地址和回推服务名。不得把 Battle 路由或状态放入 Gateway。
+[局部修改] `server/scripts/linux/run_lesson2_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua` 保持[只读]；`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 按本课边界调整：Proxy 使用 `cluster.send` 转发请求并用反向 `cluster.send` 接收 Battle 结果，通过有界 route token 路由表关联返回上下文，再异步发送 gateway_response；不 wait、不 wakeup、不 retpack 业务请求。两端进程配置需互相声明 Cluster 节点、监听地址和回推服务名；使用 endpoint 的 Battle 进程也需导出 FLYWOW_ROOT。不得把 Battle 路由或状态放入 Gateway。
 
 在 `doctor()` 已有的 Service 文件检查后加入：
 
@@ -8525,11 +8527,11 @@ Play：看到 BATTLE_GATEWAY_RESULT_LOADED、单位移动、攻击和死亡
 
 这次不运行 batch，也不复制 `battle_replay.json`；Unity 的一次请求必须实际经过独立 Gateway/cluster/BattleMgr/Worker。`BATTLE_GATEWAY_RESULT_LOADED` 只证明拿到并校验了完整响应，还要观察整个 Replay 到 `BATTLE_END`。再把 Inspector 的 `Scenario Id` 改为 `9999`：预期得到 `BAD_SCENARIO`，没有 Spawn/Replay；改回 1001 后重新成功。启动日志应先出现 `LESSON2_BATTLE_PROCESS_READY`，再出现 `LESSON2_GATEWAY_PROCESS_READY`；Gateway 仍不加载 BMAP，Battle Process 仍不拥有客户端 fd。
 
-本课 `RunAutoBattle` 只接受固定场景，并限制同时请求数、Event 数、Path 点数及最终 Gateway frame。可预期业务拒绝返回 `ResultCode`；远程进程不可用时现有 Proxy 记录 `REMOTE_UNAVAILABLE`，Gateway 关闭该请求连接，Unity 显示连接异常。要支持大规模战报、分页/资产拉取、账号鉴权、限流、取消与 drain 编排，需要另立阶段；不能把当前一次性 65,535-byte 响应称为生产级实时同步。
+本课 `RunAutoBattle` 只接受固定场景，并限制同时请求数、Event 数、Path 点数及最终 Gateway frame。可预期业务拒绝返回 `ResultCode`；远程进程不可用或返回路由过期时，Proxy 映射成已有业务失败响应，Gateway 继续读取该连接的后续包。要支持大规模战报、分页/资产拉取、账号鉴权、限流、取消与 drain 编排，需要另立阶段；不能把当前一次性 65,535-byte 响应称为生产级实时同步。
 
 #### 本课已经完成 Gateway 与 Battle 的双向消息链路
 
-请求方向为 `Gateway -> gateway_proxy -> cluster.send -> battle_dispatch`；Battle 处理完成后通过反向 `cluster.send` 把 `route_token + result_record` 发回 Gateway Proxy。Proxy 用 token 唤醒对应的本地请求协程，通用 Gateway 再使用原 `request_id` 编码并写入原连接。Gateway 只转发请求和结果，不推断玩家归属、不解释 Battle Event，也不保存 Battle 状态。Battle 负责产生 Query/战斗结果；跨进程只传可序列化且有大小上限的 record。
+请求方向为 `Gateway -> skynet.send -> gateway_proxy -> cluster.send -> battle_dispatch`；Gateway 投递后立即继续读下一帧。Battle 处理完成后通过反向 `cluster.send` 把 `route_token + result_record` 发回 Gateway Proxy。Proxy 用 token 找到返回上下文并删除路由，再通过 endpoint 异步发送 gateway_response。Gateway 根据响应携带的实例、连接、命令和请求编号编码并写入当前连接，不保存请求等待表。Gateway 只转发请求和结果，不推断玩家归属、不解释 Battle Event，也不保存 Battle 状态。Battle 负责产生 Query/战斗结果；跨进程只传可序列化且有大小上限的 record。
 
 这里的“双向”指两个进程之间请求与结果都能通过明确的调用链传输；本课的一次性自动战斗仍等待完整响应。第三课增加在线指令流、Battle 主动发送周期 Snapshot/Event，以及对应的业务可靠性与重连恢复规则，不会重新实现 Gateway 的 Battle 路由。
 
