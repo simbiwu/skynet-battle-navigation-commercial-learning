@@ -19,6 +19,8 @@ return {
     idle_timeout_ticks = 30000,                   -- WS 完整消息空闲最多 300 秒。
     max_requests_per_second = 200,                -- 单连接入站帧速率；超限关闭。
     max_total_requests_per_second = 10000,        -- Gateway 实例总入站帧速率；超限关闭来源连接。
+    max_pending_handshakes = 128,                -- 同时进行应用握手的连接上限，计入max_clients。
+    handshake_timeout_ticks = 1000,              -- 从接纳到ready总期限10秒，不随握手消息刷新。
     max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。
     write_warning_close_kb = 1024,                -- 写缓冲 warning 达到该 KB 时关闭慢连接。
 }

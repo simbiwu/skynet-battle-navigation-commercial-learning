@@ -13,6 +13,7 @@ import socket
 import struct
 import subprocess
 import time
+from gateway_handshake_client import perform, hello, respond
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -91,7 +92,7 @@ def exact(sock, size):
 
 class Client:
     # 建立专用测试连接；WS 使用真实 HTTP Upgrade 和 mask，TCP 使用 uint16 长度头。
-    def __init__(self, port, websocket=False):
+    def __init__(self, port, websocket=False, handshake=True):
         self.sock = socket.create_connection(("127.0.0.1", port), timeout=3)
         self.ws = websocket
         if websocket:
@@ -105,6 +106,13 @@ class Client:
                 assert len(header) < 8192
             accept = base64.b64encode(hashlib.sha1((key + "258EAFA5-E914-47DA-95CA-C5AB0DC85B11").encode()).digest())
             assert b"101" in header.split(b"\r\n")[0] and accept in header
+
+        if handshake:
+            try:
+                perform(self.send, self.receive_bytes)
+            except BaseException:
+                self.close()
+                raise
 
     # 发送一条完整协议消息；fragment=True 模拟 TCP 半包或 WS binary continuation。
     def send(self, payload, fragment=False):
@@ -137,7 +145,7 @@ class Client:
         self.sock.sendall(header + mask + masked)
 
     # 读取并解析一个服务端 Envelope；close frame 转为 EOF。
-    def receive(self):
+    def receive_bytes(self):
         if self.ws:
             first, second = exact(self.sock, 2)
             if first & 15 == 8:
@@ -150,7 +158,11 @@ class Client:
                 size = struct.unpack(">Q", exact(self.sock, 8))[0]
         else:
             size = struct.unpack(">H", exact(self.sock, 2))[0]
-        result = fields(exact(self.sock, size))
+        return exact(self.sock, size)
+
+    # 握手已完成后解析业务Envelope，不把握手包误解释为Protobuf。
+    def receive(self):
+        result = fields(self.receive_bytes())
         assert result[1] == 3
         return result
 
@@ -299,6 +311,78 @@ def limits():
     print("REAL_NETWORK_LIMITS_OK")
 
 
+# 验证握手拒绝、不复用旧证明、半包/粘包、容量释放和总期限。
+def handshake_contract(websocket):
+    port = 19022 if websocket else 19021
+    for bad in (envelope(2), b"\x01\x02" + b"x" * 65,
+                b"\x01\x01\x04" + b"\0" * 64, b"\x03" + b"\0" * 32):
+        client = Client(port, websocket, handshake=False)
+        try:
+            client.send(bad)
+            try:
+                client.receive_bytes()
+                raise AssertionError("bad handshake accepted")
+            except (EOFError, ConnectionResetError):
+                pass
+        finally:
+            client.close()
+    client = Client(port, websocket, handshake=False)
+    private, message = hello()
+    try:
+        client.send(message, fragment=True)
+        challenge = client.receive_bytes()
+        proof, expected = respond(private, message, challenge)
+        client.send(proof)
+        assert client.receive_bytes() == expected
+        client.send(envelope(2))
+        assert client.receive()[3] == 2
+    finally:
+        client.close()
+    client = Client(port, websocket, handshake=False)
+    try:
+        client.send(message)
+        assert client.receive_bytes() != challenge, "reconnect challenge must be fresh"
+        client.send(proof)
+        try:
+            client.receive_bytes()
+            raise AssertionError("old proof accepted")
+        except (EOFError, ConnectionResetError):
+            pass
+    finally:
+        client.close()
+    client = Client(port, websocket, handshake=False)
+    try:
+        client.send(message)
+        client.receive_bytes()
+        # 完整hello不能刷新期限；该测试配置期限为1秒。
+        assert client.sock.recv(1) in (b"", b"\x88"), "handshake deadline must close"
+    finally:
+        client.close()
+    held = []
+    try:
+        for _ in range(2):
+            held.append(Client(port, websocket, handshake=False))
+        rejected = None
+        try:
+            try:
+                rejected = Client(port, websocket, handshake=False)
+                rejected.send(message)
+                rejected.receive_bytes()
+                raise AssertionError("handshake capacity not enforced")
+            except (EOFError, ConnectionResetError, BrokenPipeError):
+                pass
+        finally:
+            if rejected:
+                rejected.close()
+    finally:
+        for client in held:
+            client.close()
+    time.sleep(0.15)
+    client = Client(port, websocket)
+    client.close()
+    print("REAL_WS_HANDSHAKE_OK" if websocket else "REAL_TCP_HANDSHAKE_OK")
+
+
 # 实际课程 Query/RunAutoBattle 往返及同连接连续请求；不依赖测试 handler。
 def course(port, battle):
     client = Client(port)
@@ -339,6 +423,8 @@ def main():
     processes = Processes(Path(args.flywow_root).resolve())
     try:
         processes.start("smoke", "skynet_gateway_async_smoke.lua", "GATEWAY_ASYNC_SMOKE_READY", [19021, 19022])
+        handshake_contract(False)
+        handshake_contract(True)
         smoke(False)
         smoke(True)
         limits()

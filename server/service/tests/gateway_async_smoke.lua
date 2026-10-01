@@ -41,7 +41,7 @@ skynet.start(function()
         skynet.call(gateway, "lua", "start", {
             handler_service = skynet.self(), transport = transport, port = 19020 + index,
             read_timeout_ticks = 100, idle_timeout_ticks = 200, max_clients = 8,
-            write_warning_close_kb = 64,
+            write_warning_close_kb = 64, max_pending_handshakes = 2, handshake_timeout_ticks = 100,
         })
     end
     skynet.error("GATEWAY_ASYNC_SMOKE_READY")

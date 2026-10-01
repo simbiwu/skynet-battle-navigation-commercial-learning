@@ -21,7 +21,7 @@ lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            flywow_root .. "/lualib/?/init.lua;" ..
            skynet_root .. "lualib/?.lua;" ..
            skynet_root .. "lualib/?/init.lua"
-lua_cpath = "./build/lua_battle_nav/?.so;" ..
+lua_cpath = "./luaclib/?.so;" .. "./build/lua_battle_nav/?.so;" ..
             "./third_party/lua-protobuf-runtime/?.so;" ..
             skynet_root .. "luaclib/?.so"
 cpath = skynet_root .. "cservice/?.so"

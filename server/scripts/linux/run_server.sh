@@ -316,6 +316,9 @@ prepare_runtime() {
     build_skynet_if_needed
     build_lua_protobuf_if_needed
     build_gateway_registry
+    if [[ -f "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" ]]; then
+        bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/luaclib"
+    fi
     verify_descriptor_asset
     build_native_incremental
 }
@@ -384,6 +387,14 @@ doctor() {
     if ! find_flywow_root; then
         log "MISSING Skynet-FlyWow framework; set FLYWOW_ROOT"
         failed=1
+    fi
+    if [[ -f "${FLYWOW_ROOT:-}/scripts/build_gateway_crypto.sh" ]]; then
+        # 用固定Lua实际加载，发现ABI/OpenSSL依赖问题；不启动Service或生成密钥。
+        if ! LUA_CPATH="$SERVER_ROOT/luaclib/?.so" "$SERVER_ROOT/third_party/skynet/3rd/lua/lua" \
+            -e 'assert(type(require("flywow_gateway_crypto").new) == "function")'; then
+            log "INVALID flywow_gateway_crypto.so: build or runtime dependency missing"
+            failed=1
+        fi
     fi
     [[ -s "$DESCRIPTOR_FILE" ]] || { log "MISSING published descriptor: $DESCRIPTOR_FILE"; failed=1; }
     [[ -s "$SERVER_ROOT/build/lua_battle_nav/battle_nav.so" ]] || { log "MISSING battle_nav.so"; failed=1; }

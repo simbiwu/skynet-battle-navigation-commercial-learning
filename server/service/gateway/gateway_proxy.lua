@@ -18,38 +18,10 @@ local pending_count = 0         -- 当前 Battle 返回路由数量。
 local next_token = 0            -- 本 Service 生命周期内单调递增的关联序号。
 local route_epoch = nil         -- 进程内唯一前缀，隔离 Service 重启前的迟到回包。
 
-local timeout_loop -- start() 在初始化后启动的超时扫描协程。
-
 local state = {
     gateway_service = nil, -- gateway_main 注入唯一 Gateway handle；供独立关闭命令使用。
     started = false, -- 只允许当前 Adapter Service 初始化一次。
 }
-
--- 建立本进程 cluster 监听，并等待 Battle Process 的显式 ready 合同。
--- 参数：无。返回值：{remote_node, remote_address}；失败抛出，可能 yield，不创建业务连接。
-local function start()
-    assert(not state.started, "gateway proxy can only start once")
-    cluster.reload({
-        [process.cluster.remote_node] = process.cluster.remote_address,
-    })
-    cluster.open(process.cluster.local_listen, process.cluster.max_clients)
-    cluster.register(process.cluster.proxy_service, skynet.self())
-    route_epoch = tostring(skynet.self()) .. ":" .. tostring(skynet.hpc())
-    local ready_ok, ready_or_error = pcall(
-        cluster.call,
-        process.cluster.remote_node,
-        "@" .. process.cluster.remote_service,
-        "ready"
-    )
-    assert(ready_ok and ready_or_error == true,
-           "battle process is not ready: " .. tostring(ready_or_error))
-    state.started = true
-    skynet.fork(timeout_loop)   --是为了在 Proxy 初始化完成后，启动一个后台协程定期检查请求超时。
-    return {
-        remote_node = process.cluster.remote_node,
-        remote_address = process.cluster.remote_address,
-    }
-end
 
 -- 校验 Battle 回推的结果形状；业务响应由 Battle 生成，Proxy 只检查通用包装合同。
 -- result：Cluster 消息解码出的 table；返回原 record 或稳定错误 record；无 I/O、无 yield。
@@ -134,11 +106,37 @@ end
 
 -- 扫描有界路由项；不按请求数创建 timer coroutine。
 -- 无参数和返回；Service 停止前长驻，执行 sleep/yield。
-timeout_loop = function()
+local function timeout_loop()
     while state.started do
         skynet.sleep(TIMER_INTERVAL_TICKS)
         expire_pending(skynet.now())
     end
+end
+
+-- 建立本进程 cluster 监听，并等待 Battle Process 的显式 ready 合同。
+-- 参数：无。返回值：{remote_node, remote_address}；失败抛出，可能 yield，不创建业务连接。
+local function start()
+    assert(not state.started, "gateway proxy can only start once")
+    cluster.reload({
+        [process.cluster.remote_node] = process.cluster.remote_address,
+    })
+    cluster.open(process.cluster.local_listen, process.cluster.max_clients)
+    cluster.register(process.cluster.proxy_service, skynet.self())
+    route_epoch = tostring(skynet.self()) .. ":" .. tostring(skynet.hpc())
+    local ready_ok, ready_or_error = pcall(
+        cluster.call,
+        process.cluster.remote_node,
+        "@" .. process.cluster.remote_service,
+        "ready"
+    )
+    assert(ready_ok and ready_or_error == true,
+           "battle process is not ready: " .. tostring(ready_or_error))
+    state.started = true
+    skynet.fork(timeout_loop)   --是为了在 Proxy 初始化完成后，启动一个后台协程定期检查请求超时。
+    return {
+        remote_node = process.cluster.remote_node,
+        remote_address = process.cluster.remote_address,
+    }
 end
 
 -- 接纳本地 Gateway 消息并单向转发；立即返回，不 wait、不 retpack。
