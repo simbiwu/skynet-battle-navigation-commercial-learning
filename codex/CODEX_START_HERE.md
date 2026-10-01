@@ -14,6 +14,7 @@
 | 架构/技术选型 | `docs/ENGINEERING_DECISIONS.md`、相关模块合同；全仓 Review 再读 `docs/TARGET_ARCHITECTURE.md` |
 | 验收、确定性、并发、Benchmark | `docs/TEST_STRATEGY.md` 的相关章节 |
 | Windows/WSL 编辑源、同步、Git | `docs/WORKSPACE_WORKFLOW.md` |
+| FlyWow Gateway 异步收发与握手 | `docs/FLYWOW_GATEWAY_ASYNC.md`、`docs/FLYWOW_GATEWAY_HANDSHAKE.md` |
 | FlyWow 抽取或独立仓库 | `docs/FLYWOW_EXTRACTION_POLICY.md` |
 
 需要扩大阅读范围时，由当前调用链、错误或设计问题决定。大型实操只读当前阶段；不要因为文件名中有 Lesson 就把全文当作每次任务的前置上下文。

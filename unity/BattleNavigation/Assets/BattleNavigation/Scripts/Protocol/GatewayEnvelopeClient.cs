@@ -10,6 +10,7 @@ using System.Threading;
 using Battle.Navigation.V1;
 using BattleNavigation.Protocol;
 using Google.Protobuf;
+using FlyWow.Gateway;
 
 namespace BattleNavigation.Client
 {
@@ -36,12 +37,37 @@ namespace BattleNavigation.Client
                 stream = client.GetStream();
                 stream.ReadTimeout = 3000;
                 stream.WriteTimeout = 3000;
+                // SDK封装连接握手；业务调用方不接触密钥、挑战或HMAC。
+                // 只有服务端证明验证通过，构造才成功返回；失败统一关闭当前Socket。
+                using (var handshake = new HandshakeClient())
+                {
+                    WriteHandshake(handshake.Begin());
+                    WriteHandshake(handshake.Respond(ReadHandshake(99)));
+                    handshake.Complete(ReadHandshake(33));
+                }
             }
             catch
             {
                 client.Dispose();
                 throw;
             }
+        }
+
+        /// <summary>发送SDK生成的握手消息；复用现有长度帧，不进入业务Envelope。</summary>
+        private void WriteHandshake(byte[] payload)
+        {
+            var frame = LengthFrame.Pack(payload);
+            stream.Write(frame, 0, frame.Length);
+        }
+
+        /// <summary>先验证握手阶段的精确长度，再分配读取；错误消息抛异常并由构造关闭。</summary>
+        /// <param name="expectedSize">当前阶段固定的字节数，99或33。</param>
+        private byte[] ReadHandshake(int expectedSize)
+        {
+            var header = ReadExact(LengthFrame.HeaderSize);
+            var size = (header[0] << 8) | header[1];
+            if (size != expectedSize) throw new InvalidDataException("HANDSHAKE_FRAME");
+            return ReadExact(size);
         }
 
         /// <summary>发送一个请求并验证响应版本、命令和请求身份。</summary>

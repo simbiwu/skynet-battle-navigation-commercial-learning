@@ -1,0 +1,7 @@
+<!-- 职责：在SDK导入前固定互通工具生成物路径，不污染Unity源码目录。 -->
+<Project>
+  <PropertyGroup>
+    <BaseIntermediateOutputPath>$(MSBuildThisFileDirectory)../../../.downloads/gateway-interop/obj/</BaseIntermediateOutputPath>
+    <MSBuildProjectExtensionsPath>$(BaseIntermediateOutputPath)</MSBuildProjectExtensionsPath>
+  </PropertyGroup>
+</Project>
