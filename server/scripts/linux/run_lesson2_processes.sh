@@ -4,6 +4,11 @@
 # 输入/输出：动作 -> 两个 Skynet 进程、run/lesson2/*.pid、logs/lesson2/*.log。
 # 生命周期：脚本短命；两个 Skynet 进程分别拥有 Service、cluster 和业务状态。
 # 不负责：不构建 Native、不生成协议、不复制 FlyWow、不替代生产编排器。
+#
+# 入口合同：
+#   start/stop/restart/status 默认选择 Gateway 和 Battle；--gateway、--battle 可缩小范围。
+#   启动时 Battle 先 READY，Gateway 再启动并连接 Battle；停止时 Gateway 先停。
+#   每个角色拥有独立 PID 文件和日志文件，脚本只操作本脚本创建的进程。
 set -euo pipefail
 # -e：任一步失败立即退出，避免只启动一个进程却报告成功。
 # -u：未定义变量立即失败，尽早发现变量名和配置错误。
@@ -20,6 +25,8 @@ GATEWAY_LOG="$LOG_DIR/gateway.log"
 BATTLE_LOG="$LOG_DIR/battle.log"
 STARTUP_TIMEOUT_SEC=20
 FORCE_STOP=0
+PROCESS_GATEWAY=0
+PROCESS_BATTLE=0
 ACTION="start"
 FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
 
@@ -34,6 +41,8 @@ parse_args() {
     while [[ $# -gt 0 ]]; do
         case "$1" in
             --force) FORCE_STOP=1 ;;
+            --gateway) PROCESS_GATEWAY=1 ;;
+            --battle) PROCESS_BATTLE=1 ;;
             -h|--help) usage; exit 0 ;;
             *) fail "unknown argument: $1" ;;
         esac
@@ -43,15 +52,20 @@ parse_args() {
         start|stop|restart|status|doctor) ;;
         *) usage >&2; fail "unknown action: $ACTION" ;;
     esac
+    # 未指定角色时统一选择两个进程；显式角色只处理对应 PID、日志和进程。
+    if [[ "$PROCESS_GATEWAY" == "0" && "$PROCESS_BATTLE" == "0" ]]; then
+        PROCESS_GATEWAY=1
+        PROCESS_BATTLE=1
+    fi
 }
 
 # 显示动作和覆盖项；不改变运行状态。
 usage() {
     cat <<'USAGE'
 Usage:
-  ./scripts/linux/run_lesson2_processes.sh start
-  ./scripts/linux/run_lesson2_processes.sh stop [--force]
-  ./scripts/linux/run_lesson2_processes.sh restart
+  ./scripts/linux/run_lesson2_processes.sh start [--gateway] [--battle]
+  ./scripts/linux/run_lesson2_processes.sh stop [--gateway] [--battle] [--force]
+  ./scripts/linux/run_lesson2_processes.sh restart [--gateway] [--battle]
   ./scripts/linux/run_lesson2_processes.sh status
   ./scripts/linux/run_lesson2_processes.sh doctor
 
@@ -141,30 +155,43 @@ stop_one() {
     if ((FORCE_STOP)); then kill -KILL "$pid"; rm -f "$pid_file"; log "force-stopped role=$role pid=$pid"; else fail "$role did not stop; inspect logs before stop --force"; fi
 }
 
-# Battle 先 ready，Gateway Proxy 再做远程 ready 检查，最后开放业务端口。
+# 按角色选择启动顺序：Battle 先 READY，Gateway 再连接 Battle；单角色模式只启动所选进程。
 start_all() {
-    doctor; ensure_dirs
-    start_one battle skynet_battle.lua "$BATTLE_PID_FILE" "$BATTLE_LOG"
-    if ! wait_ready battle "$BATTLE_PID_FILE" skynet_battle.lua "$BATTLE_LOG" LESSON2_BATTLE_PROCESS_READY; then
-        stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"
-        fail "battle process did not become ready"
+    doctor
+    ensure_dirs
+    if ((PROCESS_BATTLE)); then
+        start_one battle skynet_battle.lua "$BATTLE_PID_FILE" "$BATTLE_LOG"
+        if ! wait_ready battle "$BATTLE_PID_FILE" skynet_battle.lua "$BATTLE_LOG" LESSON2_BATTLE_PROCESS_READY; then
+            stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"
+            fail "battle process did not become ready"
+        fi
     fi
-    start_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE" "$GATEWAY_LOG"
-    if ! wait_ready gateway "$GATEWAY_PID_FILE" skynet_gateway.lua "$GATEWAY_LOG" LESSON2_GATEWAY_PROCESS_READY; then
-        stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"
-        stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"
-        fail "gateway process did not become ready"
+    if ((PROCESS_GATEWAY)); then
+        start_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE" "$GATEWAY_LOG"
+        if ! wait_ready gateway "$GATEWAY_PID_FILE" skynet_gateway.lua "$GATEWAY_LOG" LESSON2_GATEWAY_PROCESS_READY; then
+            stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"
+            if ((PROCESS_BATTLE)); then stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"; fi
+            fail "gateway process did not become ready"
+        fi
     fi
-    log "START_OK"
+    log "START_OK gateway=$PROCESS_GATEWAY battle=$PROCESS_BATTLE"
 }
 
-# 先停止 Gateway，防止新请求进入已关闭的 Battle Process。
-stop_all() { stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"; stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"; log "STOP_OK"; }
+# 按角色停止；Gateway 先停，避免新请求进入正在关闭的 Battle。
+stop_all() {
+    if ((PROCESS_GATEWAY)); then stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"; fi
+    if ((PROCESS_BATTLE)); then stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"; fi
+    log "STOP_OK gateway=$PROCESS_GATEWAY battle=$PROCESS_BATTLE"
+}
 
+# 按角色报告状态，不修改进程。
 status_all() {
-    local pid
-    if pid="$(read_owned_pid "$BATTLE_PID_FILE" skynet_battle.lua)"; then log "battle RUNNING pid=$pid log=$BATTLE_LOG"; else log "battle STOPPED"; fi
-    if pid="$(read_owned_pid "$GATEWAY_PID_FILE" skynet_gateway.lua)"; then log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"; else log "gateway STOPPED"; fi
+    if ((PROCESS_BATTLE)); then
+        if pid="$(read_owned_pid "$BATTLE_PID_FILE" skynet_battle.lua)"; then log "battle RUNNING pid=$pid log=$BATTLE_LOG"; else log "battle STOPPED"; fi
+    fi
+    if ((PROCESS_GATEWAY)); then
+        if pid="$(read_owned_pid "$GATEWAY_PID_FILE" skynet_gateway.lua)"; then log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"; else log "gateway STOPPED"; fi
+    fi
 }
 
 # 解析入口参数并执行一个完整动作；参数来自命令行，任何未知动作或失败都会以非零状态退出。

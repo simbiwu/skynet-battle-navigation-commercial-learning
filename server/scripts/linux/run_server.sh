@@ -4,6 +4,14 @@
 # 输入/输出：源码、固定版本依赖、shared/ 已发布资产 -> 可运行 Skynet 进程及 logs/run 状态文件。
 # 生命周期：控制脚本短生命周期；单进程 PID 写入 run/server.pid，debug 由双进程脚本管理。
 # 不负责：不生成 Unity BMAP、不实现 FlyWow 协议生成器、不读取另一台开发机目录、不静默替换版本不匹配的 third_party 源码、不修改系统防火墙。
+#
+# 入口合同：
+#   start/restart/debug/stop 默认作用于 Gateway 和 Battle 两个 Lesson 2 进程；
+#   传入 --gateway 或 --battle 后，只作用于显式选择的进程。进程顺序、READY 等待、
+#   PID 文件和日志由 run_lesson2_processes.sh 统一管理。
+#   debug 会先准备固定依赖和 LuaPanda，再启动选定进程；--gdb 只允许选择一个进程，
+#   因为一个交互式 GDB 不能同时控制两个独立的 Skynet OS 进程。
+#   所有相对路径都相对 SERVER_ROOT（本脚本所在 server/scripts/linux 的上上级目录）。
 set -euo pipefail
 # -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
 # -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
@@ -37,16 +45,20 @@ ACTION="start"
 FOREGROUND=0
 REBUILD=0
 FORCE_STOP=0
+DEBUG_GDB=0
+# 进程选择：不指定时由 start/debug/restart/stop 默认处理 Gateway 和 Battle。
+PROCESS_GATEWAY=0
+PROCESS_BATTLE=0
 
 # 打印所有动作和参数；不读取状态、不修改文件。
 usage() {
     cat <<'USAGE'
 Usage:
-  ./scripts/linux/run_server.sh [start] [--rebuild] [--foreground]
+  ./scripts/linux/run_server.sh start [--gateway] [--battle] [--rebuild]
   ./scripts/linux/run_server.sh foreground [--rebuild]
-  ./scripts/linux/run_server.sh debug
-  ./scripts/linux/run_server.sh stop [--force]
-  ./scripts/linux/run_server.sh restart [--rebuild] [--foreground]
+  ./scripts/linux/run_server.sh debug [--gateway] [--battle] [--gdb]
+  ./scripts/linux/run_server.sh stop [--gateway] [--battle] [--force]
+  ./scripts/linux/run_server.sh restart [--gateway] [--battle] [--rebuild]
   ./scripts/linux/run_server.sh status
   ./scripts/linux/run_server.sh doctor
   ./scripts/linux/run_server.sh prepare
@@ -54,11 +66,11 @@ Usage:
   ./scripts/linux/run_server.sh rebuild
 
 Actions:
-  start       自动检查/修复项目依赖和缺失构建产物，后台启动并等待 NAV_SERVER_READY。
+  start       默认启动 Gateway 和 Battle；指定进程参数时只启动所选进程。
   foreground  与 start 相同，但以前台方式 exec Skynet，适合 gdb/LuaPanda/直接看日志。
-  debug       启用 LuaPanda，后台启动 Lesson 2 Gateway/Battle 双进程。
-  stop        校验 PID 确实属于本仓库 Skynet 后发送 SIGTERM，并等待退出。
-  restart     stop + start；可与 --rebuild 组合。
+  debug       默认启用 LuaPanda 并启动 Gateway/Battle；可用 --gdb 调试单个选定进程。
+  stop        默认停止 Gateway 和 Battle；指定进程参数时只停止所选进程。
+  restart     按进程选择执行 stop + start；可与 --rebuild 组合。
   status      显示 PID、运行状态和当前日志。
 doctor      只检查系统工具、固定依赖、构建产物和已发布共享资产，不修改文件。
   prepare     修复/补齐固定版本项目依赖和生成物，并做增量 Native 构建。
@@ -69,6 +81,9 @@ Options:
   --rebuild      start/restart/foreground 前执行完整 rebuild。
   --foreground   start/restart 使用前台模式。
   --force        stop 超时后才允许 SIGKILL；默认不会自动 kill -9。
+  --gateway      选择 Gateway 进程；未指定 Gateway/Battle 时默认两者都选。
+  --battle       选择 Battle 进程；未指定 Gateway/Battle 时默认两者都选。
+  --gdb          debug 时对唯一选定进程使用 GDB；不能同时选择两个进程。
 
 Environment:
   BUILD_TYPE=RelWithDebInfo|Debug|Release
@@ -97,9 +112,16 @@ parse_args() {
     fi
     while [[ $# -gt 0 ]]; do
         case "$1" in
+            --start) ACTION=start ;;
+            --debug) ACTION=debug ;;
+            --stop) ACTION=stop ;;
+            --restart) ACTION=restart ;;
             --rebuild) REBUILD=1 ;;
             --foreground) FOREGROUND=1 ;;
             --force) FORCE_STOP=1 ;;
+            --gateway) PROCESS_GATEWAY=1 ;;
+            --battle) PROCESS_BATTLE=1 ;;
+            --gdb) DEBUG_GDB=1 ;;
             -h|--help) usage; exit 0 ;;
             *) fail "unknown argument: $1" ;;
         esac
@@ -111,6 +133,18 @@ parse_args() {
     esac
     if [[ "$ACTION" == "foreground" ]]; then
         FOREGROUND=1
+    fi
+    if [[ "$ACTION" == "debug" && "$DEBUG_GDB" == "1" &&
+          "$PROCESS_GATEWAY" == "1" && "$PROCESS_BATTLE" == "1" ]]; then
+        usage >&2
+        fail "--gdb 只能与一个进程选择参数一起使用"
+    fi
+    if [[ "$ACTION" == "start" || "$ACTION" == "debug" || "$ACTION" == "restart" ||
+          "$ACTION" == "stop" ]]; then
+        if [[ "$PROCESS_GATEWAY" == "0" && "$PROCESS_BATTLE" == "0" ]]; then
+            PROCESS_GATEWAY=1
+            PROCESS_BATTLE=1
+        fi
     fi
 }
 
@@ -451,10 +485,12 @@ start_foreground() {
 
 # 停止 debug 动作启动的 Lesson 2 Gateway/Battle 双进程；无 PID 时安全返回。
 stop_lesson2_processes() {
-    if ((FORCE_STOP)); then
-        "$SCRIPT_DIR/run_lesson2_processes.sh" stop --force
+    if ((PROCESS_GATEWAY)) && ((PROCESS_BATTLE)); then
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle; fi
+    elif ((PROCESS_GATEWAY)); then
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway; fi
     else
-        "$SCRIPT_DIR/run_lesson2_processes.sh" stop
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --battle --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --battle; fi
     fi
 }
 
@@ -517,6 +553,17 @@ status_server() {
     fi
 }
 
+# 启动选定的 Lesson 2 进程；子脚本负责顺序、READY 和 PID 管理。
+start_selected_processes() {
+    if ((PROCESS_GATEWAY)) && ((PROCESS_BATTLE)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway --battle
+    elif ((PROCESS_GATEWAY)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway
+    else
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --battle
+    fi
+}
+
 # 根据动作调用唯一的生命周期入口，并在结束时返回准确退出码。
 # debug 准备固定版本调试依赖，并让两个 Skynet 进程继承 LuaPanda 环境变量。
 start_debug() {
@@ -531,7 +578,21 @@ start_debug() {
     fi
     export LUA_PANDA_ENABLE=1
     export LUA_PANDA_HOST="${LUA_PANDA_HOST:-127.0.0.1}"
-    log "starting Lesson 2 Gateway/Battle with LuaPanda; start VS Code debugger first"
+    if ((DEBUG_GDB)); then
+        command -v gdb >/dev/null 2>&1 || fail "debug --gdb requires gdb"
+        local gdb_config
+        if ((PROCESS_GATEWAY)); then
+            gdb_config="$SERVER_ROOT/config/skynet_gateway.lua"
+        else
+            gdb_config="$SERVER_ROOT/config/skynet_battle.lua"
+        fi
+        log "starting selected process under GDB: $gdb_config"
+        cd "$SERVER_ROOT"
+        flock -u 9 || true
+        exec 9>&-
+        exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" --args "$SKYNET_BIN" "$gdb_config"
+    fi
+    log "starting selected Lesson 2 processes with LuaPanda; start VS Code debugger first"
     flock -u 9
     exec 9>&-
     LUA_PANDA_ENABLE=1 LUA_PANDA_HOST="$LUA_PANDA_HOST" \
@@ -577,31 +638,19 @@ main() {
         stop)
             stop_server
             ;;
-        start|foreground)
-            if ((REBUILD)); then
-                rebuild_all
-            else
-                prepare_runtime
-            fi
-            if ((FOREGROUND)); then
-                start_foreground
-            else
-                start_background
-            fi
-            ;;
+        start)
+            if ((REBUILD)); then rebuild_all; else prepare_runtime; fi
+            start_selected_processes
+        ;;
+        foreground)
+            if ((REBUILD)); then rebuild_all; else prepare_runtime; fi
+            start_foreground
+        ;;
         restart)
             stop_server
-            if ((REBUILD)); then
-                rebuild_all
-            else
-                prepare_runtime
-            fi
-            if ((FOREGROUND)); then
-                start_foreground
-            else
-                start_background
-            fi
-            ;;
+            if ((REBUILD)); then rebuild_all; else prepare_runtime; fi
+            start_selected_processes
+        ;;
     esac
 }
 
