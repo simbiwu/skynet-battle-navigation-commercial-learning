@@ -5,7 +5,7 @@
 -- 不负责：不保存连接、不解析协议、不加载地图、不调用 Battle 业务实现。
 
 local skynet = require "skynet"
-local process = require "config.gateway"
+local config = require "config.gateway"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 先启动 Proxy 并完成远程 ready，再让 FlyWow 绑定端口；端口可用意味着两条进程链路都已就绪。
@@ -19,14 +19,14 @@ skynet.start(function()
     assert(skynet.call(proxy_service, "lua", "bind_gateway", { gateway_service = gateway_service }))
     local gateway = assert(skynet.call(gateway_service, "lua", "start", {
         handler_service = proxy_service,
-        host = process.gateway.host,
-        port = process.gateway.port,
-        transport = process.gateway.transport,
+        host = config.host,
+        port = config.port,
+        transport = config.transport,
     }))
 
     skynet.error("LESSON2_GATEWAY_PROCESS_READY gateway=", skynet.address(gateway_service),
                  " listen=", gateway.address, ":", gateway.port,
                  " transport=", gateway.transport,
-                 " remote=", process.cluster.remote_node)
+                 " remote=", config.cluster.remote_node)
     skynet.exit()
 end)
