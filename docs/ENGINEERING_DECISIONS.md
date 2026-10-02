@@ -553,21 +553,17 @@ Battle 是玩家归属、战斗路由、命令可靠性和战斗状态的权威 
 
 第二课 `RunAutoBattle` 的客户端仍等待完整模拟和 Replay 结果；Gateway/Battle 间使用异步 `cluster.send` + 反向 `cluster.send`，不使用 `cluster.call` 承载业务请求。
 
-## D039 - Gateway 读取投递与响应发送独立运行
+## D039 - Gateway 只负责连接、协议与转发
 
-同一连接按收到的帧顺序读取、校验、解码并通过本地 `skynet.send` 投递到显式注入的 `handler_service`。投递完成后立即读取下一帧；不使用 `skynet.call` 等待业务结果。结果通过独立的 `gateway_response` 消息进入 Gateway。Gateway 只保存连接与网络资源状态，不建立业务 request/token 等待表，不处理业务超时、Cluster 节点或玩家路由。
+FlyWow Gateway 按连接顺序读取、校验、解码并通过本地 skynet.send 投递给显式 handler；投递完成后立即读取下一帧，不等待业务结果。Gateway 只保存连接、握手和网络资源状态，不保存业务请求，不建立 pending 或 route_token，不处理业务超时，不解释业务错误。
 
-内部响应携带 `gateway_epoch`、`connection_id`、`command_id`、`request_id` 和 `response`。Gateway 只允许配置的 handler 发送响应，拒绝旧实例或已关闭连接的结果；根据生成 registry 中的响应类型编码，按原请求编号发给客户端。实例内连接编号不复用、耗尽后拒绝接入；实例身份隔离重启前的结果。fd 不进入业务合同。
+Gateway 与 Battle 之间统一使用 send_data。消息包含 gateway_epoch、connection_id、command_id 和已解码的 data。Battle 是否返回、何时返回以及是否主动推送由 Battle 自己决定。Battle 使用 close 通知 Gateway 关闭指定连接。connection_id 为 0 时，Gateway 向当前所有已握手且有效的连接广播。
 
-现有 `.proto` 与协议版本3保持不变。请求编号保留既有 uint64 位模式，编号0保留给已登记响应类型的主动消息；高位在 pinned Lua 中表现为负整数，也必须原样回传，不能按正负过滤，不据此宣称已支持任意独立推送类型。A/B 业务结果可以乱序，业务顺序由 Battle 负责，客户端按请求编号匹配。当前 Unity 使用单调用线程的短连接，继续兼容，不把它包装成已支持单连接并发的客户端。
+请求响应、单向请求和服务端主动下发共用同一条 send_data 数据路径。Gateway 不区分响应和主动下发，只根据 command_id 查找 response 类型、编码并写入连接。
 
-课程 Proxy 保留最多64项的项目返回路由，10秒过期；记录返回上下文，不保存协程/result，不调用 wait/wakeup。容量、远程发送、结果结构或超时失败由项目映射为已有 QueryCell/RunAutoBattle 业务错误响应。失败不关闭健康连接；断线删除对应路由，重复和迟到回包丢弃。Battle 已接纳的操作不因断线自动取消。
+客户端 Envelope 只包含 protocol_version、command 和 body，不包含 request_id。请求关联由服务端内部连接身份处理，不进入客户端协议。跨 Gateway 节点时必须保留 Gateway 实例身份，防止旧连接消息误投到新实例。
 
-FlyWow 的 `flywow.gateway.endpoint` 是可选薄接入模块：构造响应上下文、携带内部返回信息并单向回复；不接管 dispatch、不 fork 业务任务、不依赖 Cluster。跨进程部署由项目适配器负责。网络侧保留连接/帧/读超时/写缓冲/单连接及实例入站速率限制；速率限制不是对任意下游 Skynet mailbox 的硬容量承诺，handler 必须快速消费并在项目层限制业务在途数量。
-
-业务主动断开使用 `context:close()` / `gateway_close`，仅携带实例与连接身份。Gateway 核对 handler 来源后先摘除连接、发出一次 disconnect，再关闭 transport；重复或失效命令忽略。跨进程通过项目 Proxy 转发，composition root 明确绑定 Gateway handle，关闭不依赖尚有效的请求 token。断线通知当前只到 handler/Proxy，不自动继续传给 Battle。响应后关闭不承诺客户端收到最后响应，业务可靠性仍归项目。
-
-发布时先形成已验证的 FlyWow 提交，再更新课程 submodule gitlink。未获 commit 授权时使用显式 `FLYWOW_ROOT` 联调，不能把未修改的 gitlink 宣称为已经发布；旧同步 Gateway API 必须连同调用方一起迁移。回滚也需要一起回滚框架、Server handler 和配置。
+网络侧保留连接/帧/握手/心跳/写入失败处理和入站速率限制；这些是传输保护，不是业务可靠性。Battle 自己负责业务超时、重试、顺序、重复命令和业务结果。
 
 ## D040 - Gateway 内置无登录依赖的连接握手
 

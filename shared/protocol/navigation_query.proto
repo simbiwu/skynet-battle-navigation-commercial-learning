@@ -6,11 +6,12 @@
 // 
 // 解析规则：
 // 1. 每个业务命令在 CommandId 中定义一次，枚举名使用全大写下划线，数值是稳定的 Envelope.command。
-// 2. 枚举名按 QUERY_CELL -> QueryCell 转换为消息前缀；生成器要求存在 QueryCellRequest。
-// 3. 如果存在同名前缀的 QueryCellResponse，命令是请求-响应；没有 Response 时命令是单向请求。
-// 4. 单向命令只定义 XxxRequest，不定义 XxxResponse；Server Handler 处理后不发送业务响应。
+// 2. 枚举名按 QUERY_CELL -> QueryCell 转换为消息前缀；生成器按消息是否存在建立映射。
+// 3. XxxRequest 与 XxxResponse 都存在时是请求-响应；只有 Request 时是单向请求；只有 Response 时是服务端主动下发。
+// 4. 主动下发命令没有客户端 Request，Battle 通过 command_id 和目标连接发送 Response。
 // 5. 本文件不使用 service/rpc、自定义 option 或注释 command_id；Python 只按上述固定规则生成 Server registry。
 // 6. Unity 通过 protoc 生成消息和 CommandId；Server 由同一协议生成 Lua registry；两端不得手写另一份命令映射。
+// 7. Envelope 只包含 protocol_version、command 和 body；请求响应关联由 Server 连接身份管理，不进入客户端协议。
 syntax = "proto3";
 
 package battle.navigation.v1;
@@ -23,9 +24,8 @@ enum CommandId {
 
 message Envelope {
   uint32 protocol_version = 1; // 线协议兼容边界版本。
-  uint32 command = 2;          // CommandId 的数值；body 类型由命令对应的 Request 决定。
-  uint64 request_id = 3;       // 请求/响应关联 ID；单向请求仍可使用发送方生成的 ID。
-  bytes body = 4;              // command 对应消息的 Protobuf bytes。
+  uint32 command = 2;          // CommandId 的数值；body 类型由消息方向和命令定义决定。
+  bytes body = 3;              // command 对应消息的 Protobuf bytes。
 }
 
 message WorldPosition {

@@ -20,11 +20,10 @@ function M.load_descriptor(path)
 end
 
 -- 将 Envelope 元数据和已编码 body 组合成 bytes；参数均归调用方，返回新字符串。
-function M.encode_envelope(command, request_id, body, version)
+function M.encode_envelope(command, body, version)
     return assert(pb.encode(M.ENVELOPE, {
         protocol_version = version,
         command = command,
-        request_id = request_id,
         body = body,
     }))
 end

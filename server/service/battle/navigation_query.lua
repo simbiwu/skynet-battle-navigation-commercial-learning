@@ -4,73 +4,33 @@
 --- 生命周期：进程启动时创建一次；启动阶段加载 BMAP，运行期只读查询。
 --- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
 local skynet = require "skynet"
-local endpoint = require "gateway.endpoint"
 local config = require "config.battle"
 local query_logic = require "battle.navigation.query_logic"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 --- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
---- 查询 handler 不 yield；外部 Gateway send 用 endpoint 回复，Battle 内部 call 用 retpack 返回。
+--- 查询 handler 不 yield；统一由 Battle Dispatch 负责向 Gateway 发送结果。
 --- skynet.start 回调无参数；它拥有本 Service 的启动顺序，完成后不主动退出。
 skynet.start(function()
     --- Query 是独立 Lua State，使用与 Gateway 不同的 LuaPanda port。
     luapanda_debug.start(8819)
     query_logic.start(config)
 
-    --- _session/_source 是 Skynet 消息元数据；command 是 dispatch 名称；payload 是 Gateway 已解码的请求上下文。
-    --- session integer 0表示 Gateway 的单向 send；非0表示本地 call。
-    --- source ServiceHandle Gateway 或 BattleDispatch 的发送方 handle。
-    --- command "ready"|"gateway_dispatch"|"gateway_disconnect"
-    --- payload GatewayDispatch|nil 已解码的 Gateway 请求上下文。
-    ---@param session integer 0表示 Gateway 的单向 send；非0表示本地 call。
-    ---@param source ServiceHandle Gateway 或 BattleDispatch 的发送方 handle。
-    ---@param command "ready"|"gateway_dispatch"|"gateway_disconnect"
-    ---@param payload GatewayDispatch|nil 已解码的 Gateway 请求上下文。
-    skynet.dispatch("lua", function(session, source, command, payload)
-        -- 参数/状态检查：先处理 ready 和断线通知，再进入业务分发。
+    --- 本 Service 只接受 Battle Dispatch 的本地查询调用。
+    skynet.dispatch("lua", function(_session, _source, command, payload)
         if command == "ready" then
-            --- 只有完成 query_logic.start 并注册 dispatch 后，main 才会收到 ready。
             skynet.retpack(true)
             return
         end
-        if command == "gateway_disconnect" then
-            return
-        end
 
-        assert(
-            command == "gateway_dispatch",
-            "navigation_query only accepts gateway_dispatch"
-        )
-        assert(type(payload) == "table", "gateway dispatch payload is required")
-        assert(
-            payload.command == "QueryCell",
-            "unsupported navigation command: " .. tostring(payload.command)
-        )
+        assert(command == "query_cell",
+            "navigation_query only accepts query_cell")
+        assert(type(payload) == "table", "query payload is required")
 
-        -- 核心计算：执行同步 QueryCell 业务查询。
         local response = query_logic.query(
             assert(payload.request, "query request is required")
         )
-        --- 业务查询只产生响应 table；接入分支处理返回路径，不接触 Socket、frame 或 Protobuf bytes。
-        -- 消息发送：按调用来源选择 Gateway 响应或本地 call 返回。
-        if session == 0 then
-            --- 直接接入 FlyWow 的单向消息：少量接入代码完成独立响应。
-            local context = endpoint.new(
-                {
-                    gateway_service = source,
-                    request = payload,
-                }
-            )
-            assert(context:reply(response))
-        else
-            --- Battle Dispatch 的内部本地查询合同保留，不涉及客户端读取等待。
-            skynet.retpack(
-                {
-                    ok = true,
-                    response = response,
-                }
-            )
-        end
+        skynet.retpack(response)
     end)
 
     -- 收尾：Query Service 初始化完成后发布 READY 日志。

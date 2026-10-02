@@ -1,6 +1,6 @@
 --- 职责：把 Battle Process 的 Gateway 请求分给地图查询或自动战斗 Manager。
 --- 边界：Server RPC Adapter；不持有 fd、frame、descriptor 或 Battle Context。
---- 输入/输出：已解码 gateway_dispatch message -> cluster.send 的单向处理；结果另发 battle_result。
+--- 输入/输出：已解码 send_data message -> 业务处理；结果仍通过统一 send_data 返回。
 --- 生命周期：battle_main 注入两个 Service handle 后注册为 cluster 入口。
 --- 不负责：不实现寻路、AI 或战斗结算，不接受客户端 Snapshot。
 local cluster = require "skynet.cluster"
@@ -146,76 +146,88 @@ local function dispatch_gateway(payload)
     assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
     assert(type(payload) == "table", "gateway payload must be table")
 
-    -- 核心计算：Command 名和数值必须同时匹配，避免错误路由。
-    if payload.command == "QueryCell" and payload.command_id == 1001 then
-        return skynet.call(query_service, "lua", "gateway_dispatch", payload)
+    -- 核心计算：CommandId 选择唯一业务处理器，避免 Gateway 参与业务路由。
+    if payload.command_id == 1001 then
+        return skynet.call(query_service, "lua", "query_cell", { request = payload.data })
     end
 
-    if payload.command == "RunAutoBattle" and payload.command_id == 1002 then
-        return run_auto_battle(payload.request)
+    if payload.command_id == 1002 then
+        return run_auto_battle(payload.data)
     end
 
-    return
-    {
-        ok = false,
-        error =
-        {
-            code = "UNKNOWN_COMMAND",
-            message = "command/id mismatch",
-        },
-    }
+    skynet.error(
+        "Unknown Gateway command id=",
+        tostring(payload.command_id)
+    )
+    return nil
 end
 
 
---- 执行业务分发后单向回推结果；transport token 只关联 Gateway 请求，不成为 Battle 身份。
---- payload：Gateway Proxy 转发的已解码请求；Battle 结果送往配置的 Gateway Proxy；可能 yield。
---- 失败：请求/业务错误转成受控错误 record；回推失败由项目 Proxy 路由超时收敛；Gateway 不等待业务。
----@param payload GatewayDispatch 包含 route_token 的跨进程请求。
----@return nil 业务结果通过 Cluster battle_result 单向回推，不使用 retpack。
-local function forward_result(payload)
-    -- 参数/状态检查：路由 token 是 Battle 回推 Gateway 的唯一关联值。
-    assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
+--- 执行业务分发；有返回数据时通过统一 send_data 发回 Gateway。
+--- payload：Gateway 转发的连接身份、command_id 和已解码 data；可能 yield。
+local function forward_data(payload)
+    assert(query_service ~= nil and battle_mgr ~= nil,
+        "battle_dispatch is not ready")
     assert(
-        type(payload) == "table" and
-        type(payload.route_token) == "string" and
-        #payload.route_token > 0 and
-        #payload.route_token <= 128,
-        "invalid gateway route token"
+        type(payload) == "table" and type(payload.data) == "table",
+        "gateway data is required"
     )
+    assert(type(payload.gateway_epoch) == "string", "gateway_epoch is required")
+    assert(math.type(payload.connection_id) == "integer" and
+        payload.connection_id >= 0,
+        "connection_id must be non-negative")
+    assert(math.type(payload.command_id) == "integer" and
+        payload.command_id > 0,
+        "command_id must be positive")
 
-    -- 核心计算：执行 Query 或 BattleMgr，统一收敛异常结果。
-    local route_token = payload.route_token
-    local call_ok, result = pcall(dispatch_gateway, payload)
+    local call_ok, response = pcall(dispatch_gateway, payload)
     if not call_ok then
-        skynet.error("Battle gateway dispatch failed: ", tostring(result))
-        result =
-        {
-            ok = false,
-            error =
-            {
-                code = "BATTLE_FAILED",
-                message = "battle request failed",
-            },
-        }
+        skynet.error("Battle gateway dispatch failed: ", tostring(response))
+        return
     end
 
-    -- 持久化/消息发送：把结果按 route token 回推 Gateway Proxy。
+    if response == nil then
+        return
+    end
+
     local send_ok, send_error = pcall(
         cluster.send,
         process.cluster.gateway_node,
         "@" .. process.cluster.gateway_proxy_service,
-        "battle_result",
-        route_token,
-        result
+        "send_data",
+        {
+            gateway_epoch = payload.gateway_epoch,
+            connection_id = payload.connection_id,
+            command_id = payload.command_id,
+            data = response,
+        }
     )
     if not send_ok then
-        skynet.error("Battle result forward failed: ", tostring(send_error))
+        skynet.error("Battle gateway send_data failed: ", tostring(send_error))
     end
 end
 
+--- 通知 Gateway 关闭指定连接；只传递连接身份，不保存或等待业务状态。
+--- data.connection_id 必须大于 0；广播关闭不属于本接口。
+local function close_connection(data)
+    assert(type(data) == "table", "gateway close data is required")
+    assert(type(data.gateway_epoch) == "string", "gateway_epoch is required")
+    assert(math.type(data.connection_id) == "integer" and
+        data.connection_id > 0,
+        "connection_id must be positive for close")
 
---- 固定签名的 Service 分发；Cluster data-plane 用 send，结果另发 battle_result 消息。
---- configure/ready 使用本地 call；gateway_dispatch 单向接收且会 yield，不 retpack。
+    local ok, err = pcall(
+        cluster.send,
+        process.cluster.gateway_node,
+        "@" .. process.cluster.gateway_proxy_service,
+        "close",
+        data
+    )
+    if not ok then
+        skynet.error("Battle gateway close failed: ", tostring(err))
+    end
+end
+
 skynet.start(function()
     luapanda_debug.start(8821)
     skynet.dispatch("lua", function(_session, _source, command, payload)
@@ -223,8 +235,10 @@ skynet.start(function()
             skynet.retpack(configure(payload))
         elseif command == "ready" then
             skynet.retpack(query_service ~= nil and battle_mgr ~= nil)
-        elseif command == "gateway_dispatch" then
-            forward_result(payload)
+        elseif command == "send_data" then
+            forward_data(payload)
+        elseif command == "close" then
+            close_connection(payload)
         else
             error("unknown battle_dispatch command: " .. tostring(command))
         end
