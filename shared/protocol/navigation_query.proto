@@ -1,16 +1,30 @@
-// 职责：定义 Unity 与 Skynet 之间 QueryCell、RunAutoBattle 和 Envelope 合同。
-// 边界：跨 Unity Client Runtime、FlyWow Gateway 和 Server Battle Process 的消息合同。
-// 输入/输出：QueryCell 静态查询或固定场景 RunAutoBattle -> 强类型响应。
-// 生命周期：作为协议唯一源随 Git 发布；生成物必须与本文件处于同一提交。
-// 不负责：不决定地图通行、战斗结果或客户端连接生命周期。
+// 职责：定义 Unity、Gateway 与 Battle 共用的消息和命令编号合同。
+// 边界：跨 Unity Client Runtime、FlyWow Gateway 和 Server Battle Process 的共享协议源。
+// 输入/输出：CommandId + XxxRequest + 可选 XxxResponse -> 统一 Envelope 中的业务消息。
+// 生命周期：作为协议唯一源随 Git 发布；Server descriptor、Lua registry 和 Unity C# 必须由同一版本生成。
+// 不负责：不定义 gRPC/RPC 服务、不规定业务是否必须回复、不决定地图通行、战斗结果或连接生命周期。
+// 
+// 解析规则：
+// 1. 每个业务命令在 CommandId 中定义一次，枚举名使用全大写下划线，数值是稳定的 Envelope.command。
+// 2. 枚举名按 QUERY_CELL -> QueryCell 转换为消息前缀；生成器要求存在 QueryCellRequest。
+// 3. 如果存在同名前缀的 QueryCellResponse，命令是请求-响应；没有 Response 时命令是单向请求。
+// 4. 单向命令只定义 XxxRequest，不定义 XxxResponse；Server Handler 处理后不发送业务响应。
+// 5. 本文件不使用 service/rpc、自定义 option 或注释 command_id；Python 只按上述固定规则生成 Server registry。
+// 6. Unity 通过 protoc 生成消息和 CommandId；Server 由同一协议生成 Lua registry；两端不得手写另一份命令映射。
 syntax = "proto3";
 
 package battle.navigation.v1;
 
+enum CommandId {
+  COMMAND_UNSPECIFIED = 0;
+  QUERY_CELL = 1001;
+  RUN_AUTO_BATTLE = 1002;
+}
+
 message Envelope {
   uint32 protocol_version = 1; // 线协议兼容边界版本。
-  uint32 command = 2;          // body 的业务消息类型；QueryCell=1001，RunAutoBattle=1002。
-  uint64 request_id = 3;       // 请求/响应关联 ID；服务端原样返回。
+  uint32 command = 2;          // CommandId 的数值；body 类型由命令对应的 Request 决定。
+  uint64 request_id = 3;       // 请求/响应关联 ID；单向请求仍可使用发送方生成的 ID。
   bytes body = 4;              // command 对应消息的 Protobuf bytes。
 }
 
@@ -49,18 +63,10 @@ message QueryCellResponse {
   uint32 clearance = 9;     // 到静态障碍/边界的距离，单位 Cell。
 }
 
-// Gateway registry 由构建工具读取 service/rpc 结构生成；command_id 保持与 Envelope.command 一致。
-service NavigationService {
-  // command_id=1001；请求和响应类型由 RPC 签名确定。
-  rpc QueryCell(QueryCellRequest) returns (QueryCellResponse);
-}
-
-// 客户端只选择 Server 已发布场景，不提交单位位置或战斗状态。
 message RunAutoBattleRequest {
   uint32 scenario_id = 1; // 当前仅 1001；其他值返回 BAD_SCENARIO。
 }
 
-// 已结算的 Server 事件；位置及路线点使用毫米世界坐标。
 message BattleEvent {
   uint32 seq = 1;                     // 本场从 1 连续递增。
   uint32 logic_ms = 2;                // 固定 Tick 的逻辑时间，毫秒。
@@ -78,7 +84,6 @@ message BattleEvent {
   repeated WorldPosition points = 14; // MOVE_PATH 世界路线点。
 }
 
-// 一次完整战斗结果；预期业务拒绝通过 result 返回。
 message RunAutoBattleResponse {
   enum ResultCode {
     RESULT_UNSPECIFIED = 0;
@@ -88,19 +93,15 @@ message RunAutoBattleResponse {
     BATTLE_FAILED = 4;
     RESULT_TOO_LARGE = 5;
   }
-  ResultCode result = 1;             // 稳定机器结果码。
-  string message = 2;                // 限长诊断，不返回内部堆栈。
+
+  ResultCode result = 1;              // 稳定机器结果码。
+  string message = 2;                 // 限长诊断，不返回内部堆栈。
   uint32 battle_id = 3;              // OK 时有效。
-  uint32 battle_version = 4;         // OK 时有效。
+  uint32 battle_version = 4;          // OK 时有效。
   uint32 map_id = 5;                 // OK 时有效。
   uint32 map_version = 6;            // OK 时有效。
   sint64 seed = 7;                   // OK 时有效。
-  string battle_result = 8;          // FINISHED 或 TIMEOUT。
-  uint32 end_logic_ms = 9;           // 结束逻辑时间，毫秒。
-  repeated BattleEvent events = 10; // 按 seq 排列的权威事件。
-}
-
-service BattleService {
-  // command_id=1002；"RunAutoBattle" 与 QueryCell 使用同一 Envelope。
-  rpc RunAutoBattle(RunAutoBattleRequest) returns (RunAutoBattleResponse);
+  string battle_result = 8;           // FINISHED 或 TIMEOUT。
+  uint32 end_logic_ms = 9;            // 结束逻辑时间，毫秒。
+  repeated BattleEvent events = 10;   // 按 seq 排列的权威事件。
 }

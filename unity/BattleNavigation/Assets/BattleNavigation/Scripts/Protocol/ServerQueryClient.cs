@@ -11,7 +11,7 @@ namespace BattleNavigation.Client
     /// <summary>第一课 QueryCell 调试调用面；第二课复用传输而不改变查询合同。</summary>
     public sealed class ServerQueryClient : IDisposable
     {
-        private const uint QueryCellCommand = 1001; // 与生成 registry 一致。
+        private const uint QueryCellCommand = (uint)CommandId.QueryCell; // 与生成 registry 一致。
         private readonly GatewayEnvelopeClient gateway; // 本实例独占短连接。
 
         /// <summary>连接指定 Gateway；连接失败抛异常。</summary>

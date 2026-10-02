@@ -11,7 +11,7 @@ namespace BattleNavigation.Client
     /// <summary>一次性自动战斗 RPC；业务拒绝仍返回可解析响应。</summary>
     public sealed class ServerBattleClient : IDisposable
     {
-        private const uint RunAutoBattleCommand = 1002; // 与生成 registry 一致。
+        private const uint RunAutoBattleCommand = (uint)CommandId.RunAutoBattle; // 与生成 registry 一致。
         private readonly GatewayEnvelopeClient gateway; // 当前请求独占连接。
 
         /// <summary>连接指定 Gateway；失败抛异常。</summary>

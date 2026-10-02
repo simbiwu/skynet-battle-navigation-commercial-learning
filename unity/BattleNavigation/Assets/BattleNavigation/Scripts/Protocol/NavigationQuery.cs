@@ -57,15 +57,12 @@ namespace Battle.Navigation.V1 {
             "dHMYCiADKAsyIS5iYXR0bGUubmF2aWdhdGlvbi52MS5CYXR0bGVFdmVudCJx",
             "CgpSZXN1bHRDb2RlEhYKElJFU1VMVF9VTlNQRUNJRklFRBAAEgYKAk9LEAES",
             "EAoMQkFEX1NDRU5BUklPEAISCAoEQlVTWRADEhEKDUJBVFRMRV9GQUlMRUQQ",
-            "BBIUChBSRVNVTFRfVE9PX0xBUkdFEAUycQoRTmF2aWdhdGlvblNlcnZpY2US",
-            "XAoJUXVlcnlDZWxsEiYuYmF0dGxlLm5hdmlnYXRpb24udjEuUXVlcnlDZWxs",
-            "UmVxdWVzdBonLmJhdHRsZS5uYXZpZ2F0aW9uLnYxLlF1ZXJ5Q2VsbFJlc3Bv",
-            "bnNlMnkKDUJhdHRsZVNlcnZpY2USaAoNUnVuQXV0b0JhdHRsZRIqLmJhdHRs",
-            "ZS5uYXZpZ2F0aW9uLnYxLlJ1bkF1dG9CYXR0bGVSZXF1ZXN0GisuYmF0dGxl",
-            "Lm5hdmlnYXRpb24udjEuUnVuQXV0b0JhdHRsZVJlc3BvbnNlYgZwcm90bzM="));
+            "BBIUChBSRVNVTFRfVE9PX0xBUkdFEAUqSwoJQ29tbWFuZElkEhcKE0NPTU1B",
+            "TkRfVU5TUEVDSUZJRUQQABIPCgpRVUVSWV9DRUxMEOkHEhQKD1JVTl9BVVRP",
+            "X0JBVFRMRRDqB2IGcHJvdG8z"));
       descriptor = pbr::FileDescriptor.FromGeneratedCode(descriptorData,
           new pbr::FileDescriptor[] { },
-          new pbr::GeneratedClrTypeInfo(null, null, new pbr::GeneratedClrTypeInfo[] {
+          new pbr::GeneratedClrTypeInfo(new[] {typeof(global::Battle.Navigation.V1.CommandId), }, null, new pbr::GeneratedClrTypeInfo[] {
             new pbr::GeneratedClrTypeInfo(typeof(global::Battle.Navigation.V1.Envelope), global::Battle.Navigation.V1.Envelope.Parser, new[]{ "ProtocolVersion", "Command", "RequestId", "Body" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::Battle.Navigation.V1.WorldPosition), global::Battle.Navigation.V1.WorldPosition.Parser, new[]{ "XMm", "YMm", "ZMm" }, null, null, null, null),
             new pbr::GeneratedClrTypeInfo(typeof(global::Battle.Navigation.V1.QueryCellRequest), global::Battle.Navigation.V1.QueryCellRequest.Parser, new[]{ "MapId", "MapVersion", "Position" }, null, null, null, null),
@@ -78,6 +75,15 @@ namespace Battle.Navigation.V1 {
     #endregion
 
   }
+  #region Enums
+  public enum CommandId {
+    [pbr::OriginalName("COMMAND_UNSPECIFIED")] CommandUnspecified = 0,
+    [pbr::OriginalName("QUERY_CELL")] QueryCell = 1001,
+    [pbr::OriginalName("RUN_AUTO_BATTLE")] RunAutoBattle = 1002,
+  }
+
+  #endregion
+
   #region Messages
   [global::System.Diagnostics.DebuggerDisplayAttribute("{ToString(),nq}")]
   public sealed partial class Envelope : pb::IMessage<Envelope>
@@ -146,7 +152,7 @@ namespace Battle.Navigation.V1 {
     public const int CommandFieldNumber = 2;
     private uint command_;
     /// <summary>
-    /// body 的业务消息类型；QueryCell=1001，RunAutoBattle=1002。
+    /// CommandId 的数值；body 类型由命令对应的 Request 决定。
     /// </summary>
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
@@ -161,7 +167,7 @@ namespace Battle.Navigation.V1 {
     public const int RequestIdFieldNumber = 3;
     private ulong requestId_;
     /// <summary>
-    /// 请求/响应关联 ID；服务端原样返回。
+    /// 请求/响应关联 ID；单向请求仍可使用发送方生成的 ID。
     /// </summary>
     [global::System.Diagnostics.DebuggerNonUserCodeAttribute]
     [global::System.CodeDom.Compiler.GeneratedCode("protoc", null)]
@@ -1511,9 +1517,6 @@ namespace Battle.Navigation.V1 {
 
   }
 
-  /// <summary>
-  /// 客户端只选择 Server 已发布场景，不提交单位位置或战斗状态。
-  /// </summary>
   [global::System.Diagnostics.DebuggerDisplayAttribute("{ToString(),nq}")]
   public sealed partial class RunAutoBattleRequest : pb::IMessage<RunAutoBattleRequest>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
@@ -1715,9 +1718,6 @@ namespace Battle.Navigation.V1 {
 
   }
 
-  /// <summary>
-  /// 已结算的 Server 事件；位置及路线点使用毫米世界坐标。
-  /// </summary>
   [global::System.Diagnostics.DebuggerDisplayAttribute("{ToString(),nq}")]
   public sealed partial class BattleEvent : pb::IMessage<BattleEvent>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
@@ -2437,9 +2437,6 @@ namespace Battle.Navigation.V1 {
 
   }
 
-  /// <summary>
-  /// 一次完整战斗结果；预期业务拒绝通过 result 返回。
-  /// </summary>
   [global::System.Diagnostics.DebuggerDisplayAttribute("{ToString(),nq}")]
   public sealed partial class RunAutoBattleResponse : pb::IMessage<RunAutoBattleResponse>
   #if !GOOGLE_PROTOBUF_REFSTRUCT_COMPATIBILITY_MODE
