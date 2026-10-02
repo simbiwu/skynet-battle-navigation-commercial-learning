@@ -6935,7 +6935,7 @@ git submodule status
 ./scripts/linux/run_server.sh doctor
 ```
 
-`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/service/flywow_gateway.lua` 和 `tools/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向 sibling 仓库，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
+`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/service/flywow_gateway.lua` 和 `scripts/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向 sibling 仓库，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
 
 同一进程需要多个监听端口时，不复制 Gateway 代码。由 composition root 多次调用 `skynet.newservice("flywow_gateway")`，为每个 Service 传入不同 `port`、`transport` 和业务 `handler_service`；每个实例拥有独立 Lua State、监听 fd、连接表和生命周期。主 Service 必须保存这些 handle，并在停服时分别调用 `stop`。
 
@@ -8286,14 +8286,14 @@ build_lua_protobuf_if_needed() {
 find_flywow_root() {
     local candidate
     if [[ -n "$FLYWOW_ROOT" ]]; then
-        [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/flywow_gateway.lua" ]] || return 1
+        [[ -f "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/flywow_gateway.lua" ]] || return 1
         FLYWOW_ROOT="$(cd -- "$FLYWOW_ROOT" && pwd)"
         return 0
     fi
     for candidate in \
         "$SERVER_ROOT/third_party/skynet-flywow" \
         "$SERVER_ROOT/../../skynet-flywow"; do
-        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/flywow_gateway.lua" ]]; then
+        if [[ -f "$candidate/scripts/generate_gateway_registry.py" && -f "$candidate/service/flywow_gateway.lua" ]]; then
             FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
             return 0
         fi
@@ -8305,7 +8305,7 @@ find_flywow_root() {
 build_gateway_registry() {
     find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
-    python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
+    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" \
         --proto "$PROTO_SOURCE" \
         --output "$REGISTRY_OUTPUT"
 }

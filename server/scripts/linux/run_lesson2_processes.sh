@@ -61,7 +61,7 @@ USAGE
 
 # submodule 是正常来源，sibling 只用于开发覆盖；返回已验证的框架根目录。
 find_flywow_root() {
-    [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" &&
+    [[ -f "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" &&
        -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]]
 }
 

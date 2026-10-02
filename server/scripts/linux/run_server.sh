@@ -252,7 +252,7 @@ build_lua_protobuf_if_needed() {
 # 查找独立的 Skynet-FlyWow 框架；只返回包含协议生成器的目录，不复制框架源码到业务仓库。
 # 查找顺序：仅使用仓库内 third_party/skynet-flywow Git submodule。
 find_flywow_root() {
-    [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" &&
+    [[ -f "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" &&
        -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]]
 }
 
@@ -262,7 +262,7 @@ build_gateway_registry() {
     find_flywow_root || fail "Skynet-FlyWow framework not found; use server/third_party/skynet-flywow"
     [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision from server/third_party/skynet-flywow"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
-    python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
+    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" \
         --proto "$PROTO_SOURCE" \
         --output "$REGISTRY_OUTPUT"
     [[ -s "$REGISTRY_OUTPUT" ]] || \

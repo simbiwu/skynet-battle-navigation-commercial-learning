@@ -7844,7 +7844,7 @@ service BattleService {
 
 当前 `Envelope.protocol_version=3`，`WorldPosition` 三轴统一为 `sint64` 毫米。协议版本 2 曾将字段收窄为 `sint32`；本次恢复已确认的 int64 合同，因此递增版本号而不复用旧号。Gateway 和 Unity 必须同时使用版本 3。协议源及 Server descriptor/registry、Unity C# 生成物必须作为同一发布版本验证；双工作区先串行同步协议提交，不能手工把某工作区的 `.proto` 覆盖到另一侧。
 
-[只读] `server/protocol/build_server_descriptor.sh`、`shared/protocol/build_unity_cs.ps1` 和 FlyWow 的 `tools/generate_gateway_registry.py`。它们已有固定生成职责，不复制或手改 registry。协议修改后，在 WSL 的仓库根目录执行 `./server/protocol/build_server_descriptor.sh`，在 `server/` 执行 `./scripts/linux/run_server.sh build`；同步同一协议提交到 Windows 工作区后执行 `shared/protocol/build_unity_cs.ps1`。核对生成的 registry 有 `[1001] QueryCell` 与 `[1002] RunAutoBattle`，而不是改 `server/lualib/gateway/protocol/navigation_registry.lua` 的生成代码。正式部署只消费已发布 descriptor、registry 和 Unity 生成类型。
+[只读] `server/protocol/build_server_descriptor.sh`、`shared/protocol/build_unity_cs.ps1` 和 FlyWow 的 `scripts/generate_gateway_registry.py`。它们已有固定生成职责，不复制或手改 registry。协议修改后，在 WSL 的仓库根目录执行 `./server/protocol/build_server_descriptor.sh`，在 `server/` 执行 `./scripts/linux/run_server.sh build`；同步同一协议提交到 Windows 工作区后执行 `shared/protocol/build_unity_cs.ps1`。核对生成的 registry 有 `[1001] QueryCell` 与 `[1002] RunAutoBattle`，而不是改 `server/lualib/gateway/protocol/navigation_registry.lua` 的生成代码。正式部署只消费已发布 descriptor、registry 和 Unity 生成类型。
 
 #### 23.5.2 把固定 Snapshot 从 batch 入口提取为两个调用者共用的输入
 
