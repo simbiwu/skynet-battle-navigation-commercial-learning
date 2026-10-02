@@ -6,6 +6,7 @@
 
 local skynet = require "skynet"
 local process = require "config.process_gateway"
+local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 先启动 Proxy 并完成远程 ready，再让 FlyWow 绑定端口；端口可用意味着两条进程链路都已就绪。
 -- 参数：无。返回值：无；执行 Service 创建、跨进程 call 和 Gateway bind，失败终止启动。

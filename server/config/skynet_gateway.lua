@@ -10,7 +10,7 @@ harbor = 0
 logger = nil
 start = "gateway/gateway_main"
 bootstrap = "snlua bootstrap"
-luaservice = "./service/?.lua;" .. flywow_root .. "/service/?.lua;" .. skynet_root .. "service/?.lua"
+luaservice = "./service/?.lua;" .. flywow_root .. "/service/gateway/?.lua;" .. skynet_root .. "service/?.lua"
 lualoader = skynet_root .. "lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            flywow_root .. "/lualib/?.lua;" .. flywow_root .. "/lualib/?/init.lua;" ..

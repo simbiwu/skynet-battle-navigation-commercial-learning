@@ -151,7 +151,7 @@ BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
 
 ## 异步 Gateway 接入合同（D039）
 
-FlyWow 读取完整帧并解码后，用本地 `skynet.send` 投递 `gateway_dispatch`，立即读下一帧。课程 Proxy 用 `cluster.send` 转发；Battle 处理后反向 send；Proxy 用薄的 `flywow.gateway.endpoint` 上下文发送 `gateway_response`。Gateway 依据响应携带的实例、连接、命令和请求编号编码并发送，不维护业务请求等待表。
+FlyWow 读取完整帧并解码后，用本地 `skynet.send` 投递 `gateway_dispatch`，立即读下一帧。课程 Proxy 用 `cluster.send` 转发；Battle 处理后反向 send；Proxy 用薄的 `gateway.endpoint` 上下文发送 `gateway_response`。Gateway 依据响应携带的实例、连接、命令和请求编号编码并发送，不维护业务请求等待表。
 
 Proxy 最多64条返回路由、保留10秒；没有 wait/wakeup/请求协程结果槽。超限、超时和远端错误映射成已有业务响应，健康连接继续读取。断线清理项目路由，迟到结果丢弃，不自动取消 Battle 操作。第一课直接 Query 接入使用相同 endpoint，Battle 内部的本地 Query call 合同继续保留。
 

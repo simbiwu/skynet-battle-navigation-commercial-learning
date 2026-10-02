@@ -4,7 +4,7 @@
 -- 生命周期：测试 runner 独占进程，退出时由 runner 回收；不在正常 Server 启动树使用。
 -- 不负责：不加载地图、不模拟 Battle、不把此 handler 用于生产。
 local skynet = require "skynet"
-local endpoint = require "flywow.gateway.endpoint"
+local endpoint = require "gateway.endpoint"
 
 -- 注册测试处理并启动两个独立 Gateway；管理调用可能 yield。
 skynet.start(function()

@@ -67,7 +67,7 @@ find_flywow_root() {
         candidate="$FLYWOW_ROOT"
     else
         for candidate in "$SERVER_ROOT/third_party/skynet-flywow" "$SERVER_ROOT/../../skynet-flywow"; do
-            if [[ -f "$candidate/service/flywow_gateway.lua" ]]; then
+            if [[ -f "$candidate/service/gateway/flywow_gateway.lua" ]]; then
                 FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
                 export FLYWOW_ROOT
                 return 0
@@ -75,7 +75,7 @@ find_flywow_root() {
         done
         return 1
     fi
-    [[ -f "$candidate/service/flywow_gateway.lua" ]] || return 1
+    [[ -f "$candidate/service/gateway/flywow_gateway.lua" ]] || return 1
     FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
     export FLYWOW_ROOT
 }
@@ -91,7 +91,7 @@ doctor() {
        -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
-    [[ -f "$FLYWOW_ROOT/lualib/flywow/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
+    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
     [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=$FLYWOW_ROOT"
 }

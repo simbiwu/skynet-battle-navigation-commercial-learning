@@ -14,6 +14,14 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 - 在不能从名称和代码直接看出的地方解释 WHY 与不变量，尤其是坐标/取整、二进制格式、fd/buffer 生命周期、Skynet yield 后身份重验、路径/动态占位、资源上限和过载行为。复杂换算可用一个短输入/输出例子；避免逐行翻译代码。
 - 修改公开合同或持久数据格式时，同步受影响的调用方、示例、版本/兼容说明和测试。
 
+### LuaDoc 与编辑器可读性
+
+- Lua 源码中的文件职责、函数合同、字段合同和 Service 消息合同统一使用 LuaDoc：说明行使用 `---`，结构化类型使用标准 `---`、`---`、`---`、`---`、`---` 标签；不要为同一合同同时维护普通 `--` 注释和 LuaDoc。
+- 跨 Service 的 request/result record、配置 record 和异步响应上下文必须有可被 Lua Language Server 识别的类型定义；字段说明同时写清来源、owner、生命周期、nil 语义和是否跨进程/网络边界。
+- `skynet.call`、`skynet.send`、`skynet.dispatch` 等动态 API 的稳定调用必须标注 Service handle、command、payload、返回值和 yield 边界；框架 API 提示使用独立 `---` stub，不把 stub 当作运行时代码。
+- LuaDoc 描述负责让编辑器和人理解同一份合同；不要使用编辑器不认识的自定义标签表达唯一的类型语义。WHY、ownership、I/O、yield、失败和不变量写在同一 LuaDoc 块的中文说明中。
+- 动态 command 字符串必须有 `---` 或明确的消息 record；不能只依赖字符串字面量和运行时 `assert` 让读者反推调用合同。
+
 ## 实现边界
 
 - Service handle、资产、随机源和外部连接显式传递；不靠全局服务名、当前目录或开发机绝对路径隐藏依赖。

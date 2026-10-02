@@ -1,0 +1,18 @@
+{
+    "runtime": {
+        "version": "Lua 5.4"
+    },
+    "workspace": {
+        "library": [
+            "${workspaceFolder}/annotations/lua",
+            "${workspaceFolder}/third_party/skynet-flywow/lualib"
+        ],
+        "checkThirdParty": false
+    },
+    "diagnostics": {
+        "globals": ["skynet"]
+    },
+    "hint": {
+        "enable": true
+    }
+}

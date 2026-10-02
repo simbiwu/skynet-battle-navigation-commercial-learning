@@ -5,7 +5,7 @@
 -- 不负责：不查询地图、不执行业务结算，不替代账号鉴权或生产控制接口。
 local skynet = require "skynet"
 local cluster = require "skynet.cluster"
-local endpoint = require "flywow.gateway.endpoint"
+local endpoint = require "gateway.endpoint"
 local process = require "config.process_battle"
 
 -- 注册测试 Cluster 业务入口；节点信息归项目，FlyWow 不选择本地/远程发送方式。
