@@ -30,8 +30,8 @@ source "$SHARED_ROOT/protocol/VERSIONS.env"
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
 STARTUP_TIMEOUT_SEC="${STARTUP_TIMEOUT_SEC:-15}"
 STOP_TIMEOUT_SEC="${STOP_TIMEOUT_SEC:-20}"
-# FLYWOW_ROOT 可指向独立 Skynet-FlyWow 仓库；为空时优先使用仓库内 Git submodule，必要时再查找当前 workspace sibling。
-FLYWOW_ROOT="${FLYWOW_ROOT:-}"
+# FlyWow固定使用仓库内third_party/skynet-flywow；不依赖外部环境变量。
+FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
 
 ACTION="start"
 FOREGROUND=0
@@ -74,7 +74,6 @@ Environment:
   BUILD_TYPE=RelWithDebInfo|Debug|Release
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
-  FLYWOW_ROOT=/path/to/skynet-flywow
   GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/gateway/protocol/navigation_registry.lua
 USAGE
 }
@@ -251,32 +250,17 @@ build_lua_protobuf_if_needed() {
 }
 
 # 查找独立的 Skynet-FlyWow 框架；只返回包含协议生成器的目录，不复制框架源码到业务仓库。
-# 查找顺序：显式 FLYWOW_ROOT -> 仓库内 third_party/skynet-flywow Git submodule -> 当前 workspace 的 sibling 仓库（开发覆盖）。
+# 查找顺序：仅使用仓库内 third_party/skynet-flywow Git submodule。
 find_flywow_root() {
-    local candidate
-    if [[ -n "$FLYWOW_ROOT" ]]; then
-        [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]] || return 1
-        FLYWOW_ROOT="$(cd -- "$FLYWOW_ROOT" && pwd)"
-        export FLYWOW_ROOT
-        return 0
-    fi
-    for candidate in \
-        "$SERVER_ROOT/third_party/skynet-flywow" \
-        "$SERVER_ROOT/../../skynet-flywow"; do
-        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/gateway/flywow_gateway.lua" ]]; then
-            FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
-            export FLYWOW_ROOT
-            return 0
-        fi
-    done
-    return 1
+    [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" &&
+       -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]]
 }
 
 # 由 FlyWow 框架生成 registry；业务仓库只提供 proto 和输出位置。
 # 运行时不解析 .proto；生成器只原子替换完整输出，失败时 prepare 立即终止。
 build_gateway_registry() {
-    find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT to its repository root"
-    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
+    find_flywow_root || fail "Skynet-FlyWow framework not found; use server/third_party/skynet-flywow"
+    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision from server/third_party/skynet-flywow"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
     python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
         --proto "$PROTO_SOURCE" \
@@ -317,7 +301,7 @@ prepare_runtime() {
     build_lua_protobuf_if_needed
     build_gateway_registry
     if [[ -f "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" ]]; then
-        bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/luaclib"
+        bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" "$SERVER_ROOT/third_party/skynet"
     fi
     verify_descriptor_asset
     build_native_incremental
@@ -385,7 +369,7 @@ doctor() {
     [[ -x "$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc" ]] || { log "MISSING protoc"; failed=1; }
     [[ -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]] || { log "MISSING pb.so"; failed=1; }
     if ! find_flywow_root; then
-        log "MISSING Skynet-FlyWow framework; set FLYWOW_ROOT"
+        log "MISSING Skynet-FlyWow framework; use the repository FlyWow path"
         failed=1
     fi
     if [[ -f "${FLYWOW_ROOT:-}/scripts/build_gateway_crypto.sh" ]]; then

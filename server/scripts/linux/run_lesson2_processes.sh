@@ -21,7 +21,7 @@ BATTLE_LOG="$LOG_DIR/battle.log"
 STARTUP_TIMEOUT_SEC=20
 FORCE_STOP=0
 ACTION="start"
-FLYWOW_ROOT="$(printenv FLYWOW_ROOT || true)"
+FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
 
 # 输出一条带脚本前缀的普通日志；参数是要显示的完整消息，返回状态始终为 0。
 log() { printf '[lesson2-processes] %s\n' "$*"; }
@@ -56,28 +56,13 @@ Usage:
   ./scripts/linux/run_lesson2_processes.sh doctor
 
 Environment:
-  FLYWOW_ROOT=/path/to/skynet-flywow
 USAGE
 }
 
 # submodule 是正常来源，sibling 只用于开发覆盖；返回已验证的框架根目录。
 find_flywow_root() {
-    local candidate
-    if [[ -n "$FLYWOW_ROOT" ]]; then
-        candidate="$FLYWOW_ROOT"
-    else
-        for candidate in "$SERVER_ROOT/third_party/skynet-flywow" "$SERVER_ROOT/../../skynet-flywow"; do
-            if [[ -f "$candidate/service/gateway/flywow_gateway.lua" ]]; then
-                FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
-                export FLYWOW_ROOT
-                return 0
-            fi
-        done
-        return 1
-    fi
-    [[ -f "$candidate/service/gateway/flywow_gateway.lua" ]] || return 1
-    FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
-    export FLYWOW_ROOT
+    [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" &&
+       -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]]
 }
 
 # 检查二进制、配置、框架和生成 registry；不启动进程。
@@ -91,7 +76,7 @@ doctor() {
        -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
-    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision or explicit FLYWOW_ROOT"
+    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision from server/third_party/skynet-flywow"
     [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=$FLYWOW_ROOT"
 }
@@ -117,7 +102,6 @@ start_one() {
     rm -f "$pid_file"
     (
         cd "$SERVER_ROOT"
-        export FLYWOW_ROOT
         exec "$SKYNET_BIN" "$SERVER_ROOT/config/$config"
     ) >"$log_file" 2>&1 &
     pid="$!"; printf '%s\n' "$pid" > "$pid_file"
