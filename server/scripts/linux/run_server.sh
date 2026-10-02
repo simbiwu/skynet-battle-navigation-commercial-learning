@@ -374,7 +374,7 @@ doctor() {
     fi
     if [[ -f "${FLYWOW_ROOT:-}/scripts/build_gateway_crypto.sh" ]]; then
         # 用固定Lua实际加载，发现ABI/OpenSSL依赖问题；不启动Service或生成密钥。
-        if ! LUA_CPATH="$SERVER_ROOT/luaclib/?.so" "$SERVER_ROOT/third_party/skynet/3rd/lua/lua" \
+        if ! LUA_CPATH="$SERVER_ROOT/third_party/skynet-flywow/luaclib/?.so" "$SERVER_ROOT/third_party/skynet/3rd/lua/lua" \
             -e 'assert(type(require("flywow_gateway_crypto").new) == "function")'; then
             log "INVALID flywow_gateway_crypto.so: build or runtime dependency missing"
             failed=1
@@ -449,8 +449,18 @@ start_foreground() {
     exec "$SKYNET_BIN" "config/skynet.lua"
 }
 
+# 停止 debug 动作启动的 Lesson 2 Gateway/Battle 双进程；无 PID 时安全返回。
+stop_lesson2_processes() {
+    if ((FORCE_STOP)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" stop --force
+    else
+        "$SCRIPT_DIR/run_lesson2_processes.sh" stop
+    fi
+}
+
 # 先验证 PID 身份，再发送 SIGTERM；只有 --force 且超时后才允许 SIGKILL。
 stop_server() {
+    stop_lesson2_processes
     local pid deadline rc
     if pid="$(current_pid)"; then
         :

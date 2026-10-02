@@ -4,7 +4,7 @@
 -- 生命周期：进程启动时读取一次；不会进入业务 Service 的 Lua State。
 -- 不负责：不加载 BMAP、不监听业务端口、不包含业务配置。
 local skynet_root = "./third_party/skynet/"
--- `$FLYWOW_ROOT` 由 run_server.sh 在依赖检查后导出；Skynet 配置加载器会在执行 Lua 前替换环境变量。
+-- FlyWow 固定使用宿主 Server 根目录下的相对路径。
 local flywow_root = [[./third_party/skynet-flywow/]]
 
 thread = 4                              -- Skynet Worker OS Thread 数；课程开发基线。
