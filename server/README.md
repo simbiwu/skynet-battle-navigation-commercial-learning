@@ -82,7 +82,7 @@ FlyWow TCP framing 固定为 uint16 Big Endian length + payload；因此单个 E
 
 Unity 验证通过的 BMAP 与 manifest 发布到仓库根目录 `shared/navigation/battle_1001/`。Unity Bake 只改变当前工作区；提交、推送并由 Server 机器拉取相同提交后，Server 才会看到新版本。`BMapReader` 仍会在加载阶段校验格式和 CRC。
 
-首次获取仓库或切换到新的主仓库提交后，先在仓库根目录执行 git submodule update --init --recursive；这样 server/third_party/skynet-flywow 会处于主仓库固定的 FlyWow 提交。只有开发 FlyWow 本身时才设置 FLYWOW_ROOT 覆盖该 submodule。
+首次获取仓库或切换到新的主仓库提交后，先在仓库根目录执行 git submodule update --init --recursive；这样 server/third_party/skynet-flywow 会处于主仓库固定的 FlyWow 提交。FlyWow 开发也通过更新该 submodule 的固定提交完成。
 
 ## 第一课最终准备与调试
 

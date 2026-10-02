@@ -57,7 +57,6 @@ HKDF为Extract+Expand；不得把平台默认散列式ECDH结果当成Z。没有
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-export FLYWOW_ROOT=~/workspace/skynet-flywow
 ./scripts/linux/run_server.sh prepare
 ./scripts/linux/run_server.sh doctor
 ```
@@ -80,7 +79,7 @@ H5使用框架clients/h5/handshake.mjs的connectGateway(url, { onmessage })；Pr
 # 在Server目录设置固定解释器与当前产物，再进入FlyWow目录。
 export SKYNET_LUA="$PWD/third_party/skynet/3rd/lua/lua"
 export SKYNET_LUACLIB="$PWD/luaclib"
-cd "$FLYWOW_ROOT"
+cd "$PWD/third_party/skynet-flywow"
 python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/ci/check_repository.py
 ```
@@ -88,8 +87,8 @@ python3 scripts/ci/check_repository.py
 Server目录运行真实集成，验收依赖Python cryptography 46.0.5及Node 22：
 
 ```bash
-python3 tests/gateway_async_integration.py --flywow-root "$FLYWOW_ROOT"
-python3 tests/gateway_sdk_interop.py --flywow-root "$FLYWOW_ROOT"
+python3 tests/gateway_async_integration.py --flywow-root "$PWD/third_party/skynet-flywow"
+python3 tests/gateway_sdk_interop.py --flywow-root "$PWD/third_party/skynet-flywow"
 ```
 
 Windows的Tools/GatewayHandshakeInterop.csproj编译真实客户端源码；.NET 10仅是验收宿主。SDK runner可通过--dotnet和--unity-runner接入该程序集。Node结果不代替浏览器验收，.NET结果不代替Unity发布验证。
@@ -109,10 +108,10 @@ Windows的Tools/GatewayHandshakeInterop.csproj编译真实客户端源码；.NET
 浏览器复验夹具：
 
 ```bash
-python3 tests/gateway_sdk_interop.py --flywow-root "$FLYWOW_ROOT" --serve-browser
+python3 tests/gateway_sdk_interop.py --flywow-root "$PWD/third_party/skynet-flywow" --serve-browser
 # 打开 http://localhost:19023/example.html，看到H5_BROWSER_WEBCRYPTO_SKYNET_OK。
 # Ctrl+C关闭夹具，finally回收本次启动的Skynet。
-python3 tests/gateway_handshake_benchmark.py --flywow-root "$FLYWOW_ROOT"
+python3 tests/gateway_handshake_benchmark.py --flywow-root "$PWD/third_party/skynet-flywow"
 ```
 
 2026-10-02本机WSL Ubuntu/OpenSSL 3.5.5/Python cryptography 46.0.5结果；每种transport 64次串行连接，时间包含Python客户端密钥计算、连接、握手、WS Upgrade和本机调度。

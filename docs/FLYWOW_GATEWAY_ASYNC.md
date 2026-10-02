@@ -81,13 +81,12 @@ Server 以 WSL 为编辑源，FlyWow 以独立仓库为开发源。提交顺序�
 
 ```bash
 cd /path/to/course/server
-export FLYWOW_ROOT=/path/to/updated-skynet-flywow
 ./scripts/linux/run_server.sh build
 ./scripts/linux/run_lesson2_processes.sh doctor
-./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$FLYWOW_ROOT"
+./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$PWD/third_party/skynet-flywow"
 python3 tests/gateway_async_integration.py
 
-cd "$FLYWOW_ROOT"
+cd "$PWD/third_party/skynet-flywow"
 SKYNET_LUA=/path/to/course/server/third_party/skynet/3rd/lua/lua \
   python3 -m unittest discover -s tests -p 'test_*.py'
 python3 scripts/ci/check_repository.py
