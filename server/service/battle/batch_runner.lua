@@ -66,7 +66,8 @@ skynet.start(function()
                  " end_logic_ms=", first.end_logic_ms,
                  " result=", first.result)
     local replay_ok, replay_error = replay_writer.write(
-    "tmp/battle_replay.json", first)
+        "tmp/battle_replay.json",
+        first)
     assert(replay_ok, replay_error)
     skynet.error("BATTLE_REPLAY_OK path=tmp/battle_replay.json")
 end)
