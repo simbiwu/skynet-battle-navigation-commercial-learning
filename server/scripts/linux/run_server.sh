@@ -524,7 +524,13 @@ start_debug() {
     log "starting Lesson 2 Gateway/Battle with LuaPanda; start VS Code debugger first"
     flock -u 9
     exec 9>&-
-    "$SCRIPT_DIR/run_lesson2_processes.sh" start
+    LUA_PANDA_ENABLE=1 LUA_PANDA_HOST="$LUA_PANDA_HOST" \
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start
+    for debug_log in "$SERVER_ROOT/logs/lesson2/battle.log" "$SERVER_ROOT/logs/lesson2/gateway.log"; do
+        grep -Fq "LUA_PANDA_READY" "$debug_log" || \
+            fail "LuaPanda did not become ready; inspect $debug_log"
+    done
+    log "DEBUG_READY LuaPanda"
 }
 
 # 根据动作调用唯一的生命周期入口，并返回准确退出码。
