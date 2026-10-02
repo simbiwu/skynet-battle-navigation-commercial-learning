@@ -1,24 +1,7 @@
--- 职责：Gateway 进程唯一配置；同时提供 Skynet 启动参数和 FlyWow Gateway 运行参数。
--- 边界：Server Runtime；由 run_server.sh 直接传给 Skynet，也由 Gateway Service require "config.gateway" 读取。
--- 使用：所有字段都在本文件维护；修改监听或 cluster 参数后必须重启 Gateway/Battle 进程。
--- 不负责：不生成协议、不创建 Service、不解析客户端请求、不保存动态路由。
-local skynet_root = "./third_party/skynet/"                 -- 固定 Skynet 根目录；路径相对 Server 工作目录。
-local flywow_root = [[./third_party/skynet-flywow/]]        -- 固定 FlyWow 根目录；不读取外部环境变量。
-
-thread = 4                                                  -- Skynet Worker OS 线程数；影响同一进程的消息调度并行度。
-harbor = 0                                                   -- 单机模式；不启用 Skynet Harbor 集群。
-logger = nil                                                 -- nil 表示日志输出到标准输出，由 run_server 日志接管。
-start = "gateway/gateway_main"                              -- 进程入口 Service；负责组装 Proxy 和 FlyWow Gateway。
-bootstrap = "snlua bootstrap"                               -- Skynet 标准 Lua Bootstrap。
-luaservice = "./service/?.lua;" .. flywow_root .. "service/gateway/?.lua;" .. skynet_root .. "service/?.lua" -- Service 搜索路径。
-lualoader = skynet_root .. "lualib/loader.lua"              -- 使用固定 Skynet Lua loader。
-lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
-           flywow_root .. "lualib/?.lua;" .. flywow_root .. "lualib/?/init.lua;" ..
-           skynet_root .. "lualib/?.lua;" .. skynet_root .. "lualib/?/init.lua" -- Lua 模块搜索路径。
-lua_cpath = "./luaclib/?.so;" .. flywow_root .. "luaclib/?.so;" ..
-            "./third_party/lua-protobuf-runtime/?.so;" .. skynet_root .. "luaclib/?.so" -- C 模块搜索路径。
-cpath = skynet_root .. "cservice/?.so"                       -- Skynet C Service 动态库搜索路径。
-
+-- 职责：Gateway 运行配置；供 Gateway Service 通过 require config.gateway 读取。
+-- 边界：Server Runtime；只保存监听、协议、资源上限和 Cluster 运行参数。
+-- 使用：修改配置后重启 Gateway 进程；启动入口使用同目录的 gateway_process.lua。
+-- 不负责：不设置 start、luaservice、lua_path 等 Skynet 进程启动参数。
 return {
     host = "127.0.0.1",                                     -- Gateway 监听地址；127.0.0.1 只允许本机客户端连接。
     port = 19011,                                            -- Gateway 业务端口；客户端和集成测试连接此端口。

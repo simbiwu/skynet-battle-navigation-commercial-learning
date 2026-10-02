@@ -121,7 +121,7 @@ run_debug() {
     if ((DEBUG_GDB)); then
         command -v gdb >/dev/null 2>&1 || fail "未安装 gdb"
         local config
-        if ((PROCESS_GATEWAY)); then config="$SERVER_ROOT/config/gateway.lua"; else config="$SERVER_ROOT/config/battle.lua"; fi
+        if ((PROCESS_GATEWAY)); then config="$SERVER_ROOT/config/gateway_process.lua"; else config="$SERVER_ROOT/config/battle_process.lua"; fi
         cd "$SERVER_ROOT"
         exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" --args "$SKYNET_BIN" "$config"
     fi
