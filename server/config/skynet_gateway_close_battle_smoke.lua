@@ -3,5 +3,5 @@
 -- 输入/输出：仓库内固定FlyWow路径 -> Gateway关闭烟雾测试进程。
 -- 生命周期：集成 runner 独占，finally 只停止自己的进程。
 -- 不负责：不改变正常 Battle 配置、不增加客户端协议。
-include "battle.lua"
+include "battle_process.lua"
 start = "tests/gateway_close_battle_smoke"

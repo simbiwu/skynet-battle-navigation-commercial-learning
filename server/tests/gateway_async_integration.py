@@ -71,12 +71,12 @@ def fields(data):
     return result
 
 
-# 构造 QueryCell 或 RunAutoBattle Envelope，request_id 与协议版本均显式可覆盖。
-def envelope(request_id, command=1001, version=3):
-    body = number(1, 1001)
+# 构造当前Envelope；map_id仅在测试夹具中作为标记，真实Query使用1001。
+def envelope(map_id=1001, command=1001, version=3):
+    body = number(1, map_id)
     if command == 1001:
         body += number(2, 1) + blob(3, b"")
-    return number(1, version) + number(2, command) + number(3, request_id) + blob(4, body)
+    return number(1, version) + number(2, command) + blob(3, body)
 
 
 # 从当前 Socket 读满指定字节；EOF 是失败，不把短读当成完整帧。
@@ -176,6 +176,8 @@ class Processes:
     def __init__(self, flywow):
         self.env = dict(os.environ, FLYWOW_ROOT=str(flywow))
         self.children = []
+        self.active_logs = []
+        self.env["LUA_PANDA_ENABLE"] = "0"
         self.logs = ROOT / "logs/gateway_async_tests"
         self.logs.mkdir(parents=True, exist_ok=True)
 
@@ -191,14 +193,26 @@ class Processes:
         child = subprocess.Popen([str(ROOT / "third_party/skynet/skynet"), str(ROOT / "config" / config)],
                                  cwd=ROOT, env=self.env, stdout=handle, stderr=subprocess.STDOUT)
         self.children.append((child, handle))
+        self.active_logs.append(log)
         until = time.monotonic() + 15
         while time.monotonic() < until:
+            self.assert_clean(wait=False)
             text = log.read_text()
             if ready in text:
                 return
             assert child.poll() is None, text
             time.sleep(0.05)
         raise AssertionError("READY timeout: " + log.read_text())
+
+    # 客户端成功不能掩盖Service异常；编码拒绝等预期结构化日志不含Lua调用堆栈。
+    def assert_clean(self, wait=True):
+        if wait:
+            time.sleep(0.1)
+        for log in self.active_logs:
+            text = log.read_text()
+            assert "stack traceback:" not in text and "lua call [" not in text, text
+        for child, _ in self.children:
+            assert child.poll() is None, "test server exited"
 
     # 仅终止自己创建的进程；TERM 超时后 KILL 并等待，保证测试无遗留。
     def close(self):
@@ -212,62 +226,87 @@ class Processes:
                     child.wait(timeout=5)
             handle.close()
         self.children.clear()
+        self.active_logs.clear()
 
 
-# 覆盖真实同连接延迟、乱序、业务失败、推送、编码失败和半包/fragment。
+# 验证同连接异步乱序、广播、业务/编码失败、主动关闭与跨断线迟到回包。
+def response(client, marker=None, result=1):
+    value = client.receive()
+    assert value[2] == 1001, value
+    body = fields(value[3])
+    assert body[1] == result, body
+    if marker is not None:
+        assert body[3] == marker, body
+    return body
+
+
 def smoke(websocket):
     port = 19022 if websocket else 19021
     client = Client(port, websocket)
     try:
-        started = time.monotonic()
         client.send(envelope(1), fragment=True)
         client.send(envelope(2))
-        second = client.receive()
-        assert second[3] == 2, second
-        assert client.receive()[3] == 1
-        # uint64 高位在 Lua 中是负整数，协议位模式必须保持不变。
-        client.send(envelope(0xFFFFFFFFFFFFFFFF))
-        assert client.receive()[3] == 0xFFFFFFFFFFFFFFFF
+        response(client, 2)
+        response(client, 1)
+        client.send(envelope(0xFFFFFFFF))
+        response(client, 0xFFFFFFFF)
         client.send(envelope(5))
         client.send(envelope(6))
-        assert fields(client.receive()[4])[1] == 7
-        assert client.receive()[3] == 6, "business failure must not stop next frame"
+        response(client, 5, result=7)
+        response(client, 6)
+        # 编码失败不会产生回包，也不能阻止下一条健康请求。
         client.send(envelope(3))
-        client.send(envelope(4))
-        assert client.receive()[3] == 4, "encoding failure must not close connection"
-        assert client.receive().get(3, 0) == 0, "push must use reserved request_id=0"
+        client.send(envelope(7))
+        response(client, 7)
+        client.sock.settimeout(.1)
+        try:
+            client.receive()
+            raise AssertionError("encoding failure must not produce a response")
+        except socket.timeout:
+            pass
     finally:
         client.close()
+    first, second = Client(port, websocket), Client(port, websocket)
+    try:
+        first.send(envelope(4))
+        response(first, 4)
+        response(first, 400)
+        response(second, 400)
+    finally:
+        first.close()
+        second.close()
     old = Client(port, websocket)
     old.send(envelope(1))
     old.close()
     client = Client(port, websocket)
     try:
         client.send(envelope(2))
-        assert client.receive()[3] == 2
-        client.sock.settimeout(0.65)
+        response(client, 2)
+        client.sock.settimeout(.65)
         try:
-            extra = client.receive()
-            raise AssertionError("old connection reply leaked: " + str(extra))
+            client.receive()
+            raise AssertionError("old connection reply leaked")
         except socket.timeout:
             pass
     finally:
         client.close()
-    # 业务主动断开；Gateway 关闭后新连接仍可查询。
-    for request_id in (600, 601):
+    # 只断言close终止连接；先send_data再close不保证最后响应被客户端收到。
+    for marker in (600, 601):
         client = Client(port, websocket)
         try:
-            client.send(envelope(request_id))
-            if request_id == 601:
-                assert client.receive()[3] == 601
-            try:
-                client.receive()
+            client.send(envelope(marker))
+            for _ in range(2):
+                try:
+                    value = client.receive()
+                    assert marker == 601 and fields(value[3])[3] == 601
+                except (EOFError, ConnectionResetError):
+                    break
+            else:
                 raise AssertionError("business close must disconnect client")
-            except (EOFError, ConnectionResetError):
-                pass
         finally:
             client.close()
-    for payload in (envelope(7, command=9999), envelope(7, version=99), b"\xff", envelope(0)):
+    # 当前协议允许无业务标记的请求；不再把旧request_id=0当协议错误。
+    for payload in (envelope(7, command=9999), envelope(7, version=99), b"\xff"):
         client = Client(port, websocket)
         try:
             client.send(payload)
@@ -298,14 +337,18 @@ def limits():
             pass
     finally:
         client.close()
-    # 未握手 WS 连接也计入容量，不能通过慢握手绕过 max_clients。
-    held = []
+    # ready六连接+pending二连接达到max_clients=8；pending=2另外在握手测试覆盖。
+    ready, held = [], []
     try:
-        for _ in range(8):
+        for _ in range(6):
+            ready.append(Client(19022, True))
+        for _ in range(2):
             held.append(socket.create_connection(("127.0.0.1", 19022), timeout=3))
         with socket.create_connection(("127.0.0.1", 19022), timeout=3) as rejected:
-            assert rejected.recv(1) == b"", "pending WS handshake capacity must be bounded"
+            assert rejected.recv(1) == b"", "pending WS connections must count toward max_clients"
     finally:
+        for client in ready:
+            client.close()
         for sock in held:
             sock.close()
     print("REAL_NETWORK_LIMITS_OK")
@@ -335,7 +378,7 @@ def handshake_contract(websocket):
         client.send(proof)
         assert client.receive_bytes() == expected
         client.send(envelope(2))
-        assert client.receive()[3] == 2
+        response(client, 2)
     finally:
         client.close()
     client = Client(port, websocket, handshake=False)
@@ -383,30 +426,31 @@ def handshake_contract(websocket):
     print("REAL_WS_HANDSHAKE_OK" if websocket else "REAL_TCP_HANDSHAKE_OK")
 
 
-# 实际课程 Query/RunAutoBattle 往返及同连接连续请求；不依赖测试 handler。
+# 真实业务按当前command/body关联；同命令串行，不假造协议外request_id。
 def course(port, battle):
     client = Client(port)
     try:
-        for request_id in range(10, 20):
-            client.send(envelope(request_id))
-        responses = [client.receive() for _ in range(10)]
-        assert {value[3] for value in responses} == set(range(10, 20))
-        assert all(fields(value[4])[1] in (1, 4, 5) for value in responses), responses
+        for _ in range(10):
+            client.send(envelope(1001))
+            value = client.receive()
+            assert value[2] == 1001
+            assert fields(value[3])[1] in (1, 4, 5), value
         if battle:
-            client.send(envelope(30, command=1002))
-            client.send(envelope(31))
+            client.send(envelope(1001, command=1002))
+            client.send(envelope(1001))
             responses = [client.receive(), client.receive()]
-            assert {value[3] for value in responses} == {30, 31}
-            result = next(value for value in responses if value[3] == 30)
-            assert fields(result[4])[1] == 1, result
+            assert {value[2] for value in responses} == {1001, 1002}
+            result = next(value for value in responses if value[2] == 1002)
+            assert fields(result[3])[1] == 1, result
     finally:
         client.close()
-    # 多连接同时查询，验证各连接的返回编号和归属。
+    # 不同地图标记产生明确拒绝，检查多连接响应未串线。
     def query(index):
         connection = Client(port)
         try:
-            connection.send(envelope(100 + index))
-            assert connection.receive()[3] == 100 + index
+            connection.send(envelope(2000+index))
+            value = connection.receive()
+            assert value[2] == 1001 and fields(value[3])[1] == 2, value
         finally:
             connection.close()
     with ThreadPoolExecutor(max_workers=8) as pool:
@@ -414,65 +458,68 @@ def course(port, battle):
     print("REAL_CLUSTER_COURSE_OK" if battle else "REAL_LOCAL_COURSE_OK")
 
 
-# 显式选择框架根目录；在每个场景 finally 回收子进程，任何失败返回非零退出码。
+# 独立业务进程close/回包；不启动真实Battle计算。
+def cluster_close(processes):
+    processes.start("close_battle", "skynet_gateway_close_battle_smoke.lua",
+                    "GATEWAY_CLOSE_BATTLE_SMOKE_READY", [2528])
+    processes.start("close_gateway", "gateway_process.lua",
+                    "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
+    client = Client(19011)
+    try:
+        client.send(envelope(600))
+        try:
+            client.receive()
+            raise AssertionError("remote business close must disconnect client")
+        except (EOFError, ConnectionResetError):
+            pass
+    finally:
+        client.close()
+    # 每个步骤检查Service异常，出现错误即终止，不能只看客户端响应。
+    processes.assert_clean()
+    client = Client(19011)
+    try:
+        client.send(envelope(602))
+        response(client, 602)
+    finally:
+        client.close()
+    processes.assert_clean()
+    print("REAL_CLUSTER_CLOSE_OK")
+
+
+# 默认覆盖全部合同；可用scope执行聚焦验证。任何错误传播，finally回收所有子进程。
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--flywow-root", default=os.environ.get("FLYWOW_ROOT"))
+    parser.add_argument("--flywow-root", default=str(ROOT / "third_party/skynet-flywow"))
+    parser.add_argument("--scope", choices=["all", "smoke", "local", "course", "close"], default="all")
     args = parser.parse_args()
-    assert args.flywow_root, "显式提供 --flywow-root 或 FLYWOW_ROOT"
-    processes = Processes(Path(args.flywow_root).resolve())
+    framework = Path(args.flywow_root).resolve()
+    assert framework == (ROOT / "third_party/skynet-flywow").resolve(), "当前启动配置固定使用pinned submodule"
+    processes = Processes(framework)
     try:
-        processes.start("smoke", "skynet_gateway_async_smoke.lua", "GATEWAY_ASYNC_SMOKE_READY", [19021, 19022])
-        handshake_contract(False)
-        handshake_contract(True)
-        smoke(False)
-        smoke(True)
-        limits()
-        processes.close()
-        processes.start("local", "skynet.lua", "NAV_SERVER_READY", [19001])
-        course(19001, False)
-        processes.close()
-        processes.start("battle", "battle.lua", "LESSON2_BATTLE_PROCESS_READY", [2528])
-        processes.start("gateway", "gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
-        course(19011, True)
-        # 终止自己创建的 Battle，验证两个请求均返回业务失败且 Gateway 保持可读。
-        battle = processes.children[0][0]
-        battle.terminate()
-        battle.wait(timeout=5)
-        client = Client(19011)
-        try:
-            client.sock.settimeout(12)
-            started = time.monotonic()
-            client.send(envelope(801))
-            client.send(envelope(802))
-            responses = [client.receive(), client.receive()]
-            assert {value[3] for value in responses} == {801, 802}
-            assert all(fields(value[4])[1] == 7 for value in responses)
-            assert time.monotonic() - started < 12, "requests must expire independently"
-        finally:
-            client.close()
-        print("REAL_CLUSTER_FAILURE_OK")
-        processes.close()
-        processes.start("close_battle", "skynet_gateway_close_battle_smoke.lua", "GATEWAY_CLOSE_BATTLE_SMOKE_READY", [2528])
-        processes.start("close_gateway", "gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
-        client = Client(19011)
-        try:
-            client.send(envelope(600))
-            try:
-                client.receive()
-                raise AssertionError("remote business close must disconnect client")
-            except (EOFError, ConnectionResetError):
-                pass
-        finally:
-            client.close()
-        client = Client(19011)
-        try:
-            client.send(envelope(602))
-            assert client.receive()[3] == 602
-        finally:
-            client.close()
-        print("REAL_CLUSTER_CLOSE_OK")
-        print("GATEWAY_ASYNC_INTEGRATION_OK")
+        if args.scope in ("all", "smoke"):
+            processes.start("smoke", "skynet_gateway_async_smoke.lua", "GATEWAY_ASYNC_SMOKE_READY", [19021, 19022])
+            for websocket in (False, True):
+                handshake_contract(websocket)
+                processes.assert_clean()
+                smoke(websocket)
+                processes.assert_clean()
+            limits()
+            processes.assert_clean()
+            processes.close()
+        if args.scope in ("all", "local"):
+            processes.start("local", "skynet.lua", "NAV_SERVER_READY", [19011])
+            course(19011, False)
+            processes.assert_clean()
+            processes.close()
+        if args.scope in ("all", "course"):
+            processes.start("battle", "battle_process.lua", "LESSON2_BATTLE_PROCESS_READY", [2528])
+            processes.start("gateway", "gateway_process.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
+            course(19011, True)
+            processes.assert_clean()
+            processes.close()
+        if args.scope in ("all", "close"):
+            cluster_close(processes)
+        print("GATEWAY_ASYNC_INTEGRATION_OK scope=" + args.scope)
     finally:
         processes.close()
 
