@@ -30,18 +30,24 @@ end
 -- 加载并核对唯一静态 BMAP；options 是当前 Service 的只读 game config。
 -- 本函数执行一次文件 I/O 和 Native 分配；失败抛错阻止 Service 对外就绪。
 function M.start(options)
+    -- 参数/状态检查：Query Logic 只能初始化一次。
     assert(config == nil, "navigation query logic already started")
+
+    -- 数据准备：加载并校验 immutable BMAP。
     config = assert(options)
     local loaded, err = battle_nav.load_map(config.map.bmap)
     assert(loaded, err and (err.code .. ": " .. err.message) or "load_map failed")
     assert(loaded.map_id == config.map.id, "BMAP map_id does not match config")
     assert(loaded.map_version == config.map.version,
            "BMAP map_version does not match config")
+
+    -- 收尾：配置和地图加载完成后，Query Logic 才对外可用。
 end
 
 -- 校验地图身份与 WorldPosition(mm)，随后同步查询 immutable GridMap。
 -- 本函数不 yield、不执行文件 I/O、不修改共享地图；Native 异常收敛为响应错误。
 function M.query(request)
+    -- 参数/状态检查：校验请求结构和地图版本。
     if type(request) ~= "table" or type(request.map_id) ~= "number" or
        type(request.map_version) ~= "number" or
        type(request.position) ~= "table" then
@@ -54,6 +60,7 @@ function M.query(request)
         return result_error("MAP_VERSION_MISMATCH", "map version mismatch")
     end
 
+    -- 核心计算：同步调用 Native 查询，并把异常收敛为稳定错误。
     local ok, value, err = pcall(
         battle_nav.query_cell,
         request.map_id,
@@ -67,6 +74,7 @@ function M.query(request)
         return result_error(err.code or "INTERNAL_ERROR", err.message)
     end
 
+    -- 收尾：把 Native 结果转换为新的协议 response table。
     return {
         result = RESULT.OK,
         message = "",

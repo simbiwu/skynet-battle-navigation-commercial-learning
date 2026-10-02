@@ -45,8 +45,13 @@ end
 --- 在编码前限制 Event、路点及事件文本；编码后的帧长仍由 Gateway 检查。
 --- result：Worker 返回的纯数据；返回 boolean；O(events + points)，无 yield。
 local function within_response_budget(result)
+    -- 参数/状态检查：结果必须包含有界的事件数组。
     if type(result) ~= "table" or type(result.events) ~= "table" or
-        #result.events > MAX_EVENTS then return false end
+        #result.events > MAX_EVENTS then
+        return false
+    end
+
+    -- 核心计算：逐个检查事件文本和路径点预算。
     local point_count = 0
     for _, event in ipairs(result.events) do
         if type(event) ~= "table" or type(event.type) ~= "string" or
@@ -55,69 +60,112 @@ local function within_response_budget(result)
             #(event.reason or "") > MAX_TEXT_BYTES or
             type(event.result or "") ~= "string" or
             #(event.result or "") > MAX_TEXT_BYTES or
-            type(event.points or {}) ~= "table" then return false end
+            type(event.points or {}) ~= "table" then
+            return false
+        end
+
         point_count = point_count + #(event.points or {})
-        if point_count > MAX_POINTS then return false end
+        if point_count > MAX_POINTS then
+            return false
+        end
     end
+
     return true
 end
+
 
 --- 客户端只提供 scenario_id；Snapshot 由 Server 固定场景模块构造。
 --- request：已解码 Protobuf record；返回 response record；Manager call 会 yield。
 ---@param request RunAutoBattleRequest 已解码的自动战斗请求；由当前 Service 拥有。
 ---@return BattleResultRecord Battle 结果或稳定业务失败 record；Manager call 可能 yield。
 local function run_auto_battle(request)
+    -- 参数/状态检查：只接受已登记的场景，并限制并发数量。
     if type(request) ~= "table" or request.scenario_id ~= 1001 then
         return rejected(RESULT.BAD_SCENARIO, "unknown scenario_id")
     end
+
     if in_flight >= MAX_IN_FLIGHT then
         return rejected(RESULT.BUSY, "battle request limit reached")
     end
+
+    -- 数据准备：由 Server 固定场景模块构造 Snapshot。
     local snapshot = assert(scenario.make_snapshot(request.scenario_id))
+
+    -- 核心计算：同步调用 BattleMgr；in_flight 在调用前后成对修改。
     in_flight = in_flight + 1
     local call_ok, result, worker_error = pcall(
-        skynet.call, battle_mgr, "lua", "simulate", snapshot)
+        skynet.call,
+        battle_mgr,
+        "lua",
+        "simulate",
+        snapshot
+    )
     in_flight = in_flight - 1
+
     if not call_ok or result == nil then
-        skynet.error("RunAutoBattle failed: ",
-            tostring(call_ok and worker_error and worker_error.code or result))
+        skynet.error(
+            "RunAutoBattle failed: ",
+            tostring(call_ok and worker_error and worker_error.code or result)
+        )
         return rejected(RESULT.BATTLE_FAILED, "battle simulation failed")
     end
+
+    -- 参数/状态检查：限制返回事件、文本和路径点总量。
     if not within_response_budget(result) then
         return rejected(RESULT.RESULT_TOO_LARGE, "battle result exceeds response limit")
     end
+
+    -- 收尾：组装跨进程返回的纯数据 record。
     --- Event table 与 Proto BattleEvent 字段名一致，跨进程只传纯数据。
-    return { ok = true, response = {
-        result = RESULT.OK,
-        message = "",
-        battle_id = result.battle_id,
-        battle_version = result.battle_version,
-        map_id = result.map_id,
-        map_version = result.map_version,
-        seed = result.seed,
-        battle_result = result.result,
-        end_logic_ms = result.end_logic_ms,
-        events = result.events,
-    } }
+    return
+    {
+        ok = true,
+        response =
+        {
+            result = RESULT.OK,
+            message = "",
+            battle_id = result.battle_id,
+            battle_version = result.battle_version,
+            map_id = result.map_id,
+            map_version = result.map_version,
+            seed = result.seed,
+            battle_result = result.result,
+            end_logic_ms = result.end_logic_ms,
+            events = result.events,
+        },
+    }
 end
+
 
 --- 保留 QueryCell 路由，增加 RunAutoBattle；错误 command/id 组合显式拒绝。
 --- payload：Gateway 解码的纯 table；Query/Manager call 会 yield。
 ---@param payload GatewayDispatch Gateway Proxy 转发的已解码请求。
 ---@return BattleResultRecord Query/Battle 业务结果；本地 call 可能 yield。
 local function dispatch_gateway(payload)
+    -- 参数/状态检查：Battle 依赖必须已经由 battle_main 注入。
     assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
     assert(type(payload) == "table", "gateway payload must be table")
+
+    -- 核心计算：Command 名和数值必须同时匹配，避免错误路由。
     if payload.command == "QueryCell" and payload.command_id == 1001 then
         return skynet.call(query_service, "lua", "gateway_dispatch", payload)
     end
+
     if payload.command == "RunAutoBattle" and payload.command_id == 1002 then
         return run_auto_battle(payload.request)
     end
-    return { ok = false, error = {
-        code = "UNKNOWN_COMMAND", message = "command/id mismatch",
-    } }
+
+    return
+    {
+        ok = false,
+        error =
+        {
+            code = "UNKNOWN_COMMAND",
+            message = "command/id mismatch",
+        },
+    }
 end
+
 
 --- 执行业务分发后单向回推结果；transport token 只关联 Gateway 请求，不成为 Battle 身份。
 --- payload：Gateway Proxy 转发的已解码请求；Battle 结果送往配置的 Gateway Proxy；可能 yield。
@@ -125,19 +173,33 @@ end
 ---@param payload GatewayDispatch 包含 route_token 的跨进程请求。
 ---@return nil 业务结果通过 Cluster battle_result 单向回推，不使用 retpack。
 local function forward_result(payload)
+    -- 参数/状态检查：路由 token 是 Battle 回推 Gateway 的唯一关联值。
     assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
-    assert(type(payload) == "table" and type(payload.route_token) == "string" and
-        #payload.route_token > 0 and #payload.route_token <= 128,
-        "invalid gateway route token")
+    assert(
+        type(payload) == "table" and
+        type(payload.route_token) == "string" and
+        #payload.route_token > 0 and
+        #payload.route_token <= 128,
+        "invalid gateway route token"
+    )
+
+    -- 核心计算：执行 Query 或 BattleMgr，统一收敛异常结果。
     local route_token = payload.route_token
     local call_ok, result = pcall(dispatch_gateway, payload)
     if not call_ok then
         skynet.error("Battle gateway dispatch failed: ", tostring(result))
-        result = {
+        result =
+        {
             ok = false,
-            error = { code = "BATTLE_FAILED", message = "battle request failed" },
+            error =
+            {
+                code = "BATTLE_FAILED",
+                message = "battle request failed",
+            },
         }
     end
+
+    -- 持久化/消息发送：把结果按 route token 回推 Gateway Proxy。
     local send_ok, send_error = pcall(
         cluster.send,
         process.cluster.gateway_node,
@@ -150,6 +212,7 @@ local function forward_result(payload)
         skynet.error("Battle result forward failed: ", tostring(send_error))
     end
 end
+
 
 --- 固定签名的 Service 分发；Cluster data-plane 用 send，结果另发 battle_result 消息。
 --- configure/ready 使用本地 call；gateway_dispatch 单向接收且会 yield，不 retpack。

@@ -297,10 +297,15 @@ end
 
 -- 推进一个 fixed tick；函数内禁止调用任何可能 yield 的 Skynet/网络/DB API。
 function M.step(state, context)
+    -- 参数/状态检查：已结束的 Battle 不允许继续推进。
     assert(state.final_result == nil, "cannot step a finished battle")
     assert(state.logic_ms < state.max_logic_ms, "cannot step past max_logic_ms")
+
+    -- 状态修改：先提交本次 fixed tick 的逻辑时间边界。
     -- state.logic_ms 表示本次结算完成的 tick 边界；本 step 内事件时间不会倒退。
     state.logic_ms = state.logic_ms + state.tick_ms
+
+    -- 核心计算：按稳定 unit 顺序选择目标、规划路径、移动和攻击。
     for _, self in ipairs(state.units) do
         if self.hp > 0 then
             local target = self.target_id and state.by_id[self.target_id] or nil
@@ -340,6 +345,7 @@ end
 -- 从冻结 snapshot 创建模拟状态并完成初始占位；返回值由同一 Battle owner 持有。
 -- 本函数不 yield。在线驱动创建一次后可分段调用 M.step；自动驱动交给 M.simulate。
 function M.create(snapshot, context)
+    -- 参数/状态检查：校验 Battle 标识、时间预算和单位数量。
     assert(type(snapshot) == "table", "snapshot must be table")
     integer_between(snapshot.battle_id, "battle_id", 1, 0x7fffffff)
     integer_between(snapshot.battle_version, "battle_version", 1, 0x7fffffff)
@@ -356,9 +362,11 @@ function M.create(snapshot, context)
         #snapshot.units > 0 and #snapshot.units <= MAX_UNITS,
         "units must be a non-empty array within limit")
 
+    -- 数据准备：复制并排序单位，读取真实地图 Cell 尺寸。
     local units = sorted_units(snapshot)
     local cell_size_mm = integer_between(
         context:cell_size_mm(), "cell_size_mm", 1, 1000000000)
+    -- 状态修改：创建本场 Battle 独占的可变状态。
     local state = {
         battle_id = assert(snapshot.battle_id),
         battle_version = snapshot.battle_version,
@@ -376,6 +384,7 @@ function M.create(snapshot, context)
         events = {},
     }
 
+    -- 核心计算：把每个单位放入动态占位索引并归一化位置。
     for _, unit in ipairs(units) do
         local normalized_position, err = context:place_unit(
             unit.agent_profile_id,
@@ -389,6 +398,7 @@ function M.create(snapshot, context)
         -- XZ 保留 snapshot 的业务位置，Y 由 Server Grid 归一；后续 Spawn/Path 使用同一高度事实。
         unit.position = normalized_position
     end
+    -- 持久化/消息发送：按固定顺序写入 Battle 开始和单位出生事件。
     emit(state, {
         type = "BATTLE_BEGIN",
         battle_id = state.battle_id,
@@ -404,6 +414,8 @@ function M.create(snapshot, context)
             position = copy_position(unit.position),
         })
     end
+
+    -- 收尾：返回由当前 Battle owner 持有的初始化状态。
     return state
 end
 

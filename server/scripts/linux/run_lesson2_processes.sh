@@ -31,20 +31,37 @@ ACTION="start"
 FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
 
 # 输出一条带脚本前缀的普通日志；参数是要显示的完整消息，返回状态始终为 0。
-log() { printf '[lesson2-processes] %s\n' "$*"; }
+log() {
+    printf '[lesson2-processes] %s\n' "$*"
+}
+
 # 输出错误并结束脚本；参数是面向操作者的失败原因，退出状态固定为 1。
-fail() { printf '[lesson2-processes] ERROR: %s\n' "$*" >&2; exit 1; }
+fail() {
+    printf '[lesson2-processes] ERROR: %s\n' "$*" >&2
+    exit 1
+}
 
 # 解析动作；未知参数在任何进程启动前失败。
 parse_args() {
     if [[ $# -gt 0 && "$1" != --* ]]; then ACTION="$1"; shift; fi
     while [[ $# -gt 0 ]]; do
         case "$1" in
-            --force) FORCE_STOP=1 ;;
-            --gateway) PROCESS_GATEWAY=1 ;;
-            --battle) PROCESS_BATTLE=1 ;;
-            -h|--help) usage; exit 0 ;;
-            *) fail "unknown argument: $1" ;;
+            --force)
+                FORCE_STOP=1
+                ;;
+            --gateway)
+                PROCESS_GATEWAY=1
+                ;;
+            --battle)
+                PROCESS_BATTLE=1
+                ;;
+            -h|--help)
+                usage
+                exit 0
+                ;;
+            *)
+                fail "unknown argument: $1"
+                ;;
         esac
         shift
     done
@@ -96,11 +113,16 @@ doctor() {
 }
 
 # 创建 PID 与日志目录并限制新文件权限；无参数、失败由 set -e 传播，不清理旧日志。
-ensure_dirs() { umask 027; mkdir -p "$RUN_DIR" "$LOG_DIR"; }
+ensure_dirs() {
+    umask 027
+    mkdir -p "$RUN_DIR" "$LOG_DIR"
+}
 
 # 读取 PID，并确认命令行仍指向本脚本使用的配置，避免误杀其它 Skynet。
 read_owned_pid() {
-    local file="$1"; local config="$2"; local pid
+    local file="$1"
+    local config="$2"
+    local pid
     [[ -s "$file" ]] || return 1
     pid="$(tr -d '[:space:]' < "$file")"
     [[ "$pid" =~ ^[0-9]+$ ]] || fail "invalid PID file: $file"
@@ -111,14 +133,19 @@ read_owned_pid() {
 
 # 启动一个角色；stdout/stderr 固定进入角色日志，调用方等待 READY。
 start_one() {
-    local role="$1"; local config="$2"; local pid_file="$3"; local log_file="$4"; local pid
+    local role="$1"
+    local config="$2"
+    local pid_file="$3"
+    local log_file="$4"
+    local pid
     if pid="$(read_owned_pid "$pid_file" "$config")"; then fail "$role already running: pid=$pid"; fi
     rm -f "$pid_file"
     (
         cd "$SERVER_ROOT"
         exec "$SKYNET_BIN" "$SERVER_ROOT/config/$config"
     ) >"$log_file" 2>&1 &
-    pid="$!"; printf '%s\n' "$pid" > "$pid_file"
+    pid="$!"
+    printf '%s\n' "$pid" > "$pid_file"
     log "started role=$role pid=$pid log=$log_file"
     # 后台 shell 的 exec 可能尚未完成；留出一个调度机会，避免立刻读取到临时命令行。
     sleep 1
@@ -126,7 +153,13 @@ start_one() {
 
 # 等待固定 READY 标记，进程提前退出或超时都失败。
 wait_ready() {
-    local role="$1"; local pid_file="$2"; local config="$3"; local log_file="$4"; local marker="$5"; local pid; local i
+    local role="$1"
+    local pid_file="$2"
+    local config="$3"
+    local log_file="$4"
+    local marker="$5"
+    local pid
+    local i
     if ! pid="$(read_owned_pid "$pid_file" "$config")"; then
         log "ERROR: $role exited before READY; see $log_file"
         return 1
@@ -145,14 +178,33 @@ wait_ready() {
 
 # 先 SIGTERM，超时只有显式 --force 才允许 SIGKILL。
 stop_one() {
-    local role="$1"; local config="$2"; local pid_file="$3"; local pid; local i
-    if ! pid="$(read_owned_pid "$pid_file" "$config")"; then rm -f "$pid_file"; log "$role STOPPED"; return 0; fi
+    local role="$1"
+    local config="$2"
+    local pid_file="$3"
+    local pid
+    local i
+    if ! pid="$(read_owned_pid "$pid_file" "$config")"; then
+        rm -f "$pid_file"
+        log "$role STOPPED"
+        return 0
+    fi
+
     kill -TERM "$pid"
     for ((i=0; i<20; i+=1)); do
-        kill -0 "$pid" 2>/dev/null || { rm -f "$pid_file"; log "stopped role=$role pid=$pid"; return 0; }
+        if ! kill -0 "$pid" 2>/dev/null; then
+            rm -f "$pid_file"
+            log "stopped role=$role pid=$pid"
+            return 0
+        fi
         sleep 1
     done
-    if ((FORCE_STOP)); then kill -KILL "$pid"; rm -f "$pid_file"; log "force-stopped role=$role pid=$pid"; else fail "$role did not stop; inspect logs before stop --force"; fi
+    if ((FORCE_STOP)); then
+        kill -KILL "$pid"
+        rm -f "$pid_file"
+        log "force-stopped role=$role pid=$pid"
+    else
+        fail "$role did not stop; inspect logs before stop --force"
+    fi
 }
 
 # 按角色选择启动顺序：Battle 先 READY，Gateway 再连接 Battle；单角色模式只启动所选进程。
@@ -179,18 +231,31 @@ start_all() {
 
 # 按角色停止；Gateway 先停，避免新请求进入正在关闭的 Battle。
 stop_all() {
-    if ((PROCESS_GATEWAY)); then stop_one gateway gateway_process.lua "$GATEWAY_PID_FILE"; fi
-    if ((PROCESS_BATTLE)); then stop_one battle battle_process.lua "$BATTLE_PID_FILE"; fi
+    if ((PROCESS_GATEWAY)); then
+        stop_one gateway gateway_process.lua "$GATEWAY_PID_FILE"
+    fi
+
+    if ((PROCESS_BATTLE)); then
+        stop_one battle battle_process.lua "$BATTLE_PID_FILE"
+    fi
     log "STOP_OK gateway=$PROCESS_GATEWAY battle=$PROCESS_BATTLE"
 }
 
 # 按角色报告状态，不修改进程。
 status_all() {
     if ((PROCESS_BATTLE)); then
-        if pid="$(read_owned_pid "$BATTLE_PID_FILE" battle_process.lua)"; then log "battle RUNNING pid=$pid log=$BATTLE_LOG"; else log "battle STOPPED"; fi
+        if pid="$(read_owned_pid "$BATTLE_PID_FILE" battle_process.lua)"; then
+            log "battle RUNNING pid=$pid log=$BATTLE_LOG"
+        else
+            log "battle STOPPED"
+        fi
     fi
     if ((PROCESS_GATEWAY)); then
-        if pid="$(read_owned_pid "$GATEWAY_PID_FILE" gateway_process.lua)"; then log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"; else log "gateway STOPPED"; fi
+        if pid="$(read_owned_pid "$GATEWAY_PID_FILE" gateway_process.lua)"; then
+            log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"
+        else
+            log "gateway STOPPED"
+        fi
     fi
 }
 

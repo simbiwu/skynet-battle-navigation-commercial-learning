@@ -83,17 +83,27 @@ end
 -- result 必须是已完成且结构合法的 Battle 结果；编码错误会抛出 Lua error。
 -- 本函数执行同步文件 I/O，只能在 battle_core.simulate 已经返回以后调用。
 function M.write(path, result)
-    -- 先编码再打开文件：若输入不完整导致编码失败，不会留下一个空 Replay 文件。
+    -- 数据准备：先完成编码，避免输入错误时留下空 Replay 文件。
     local json = M.encode(result)
+
+    -- 持久化/消息发送：打开并写入 Replay 文件。
     local file, open_error = io.open(path, "wb")
-    if file == nil then return nil, open_error end
+    if file == nil then
+        return nil, open_error
+    end
+
     local ok, write_error = file:write(json, "\n")
     if ok == nil then
         file:close()
         return nil, write_error
     end
+
+    -- 收尾：关闭文件并把关闭错误返回给调用方。
     local closed, close_error = file:close()
-    if closed == nil then return nil, close_error end
+    if closed == nil then
+        return nil, close_error
+    end
+
     return true
 end
 

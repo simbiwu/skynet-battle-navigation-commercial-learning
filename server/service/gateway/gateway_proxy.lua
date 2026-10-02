@@ -11,7 +11,7 @@ local process = require "config.gateway"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local MAX_PENDING = 64          -- 同时保留 Battle 返回路由的请求数上限。
-local REPLY_TIMEOUT_TICKS = 1000 -- 1/100 秒为一个 Skynet tick；路由最多保留 10 秒。
+local REPLY_TIMEOUT_TICKS = 10000 -- 1/100 秒为一个 Skynet tick；路由最多保留 100 秒。
 local TIMER_INTERVAL_TICKS = 10 -- 每 100 ms 扫描有限路由表。
 local pending = {}              -- token -> 返回上下文与开始 tick，由本 Service 独占；无等待协程。
 local pending_count = 0         -- 当前 Battle 返回路由数量。
@@ -28,32 +28,44 @@ local state = {
 ---@param result BattleResultRecord|table Battle 返回的通用结果 record；只读。
 ---@return BattleResultRecord 通过形状校验的原 record，或稳定的 REMOTE_BAD_RESULT。
 local function validate_battle_result(result)
+    -- 参数/状态检查：Battle 结果必须是合法的通用 record。
     if type(result) ~= "table" then
-        return {
+        return
+        {
             ok = false,
-            error = {
+            error =
+            {
                 code = "REMOTE_BAD_RESULT",
                 message = "battle returned an invalid result record",
             },
         }
     end
+
     if result.ok == true and type(result.response) == "table" then
         return result
     end
+
     local error_info = result.error
     if result.ok == false and type(error_info) == "table" and
-        type(error_info.code) == "string" and #error_info.code > 0 and #error_info.code <= 64 and
-        type(error_info.message) == "string" and #error_info.message <= 256 then
+        type(error_info.code) == "string" and
+        #error_info.code > 0 and
+        #error_info.code <= 64 and
+        type(error_info.message) == "string" and
+        #error_info.message <= 256 then
         return result
     end
-    return {
+
+    return
+    {
         ok = false,
-        error = {
+        error =
+        {
             code = "REMOTE_BAD_RESULT",
             message = "battle returned an invalid result record",
         },
     }
 end
+
 
 --- 为一次转发创建不可由客户端选择的 token，供 Battle 的反向结果消息关联原请求。
 --- 无参数；返回 string；序号耗尽时显式失败；不执行 I/O 或 yield。
@@ -88,29 +100,49 @@ end
 ---@param result BattleResultRecord|table Battle 返回的结果 record。
 ---@return boolean 是否找到仍有效的第一份路由结果。
 local function receive_battle_result(token, result)
+    -- 参数/状态检查：只接纳仍存在的第一份结果。
     local entry = pending[token]
     if entry == nil then
         skynet.error("GATEWAY_PROXY_LATE_RESULT token=", tostring(token))
         return false
     end
+
+    -- 状态修改：先删除路由，防止重复结果再次投递。
     pending[token] = nil
     pending_count = pending_count - 1
+
+    -- 消息发送：把结果交给请求上下文返回 Gateway。
     return reply_entry(entry, result)
 end
+
 
 --- 有界扫描路由过期，返回本项目的业务失败响应；不是 Gateway 网络读超时。
 --- now 是 10 ms tick；最多 MAX_PENDING 项，无 I/O/yield，迟到回包随后丢弃。
 ---@param now integer 当前 Skynet tick；调用者拥有时钟值。
 ---@return nil 扫描并释放过期路由，失败转换为业务 response。
 local function expire_pending(now)
+    -- 核心计算：扫描有界路由表，找出超过保留时间的请求。
     for token, entry in pairs(pending) do
         if (now - entry.started_at) % 0x100000000 >= REPLY_TIMEOUT_TICKS then
+            -- 状态修改：删除过期路由，再发送稳定的超时响应。
             pending[token] = nil
             pending_count = pending_count - 1
-            reply_entry(entry, { ok = false, error = { code = "REMOTE_TIMEOUT", message = "battle response timed out" } })
+
+            reply_entry(
+                entry,
+                {
+                    ok = false,
+                    error =
+                    {
+                        code = "REMOTE_TIMEOUT",
+                        message = "battle response timed out",
+                    },
+                }
+            )
         end
     end
 end
+
 
 --- 扫描有界路由项；不按请求数创建 timer coroutine。
 --- 无参数和返回；Service 停止前长驻，执行 sleep/yield。
@@ -125,28 +157,43 @@ end
 --- 参数：无。返回值：{remote_node, remote_address}；失败抛出，可能 yield，不创建业务连接。
 ---@return GatewayProxyStart Battle Cluster 的节点和地址；启动失败抛错，可能 yield。
 local function start()
+    -- 参数/状态检查：Proxy 只能启动一次。
     assert(not state.started, "gateway proxy can only start once")
-    cluster.reload({
-        [process.cluster.remote_node] = process.cluster.remote_address,
-    })
+
+    -- 数据准备：加载远程 Cluster 配置并注册本地入口。
+    cluster.reload(
+        {
+            [process.cluster.remote_node] = process.cluster.remote_address,
+        }
+    )
     cluster.open(process.cluster.local_listen, process.cluster.max_clients)
     cluster.register(process.cluster.proxy_service, skynet.self())
     route_epoch = tostring(skynet.self()) .. ":" .. tostring(skynet.hpc())
+
+    -- 核心计算：等待 Battle Process 发布 ready。
     local ready_ok, ready_or_error = pcall(
         cluster.call,
         process.cluster.remote_node,
         "@" .. process.cluster.remote_service,
         "ready"
     )
-    assert(ready_ok and ready_or_error == true,
-           "battle process is not ready: " .. tostring(ready_or_error))
+    assert(
+        ready_ok and ready_or_error == true,
+        "battle process is not ready: " .. tostring(ready_or_error)
+    )
+
+    -- 状态修改：启动后续路由超时扫描。
     state.started = true
-    skynet.fork(timeout_loop)   --是为了在 Proxy 初始化完成后，启动一个后台协程定期检查请求超时。
-    return {
+    skynet.fork(timeout_loop)
+
+    -- 收尾：返回远程节点信息。
+    return
+    {
         remote_node = process.cluster.remote_node,
         remote_address = process.cluster.remote_address,
     }
 end
+
 
 --- 接纳本地 Gateway 消息并单向转发；立即返回，不 wait、不 retpack。
 --- source 为 Gateway handle，payload 为解码请求；最多 MAX_PENDING 返回上下文，无 fd/codec。
@@ -154,31 +201,83 @@ end
 ---@param source ServiceHandle 实际发送消息的 Gateway handle；必须等于已绑定 handle。
 ---@param payload GatewayDispatch Gateway 已解码的请求；不包含 fd 或 Protobuf bytes。
 local function dispatch_remote(source, payload)
+    -- 参数/状态检查：来源必须是已绑定的 Gateway，Proxy 必须已经启动。
     assert(state.started, "gateway proxy is not started")
     assert(source == state.gateway_service, "gateway dispatch source mismatch")
-    local context = endpoint.new({ gateway_service = source, request = payload })
-    local entry = { context = context, payload = { command_id = payload.command_id },
-                    gateway_service = source, gateway_epoch = payload.gateway_epoch,
-                    connection_id = payload.connection_id, started_at = skynet.now() }
+
+    -- 数据准备：创建一次请求的返回上下文和路由 record。
+    local context = endpoint.new(
+        {
+            gateway_service = source,
+            request = payload,
+        }
+    )
+    local entry =
+    {
+        context = context,
+        payload = { command_id = payload.command_id },
+        gateway_service = source,
+        gateway_epoch = payload.gateway_epoch,
+        connection_id = payload.connection_id,
+        started_at = skynet.now(),
+    }
+
+    -- 参数/状态检查：达到在途上限时立即返回 BUSY。
     if pending_count >= MAX_PENDING then
-        reply_entry(entry, { ok = false, error = { code = "BUSY", message = "battle request limit reached" } })
+        reply_entry(
+            entry,
+            {
+                ok = false,
+                error =
+                {
+                    code = "BUSY",
+                    message = "battle request limit reached",
+                },
+            }
+        )
         return
     end
+
+    -- 状态修改：登记 token 和待返回路由。
     local token = new_route_token()
     pending[token] = entry
     pending_count = pending_count + 1
+
+    -- 数据准备：复制请求，避免给跨进程发送添加字段时修改原 record。
     local forwarded = {}
-    for key, value in pairs(payload) do forwarded[key] = value end
+    for key, value in pairs(payload) do
+        forwarded[key] = value
+    end
     forwarded.route_token = token
-    local ok, err = pcall(cluster.send, process.cluster.remote_node,
-                         "@" .. process.cluster.remote_service, "gateway_dispatch", forwarded)
+
+    -- 消息发送：异步投递 Battle，不等待业务结果。
+    local ok, err = pcall(
+        cluster.send,
+        process.cluster.remote_node,
+        "@" .. process.cluster.remote_service,
+        "gateway_dispatch",
+        forwarded
+    )
     if not ok then
+        -- 状态修改：发送失败时释放刚登记的路由。
         pending[token] = nil
         pending_count = pending_count - 1
-        reply_entry(entry, { ok = false, error = { code = "REMOTE_UNAVAILABLE", message = "battle send failed" } })
+
+        reply_entry(
+            entry,
+            {
+                ok = false,
+                error =
+                {
+                    code = "REMOTE_UNAVAILABLE",
+                    message = "battle send failed",
+                },
+            }
+        )
         skynet.error("GATEWAY_PROXY_SEND_FAILED ", tostring(err))
     end
 end
+
 
 --- 断线后移除对应 Gateway 实例的路由；不能取消 Battle 已接纳的业务操作。
 --- source/payload 由 Gateway 投递，最多扫描 MAX_PENDING；不 yield、不向客户端回复。

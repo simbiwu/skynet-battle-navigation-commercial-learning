@@ -27,27 +27,59 @@ skynet.start(function()
     ---@param command "ready"|"gateway_dispatch"|"gateway_disconnect"
     ---@param payload GatewayDispatch|nil 已解码的 Gateway 请求上下文。
     skynet.dispatch("lua", function(session, source, command, payload)
+        -- 参数/状态检查：先处理 ready 和断线通知，再进入业务分发。
         if command == "ready" then
             --- 只有完成 query_logic.start 并注册 dispatch 后，main 才会收到 ready。
             skynet.retpack(true)
             return
         end
-        if command == "gateway_disconnect" then return end
-        assert(command == "gateway_dispatch", "navigation_query only accepts gateway_dispatch")
+        if command == "gateway_disconnect" then
+            return
+        end
+
+        assert(
+            command == "gateway_dispatch",
+            "navigation_query only accepts gateway_dispatch"
+        )
         assert(type(payload) == "table", "gateway dispatch payload is required")
-        assert(payload.command == "QueryCell", "unsupported navigation command: " .. tostring(payload.command))
-        local response = query_logic.query(assert(payload.request, "query request is required"))
+        assert(
+            payload.command == "QueryCell",
+            "unsupported navigation command: " .. tostring(payload.command)
+        )
+
+        -- 核心计算：执行同步 QueryCell 业务查询。
+        local response = query_logic.query(
+            assert(payload.request, "query request is required")
+        )
         --- 业务查询只产生响应 table；接入分支处理返回路径，不接触 Socket、frame 或 Protobuf bytes。
+        -- 消息发送：按调用来源选择 Gateway 响应或本地 call 返回。
         if session == 0 then
             --- 直接接入 FlyWow 的单向消息：少量接入代码完成独立响应。
-            local context = endpoint.new({ gateway_service = source, request = payload })
+            local context = endpoint.new(
+                {
+                    gateway_service = source,
+                    request = payload,
+                }
+            )
             assert(context:reply(response))
         else
             --- Battle Dispatch 的内部本地查询合同保留，不涉及客户端读取等待。
-            skynet.retpack({ ok = true, response = response })
+            skynet.retpack(
+                {
+                    ok = true,
+                    response = response,
+                }
+            )
         end
     end)
 
-    skynet.error("NAV_QUERY_READY address=", skynet.address(skynet.self()),
-                 " map=", config.map.id, " version=", config.map.version)
+    -- 收尾：Query Service 初始化完成后发布 READY 日志。
+    skynet.error(
+        "NAV_QUERY_READY address=",
+        skynet.address(skynet.self()),
+        " map=",
+        config.map.id,
+        " version=",
+        config.map.version
+    )
 end)

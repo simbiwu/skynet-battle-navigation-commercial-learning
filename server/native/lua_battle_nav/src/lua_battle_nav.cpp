@@ -114,9 +114,15 @@ std::uint32_t uint32_arg(
 // 把一个毫米 WorldPosition 复制为新 Lua table；栈净增加 1。
 void push_world_position(lua_State* L, const battle_nav::WorldPosition& p) {
     lua_newtable(L);
-    lua_pushinteger(L, p.x_mm); lua_setfield(L, -2, "x_mm");
-    lua_pushinteger(L, p.y_mm); lua_setfield(L, -2, "y_mm");
-    lua_pushinteger(L, p.z_mm); lua_setfield(L, -2, "z_mm");
+
+    lua_pushinteger(L, p.x_mm);
+    lua_setfield(L, -2, "x_mm");
+
+    lua_pushinteger(L, p.y_mm);
+    lua_setfield(L, -2, "y_mm");
+
+    lua_pushinteger(L, p.z_mm);
+    lua_setfield(L, -2, "z_mm");
 }
 
 // 压入 nil,{code,message} 并返回 Lua 结果数量 2。
@@ -214,6 +220,7 @@ battle_nav::AgentProfile parse_profile(lua_State* L, int index) {
 // Lua battle_nav.new_context(map_id, map_version, profiles_array)
 // 成功返回 context userdata；地图查找只持有第一课 Registry 短锁，不 yield。
 int l_new_context(lua_State* L) {
+    // 数据准备：读取并校验地图标识和 Profile 数组参数。
     auto* maps = registry(L);
     const lua_Integer raw_map_id = luaL_checkinteger(L, 1);
     const lua_Integer raw_map_version = luaL_checkinteger(L, 2);
@@ -245,6 +252,7 @@ int l_new_context(lua_State* L) {
                 new battle_nav::NavigationContext(found.value));
         }
 
+        // 核心计算：查找地图、解析 Profile，并检查 Profile ID 唯一性。
         const lua_Integer count = luaL_len(L, 3);
         if (count <= 0) {
             return luaL_error(L, "profiles must not be empty");
@@ -262,12 +270,14 @@ int l_new_context(lua_State* L) {
             }
             owner->profiles.push_back(profile);
         }
+        // 状态修改：完成初始化后才允许 Context 被调用。
         owner->closed = false;
     } catch (const std::exception& exception) {
         // C++ exception 不能穿越 Lua C ABI；userdata 保持有效并由 __gc 析构。
         return push_nav_failure(
             L, battle_nav::NavError::kInternalError, exception.what());
     }
+    // 收尾：把已初始化的 Context userdata 返回 Lua。
     return 1;
 }
 
@@ -305,6 +315,7 @@ const char* path_advance_status_name(
 // request 的 path/from_world 只在本次同步调用借用；函数不 I/O、不加锁、不 yield。
 // blocked 是成功 result 状态；参数、生命周期或 Native 内部错误返回 nil,error。
 int l_context_advance_path(lua_State* L) {
+    // 参数/状态检查：确认 Context、Profile、Unit 和 Path 都有效。
     LuaNavigationContext* owner = check_context(L, 1);
     if (owner == nullptr) {
         return push_nav_failure(
@@ -333,6 +344,7 @@ int l_context_advance_path(lua_State* L) {
     const battle_nav::WorldPosition from_world = world_position(L, -1);
     lua_pop(L, 1);
 
+    // 核心计算：调用 Native 同步推进路径。
     try {
         const NavigationAgent agent{
             NavigationAgentHandle{unit_id},
@@ -359,6 +371,7 @@ int l_context_advance_path(lua_State* L) {
                 L, battle_nav::NavError::kInternalError,
                 "unknown PathAdvanceStatus");
         }
+        // 收尾：把 Native 结果转换为 Lua record。
         lua_newtable(L);
         lua_pushstring(L, status);
         lua_setfield(L, -2, "status");

@@ -27,10 +27,14 @@ PROCESS_BATTLE=0
 FORCE_STOP=0
 REBUILD=0
 DEBUG_GDB=0
-log() { printf '[serverctl] %s
-' "$*"; }
-fail() { printf '[serverctl] ERROR: %s
-' "$*" >&2; exit 1; }
+log() {
+    printf '[serverctl] %s\n' "$*"
+}
+
+fail() {
+    printf '[serverctl] ERROR: %s\n' "$*" >&2
+    exit 1
+}
 usage() {
     cat <<'USAGE'
 用法：
@@ -61,29 +65,56 @@ parse_args() {
         esac
         shift
     done
-    case "$ACTION" in start|debug|stop|restart|prepare|build|rebuild|doctor|status) ;; *) fail "未知动作：$ACTION" ;; esac
-    if [[ "$ACTION" == start || "$ACTION" == debug || "$ACTION" == stop || "$ACTION" == restart ]]; then
-        if ((PROCESS_GATEWAY == 0 && PROCESS_BATTLE == 0)); then PROCESS_GATEWAY=1; PROCESS_BATTLE=1; fi
+    case "$ACTION" in
+        start|debug|stop|restart|prepare|build|rebuild|doctor|status)
+            ;;
+        *)
+            fail "未知动作：$ACTION"
+            ;;
+    esac
+    if [[ "$ACTION" == start || "$ACTION" == debug ||
+        "$ACTION" == stop || "$ACTION" == restart ]]; then
+        if ((PROCESS_GATEWAY == 0 && PROCESS_BATTLE == 0)); then
+            PROCESS_GATEWAY=1
+            PROCESS_BATTLE=1
+        fi
     fi
-    if ((DEBUG_GDB && ACTION != debug)); then fail "--gdb 只能用于 debug"; fi
-    if ((DEBUG_GDB && PROCESS_GATEWAY && PROCESS_BATTLE)); then fail "--gdb 只能选择一个进程"; fi
+
+    if ((DEBUG_GDB && ACTION != debug)); then
+        fail "--gdb 只能用于 debug"
+    fi
+
+    if ((DEBUG_GDB && PROCESS_GATEWAY && PROCESS_BATTLE)); then
+        fail "--gdb 只能选择一个进程"
+    fi
 }
 prepare_runtime() {
+    # 数据准备：确保 Skynet、协议工具和 Lua protobuf runtime 可用。
     "$SCRIPT_DIR/bootstrap_skynet.sh"
     "$SCRIPT_DIR/bootstrap_protocol_tools.sh"
     if [[ ! -x "$SKYNET_BIN" ]]; then "$SCRIPT_DIR/build_skynet.sh"; fi
     if [[ ! -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]]; then "$SCRIPT_DIR/build_lua_protobuf.sh"; fi
+    # 生成协议运行时产物。
     mkdir -p "$(dirname "$REGISTRY")"
-    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" --proto "$PROTO" --output "$REGISTRY"
-    bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh" "$SERVER_ROOT/third_party/skynet"
+    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
+    # 构建 Native 依赖并校验 descriptor。
+    bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh"         "$SERVER_ROOT/third_party/skynet"
     "$SCRIPT_DIR/check_server_descriptor.sh"
     BUILD_TYPE="$BUILD_TYPE" "$SERVER_ROOT/native/lua_battle_nav/make.sh"
-    [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] || fail "共享运行资产不完整"
+    # 收尾：确认所有启动所需产物存在。
+    [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] ||
+        fail "共享运行资产不完整"
     log "PREPARE_OK"
 }
-run_build() { prepare_runtime; "$SCRIPT_DIR/check_lua_varargs.sh"; "$SERVER_ROOT/native/grid_map/make_test.sh"; log "BUILD_OK"; }
+run_build() {
+    prepare_runtime
+    "$SCRIPT_DIR/check_lua_varargs.sh"
+    "$SERVER_ROOT/native/grid_map/make_test.sh"
+    log "BUILD_OK"
+}
 run_rebuild() {
-    $SCRIPT_DIR/run_lesson2_processes.sh stop --gateway --battle --force || true
+    # 状态修改：停止现有课程进程并清理构建输出。
+    "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle --force || true
     rm -rf "$SERVER_ROOT/build/grid_map" "$SERVER_ROOT/build/lua_battle_nav"
     if [[ -f "$SERVER_ROOT/third_party/skynet/Makefile" ]]; then make -C "$SERVER_ROOT/third_party/skynet" clean >/dev/null 2>&1 || true; fi
     "$SCRIPT_DIR/build_skynet.sh"
@@ -92,9 +123,12 @@ run_rebuild() {
     log "REBUILD_OK"
 }
 run_selected_start() {
-    if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway --battle
-    elif ((PROCESS_GATEWAY)); then "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway
-    else "$SCRIPT_DIR/run_lesson2_processes.sh" start --battle
+    if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway --battle
+    elif ((PROCESS_GATEWAY)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway
+    else
+        "$SCRIPT_DIR/run_lesson2_processes.sh" start --battle
     fi
 }
 run_selected_stop() {
@@ -107,9 +141,12 @@ run_selected_stop() {
     fi
 }
 run_selected_status() {
-    if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway --battle
-    elif ((PROCESS_GATEWAY)); then "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway
-    else "$SCRIPT_DIR/run_lesson2_processes.sh" status --battle
+    if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway --battle
+    elif ((PROCESS_GATEWAY)); then
+        "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway
+    else
+        "$SCRIPT_DIR/run_lesson2_processes.sh" status --battle
     fi
 }
 run_debug() {

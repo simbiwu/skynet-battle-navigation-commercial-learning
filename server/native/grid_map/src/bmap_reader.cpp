@@ -74,6 +74,7 @@ std::string SizeDetail(
 
 NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
     const std::string& path) {
+    // 数据准备：读取完整文件，后续校验只使用内存缓冲。
     std::ifstream stream(path, std::ios::binary | std::ios::ate);
     if (!stream) {
         return NavResult<std::shared_ptr<const GridMap>>::Failure(
@@ -110,6 +111,7 @@ NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
             "short read: " + path);
     }
 
+    // 参数/状态检查：校验文件尺寸、Magic、版本和 Header 字段。
     if (file[0] != 'B' || file[1] != 'M' ||
         file[2] != 'A' || file[3] != 'P') {
         return NavResult<std::shared_ptr<const GridMap>>::Failure(
@@ -158,6 +160,7 @@ NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
             "cell_stride/reserved mismatch");
     }
 
+    // 核心计算：计算 Cell 数量和 payload 尺寸，拒绝整数溢出。
     const std::uint64_t cell_count =
         static_cast<std::uint64_t>(metadata.width) * metadata.height;
     const std::uint64_t expected_payload_size =
@@ -186,6 +189,7 @@ NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
             SizeDetail(expected_file_size, file_size));
     }
 
+    // 参数/状态检查：校验 Header CRC 和 payload CRC。
     std::array<std::uint8_t, kBMapHeaderSize> header{};
     std::copy_n(file.data(), header.size(), header.data());
     WriteU32Le(header.data() + kHeaderCrcOffset, 0);
@@ -202,6 +206,7 @@ NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
             "payload crc mismatch");
     }
 
+    // 数据准备：把连续 payload 解码成 NavCell 数组。
     std::vector<NavCell> cells;
     cells.resize(static_cast<std::size_t>(cell_count));
     for (std::size_t index = 0; index < cells.size(); ++index) {
@@ -212,6 +217,7 @@ NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(
         cells[index].clearance_cells = source[7];
     }
 
+    // 收尾：构造 immutable GridMap，失败时转换为稳定错误。
     try {
         std::shared_ptr<const GridMap> map =
             std::make_shared<const GridMap>(metadata, std::move(cells));
