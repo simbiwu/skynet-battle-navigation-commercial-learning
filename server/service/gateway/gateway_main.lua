@@ -6,7 +6,7 @@
 
 local skynet = require "skynet"
 local config = require "config.gateway"
-local luapanda_debug = require "shared.debug.luapanda_debug"
+--local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 先启动 Proxy 并完成远程 ready，再让 FlyWow 绑定端口；端口可用意味着两条进程链路都已就绪。
 -- 参数：无。返回值：无；执行 Service 创建、跨进程 call 和 Gateway bind，失败终止启动。
@@ -17,6 +17,7 @@ skynet.start(function()
     local gateway_service = skynet.newservice("flywow_gateway")
     -- 关闭命令可以在请求完成后到达；Proxy 必须显式持有 Gateway handle，不能依赖仍存在的 token。
     assert(skynet.call(proxy_service, "lua", "bind_gateway", { gateway_service = gateway_service }))
+
     local gateway = assert(skynet.call(gateway_service, "lua", "start", {
         handler_service = proxy_service,
         host = config.host,

@@ -7,6 +7,8 @@ local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local process = require "config.battle"
 local scenario = require "battle.scenario_1001"
+local protocol_registry = require "gateway.protocol.navigation_registry"
+local command_ids = protocol_registry.command_ids
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local query_service = nil    -- 本进程 Query Service，由 battle_main 注入一次。
@@ -147,11 +149,11 @@ local function dispatch_gateway(payload)
     assert(type(payload) == "table", "gateway payload must be table")
 
     -- 核心计算：CommandId 选择唯一业务处理器，避免 Gateway 参与业务路由。
-    if payload.command_id == 1001 then
+    if payload.command_id == command_ids.QUERY_CELL then
         return skynet.call(query_service, "lua", "query_cell", { request = payload.data })
     end
 
-    if payload.command_id == 1002 then
+    if payload.command_id == command_ids.RUN_AUTO_BATTLE then
         return run_auto_battle(payload.data)
     end
 

@@ -11,6 +11,7 @@ skynet.start(function()
     local query_service = skynet.newservice("battle/navigation_query")
     -- ready call 等待 Query 完成 BMAP 加载并注册 dispatch，随后 Gateway 才开始监听。
     assert(skynet.call(query_service, "lua", "ready"))
+
     local gateway_service = skynet.newservice("flywow_gateway")
     -- Gateway 从 config.gateway 读取默认配置；composition root 只注入业务 handler handle。
     assert(skynet.call(gateway_service, "lua", "start", {

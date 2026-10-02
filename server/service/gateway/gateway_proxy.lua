@@ -135,14 +135,10 @@ skynet.start(function()
         if command == "start" then
             skynet.retpack(start())
             return
-        end
-
-        if command == "bind_gateway" then
+        elseif command == "bind_gateway" then
             skynet.retpack(bind_gateway(data))
             return
-        end
-
-        if command == "send_data" then
+        elseif command == "send_data" then
             assert(state.started and state.gateway_service ~= nil,
                 "gateway proxy is not ready")
             validate_data(data)
@@ -153,13 +149,10 @@ skynet.start(function()
                 forward_to_gateway(data)
             end
             return
-        end
-
-        if command == "close" then
+        elseif command == "close" then
             close_gateway(data)
             return
         end
-
         error("unknown gateway proxy command: " .. tostring(command))
     end)
 end)
