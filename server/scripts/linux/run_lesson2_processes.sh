@@ -23,7 +23,7 @@ GATEWAY_PID_FILE="$RUN_DIR/gateway.pid"
 BATTLE_PID_FILE="$RUN_DIR/battle.pid"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 BATTLE_LOG="$LOG_DIR/battle.log"
-STARTUP_TIMEOUT_SEC=20
+STARTUP_TIMEOUT_SEC=${LESSON2_STARTUP_TIMEOUT_SEC:-20}
 FORCE_STOP=0
 PROCESS_GATEWAY=0
 PROCESS_BATTLE=0
@@ -131,7 +131,7 @@ wait_ready() {
         log "ERROR: $role exited before READY; see $log_file"
         return 1
     fi
-    for ((i=0; i<STARTUP_TIMEOUT_SEC; i+=1)); do
+    for ((i=0; i<STARTUP_TIMEOUT_SEC || STARTUP_TIMEOUT_SEC == 0; i+=1)); do
         grep -Fq "$marker" "$log_file" && return 0
         if ! kill -0 "$pid" 2>/dev/null; then
             log "ERROR: $role stopped before READY; see $log_file"

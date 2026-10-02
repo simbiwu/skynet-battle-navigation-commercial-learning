@@ -116,6 +116,8 @@ run_debug() {
     prepare_runtime
     "$SCRIPT_DIR/bootstrap_luapanda.sh"
     export LUA_PANDA_ENABLE=1 LUA_PANDA_HOST
+    # 断点可能暂停超过普通启动的 20 秒；调试启动无限等待 READY。
+    export LESSON2_STARTUP_TIMEOUT_SEC=0
     if ((DEBUG_GDB)); then
         command -v gdb >/dev/null 2>&1 || fail "未安装 gdb"
         local config
