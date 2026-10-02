@@ -582,9 +582,9 @@ start_debug() {
         command -v gdb >/dev/null 2>&1 || fail "debug --gdb requires gdb"
         local gdb_config
         if ((PROCESS_GATEWAY)); then
-            gdb_config="$SERVER_ROOT/config/skynet_gateway.lua"
+            gdb_config="$SERVER_ROOT/config/gateway.lua"
         else
-            gdb_config="$SERVER_ROOT/config/skynet_battle.lua"
+            gdb_config="$SERVER_ROOT/config/battle.lua"
         fi
         log "starting selected process under GDB: $gdb_config"
         cd "$SERVER_ROOT"
@@ -595,12 +595,13 @@ start_debug() {
     log "starting selected Lesson 2 processes with LuaPanda; start VS Code debugger first"
     flock -u 9
     exec 9>&-
-    LUA_PANDA_ENABLE=1 LUA_PANDA_HOST="$LUA_PANDA_HOST" \
-        "$SCRIPT_DIR/run_lesson2_processes.sh" start
-    for debug_log in "$SERVER_ROOT/logs/lesson2/battle.log" "$SERVER_ROOT/logs/lesson2/gateway.log"; do
-        grep -Fq "LUA_PANDA_READY" "$debug_log" || \
-            fail "LuaPanda did not become ready; inspect $debug_log"
-    done
+    LUA_PANDA_ENABLE=1 LUA_PANDA_HOST="$LUA_PANDA_HOST" start_selected_processes
+    if ((PROCESS_BATTLE)); then
+        grep -Fq "LUA_PANDA_READY" "$SERVER_ROOT/logs/lesson2/battle.log" ||             fail "LuaPanda did not become ready for Battle; inspect $SERVER_ROOT/logs/lesson2/battle.log"
+    fi
+    if ((PROCESS_GATEWAY)); then
+        grep -Fq "LUA_PANDA_READY" "$SERVER_ROOT/logs/lesson2/gateway.log" ||             fail "LuaPanda did not become ready for Gateway; inspect $SERVER_ROOT/logs/lesson2/gateway.log"
+    fi
     log "DEBUG_READY LuaPanda"
 }
 

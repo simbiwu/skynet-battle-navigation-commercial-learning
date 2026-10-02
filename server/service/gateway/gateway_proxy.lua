@@ -7,7 +7,7 @@
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local endpoint = require "gateway.endpoint"
-local process = require "config.process_gateway"
+local process = require "config.gateway"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local MAX_PENDING = 64          -- 同时保留 Battle 返回路由的请求数上限。

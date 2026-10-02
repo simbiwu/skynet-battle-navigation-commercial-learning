@@ -6,7 +6,7 @@
 local skynet = require "skynet"
 local cluster = require "skynet.cluster"
 local endpoint = require "gateway.endpoint"
-local process = require "config.process_battle"
+local process = require "config.battle"
 
 -- 注册测试 Cluster 业务入口；节点信息归项目，FlyWow 不选择本地/远程发送方式。
 skynet.start(function()

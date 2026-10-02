@@ -5,7 +5,7 @@
 --- 不负责：不实现寻路、AI 或战斗结算，不接受客户端 Snapshot。
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
-local process = require "config.process_battle"
+local process = require "config.battle"
 local scenario = require "battle.scenario_1001"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 

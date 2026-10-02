@@ -146,7 +146,7 @@ BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
 ./scripts/linux/run_lesson2_processes.sh stop
 ```
 
-脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/process_gateway.lua`、`config/process_battle.lua` 和课程文档。
+脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/gateway.lua`、`config/battle.lua` 和课程文档。
 
 
 ## 异步 Gateway 接入合同（D039）

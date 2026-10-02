@@ -82,7 +82,7 @@ find_flywow_root() {
 # 检查二进制、配置、框架和生成 registry；不启动进程。
 doctor() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing; run run_server.sh build"
-    [[ -f "$SERVER_ROOT/config/skynet_gateway.lua" && -f "$SERVER_ROOT/config/skynet_battle.lua" ]] || fail "process configs missing"
+    [[ -f "$SERVER_ROOT/config/gateway.lua" && -f "$SERVER_ROOT/config/battle.lua" ]] || fail "process configs missing"
     [[ -f "$SERVER_ROOT/service/gateway/gateway_main.lua" && -f "$SERVER_ROOT/service/battle/battle_main.lua" && -f "$SERVER_ROOT/service/gateway/gateway_proxy.lua" ]] || fail "process services missing"
     # 双进程 READY 依赖真正的 Battle 分发入口与已实现的 Manager/Worker。
     [[ -f "$SERVER_ROOT/service/battle/battle_dispatch.lua" &&
@@ -160,17 +160,17 @@ start_all() {
     doctor
     ensure_dirs
     if ((PROCESS_BATTLE)); then
-        start_one battle skynet_battle.lua "$BATTLE_PID_FILE" "$BATTLE_LOG"
-        if ! wait_ready battle "$BATTLE_PID_FILE" skynet_battle.lua "$BATTLE_LOG" LESSON2_BATTLE_PROCESS_READY; then
-            stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"
+        start_one battle battle.lua "$BATTLE_PID_FILE" "$BATTLE_LOG"
+        if ! wait_ready battle "$BATTLE_PID_FILE" battle.lua "$BATTLE_LOG" LESSON2_BATTLE_PROCESS_READY; then
+            stop_one battle battle.lua "$BATTLE_PID_FILE"
             fail "battle process did not become ready"
         fi
     fi
     if ((PROCESS_GATEWAY)); then
-        start_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE" "$GATEWAY_LOG"
-        if ! wait_ready gateway "$GATEWAY_PID_FILE" skynet_gateway.lua "$GATEWAY_LOG" LESSON2_GATEWAY_PROCESS_READY; then
-            stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"
-            if ((PROCESS_BATTLE)); then stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"; fi
+        start_one gateway gateway.lua "$GATEWAY_PID_FILE" "$GATEWAY_LOG"
+        if ! wait_ready gateway "$GATEWAY_PID_FILE" gateway.lua "$GATEWAY_LOG" LESSON2_GATEWAY_PROCESS_READY; then
+            stop_one gateway gateway.lua "$GATEWAY_PID_FILE"
+            if ((PROCESS_BATTLE)); then stop_one battle battle.lua "$BATTLE_PID_FILE"; fi
             fail "gateway process did not become ready"
         fi
     fi
@@ -179,18 +179,18 @@ start_all() {
 
 # 按角色停止；Gateway 先停，避免新请求进入正在关闭的 Battle。
 stop_all() {
-    if ((PROCESS_GATEWAY)); then stop_one gateway skynet_gateway.lua "$GATEWAY_PID_FILE"; fi
-    if ((PROCESS_BATTLE)); then stop_one battle skynet_battle.lua "$BATTLE_PID_FILE"; fi
+    if ((PROCESS_GATEWAY)); then stop_one gateway gateway.lua "$GATEWAY_PID_FILE"; fi
+    if ((PROCESS_BATTLE)); then stop_one battle battle.lua "$BATTLE_PID_FILE"; fi
     log "STOP_OK gateway=$PROCESS_GATEWAY battle=$PROCESS_BATTLE"
 }
 
 # 按角色报告状态，不修改进程。
 status_all() {
     if ((PROCESS_BATTLE)); then
-        if pid="$(read_owned_pid "$BATTLE_PID_FILE" skynet_battle.lua)"; then log "battle RUNNING pid=$pid log=$BATTLE_LOG"; else log "battle STOPPED"; fi
+        if pid="$(read_owned_pid "$BATTLE_PID_FILE" battle.lua)"; then log "battle RUNNING pid=$pid log=$BATTLE_LOG"; else log "battle STOPPED"; fi
     fi
     if ((PROCESS_GATEWAY)); then
-        if pid="$(read_owned_pid "$GATEWAY_PID_FILE" skynet_gateway.lua)"; then log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"; else log "gateway STOPPED"; fi
+        if pid="$(read_owned_pid "$GATEWAY_PID_FILE" gateway.lua)"; then log "gateway RUNNING pid=$pid log=$GATEWAY_LOG"; else log "gateway STOPPED"; fi
     fi
 }
 

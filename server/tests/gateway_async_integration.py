@@ -432,8 +432,8 @@ def main():
         processes.start("local", "skynet.lua", "NAV_SERVER_READY", [19001])
         course(19001, False)
         processes.close()
-        processes.start("battle", "skynet_battle.lua", "LESSON2_BATTLE_PROCESS_READY", [2528])
-        processes.start("gateway", "skynet_gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
+        processes.start("battle", "battle.lua", "LESSON2_BATTLE_PROCESS_READY", [2528])
+        processes.start("gateway", "gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
         course(19011, True)
         # 终止自己创建的 Battle，验证两个请求均返回业务失败且 Gateway 保持可读。
         battle = processes.children[0][0]
@@ -454,7 +454,7 @@ def main():
         print("REAL_CLUSTER_FAILURE_OK")
         processes.close()
         processes.start("close_battle", "skynet_gateway_close_battle_smoke.lua", "GATEWAY_CLOSE_BATTLE_SMOKE_READY", [2528])
-        processes.start("close_gateway", "skynet_gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
+        processes.start("close_gateway", "gateway.lua", "LESSON2_GATEWAY_PROCESS_READY", [19011, 2527])
         client = Client(19011)
         try:
             client.send(envelope(600))

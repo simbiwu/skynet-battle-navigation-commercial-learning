@@ -5,7 +5,7 @@
 --- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
 local skynet = require "skynet"
 local endpoint = require "gateway.endpoint"
-local config = require "config.game"
+local config = require "config.battle"
 local query_logic = require "battle.navigation.query_logic"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 

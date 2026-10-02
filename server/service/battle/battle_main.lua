@@ -5,7 +5,7 @@
 -- 不负责：不解析 Protobuf、不执行 AI/A*、不保存客户端连接。
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
-local process = require "config.process_battle"
+local process = require "config.battle"
 
 -- 先等待地图和 Worker Pool 就绪，再向 Gateway 发布 cluster 入口。
 -- 无参数/返回；会创建 Service、执行本地 call/cluster I/O 并 yield。
