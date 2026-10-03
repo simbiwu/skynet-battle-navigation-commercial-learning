@@ -23,13 +23,13 @@ def main():
     processes = Processes(framework)
     try:
         processes.start('sdk', 'skynet_gateway_async_smoke.lua', 'GATEWAY_ASYNC_SMOKE_READY', [19021, 19022])
-        subprocess.run(['node', str(framework / 'clients/h5/example.mjs'), 'ws://127.0.0.1:19022'], check=True, timeout=20)
+        subprocess.run(['node', str(framework / 'gateway/h5/example.mjs'), 'ws://127.0.0.1:19022'], check=True, timeout=20)
         if args.dotnet:
             subprocess.run([args.dotnet, args.unity_runner, '19021'], check=True, timeout=20)
         print('GATEWAY_SDK_INTEROP_OK')
         if args.serve_browser:
             # 仅本机验收；阻塞到调用者Ctrl+C，finally回收HTTP和Skynet进程。
-            handler = partial(SimpleHTTPRequestHandler, directory=str(framework / 'clients/h5'))
+            handler = partial(SimpleHTTPRequestHandler, directory=str(framework / 'gateway/h5'))
             with ThreadingHTTPServer(('127.0.0.1', 19023), handler) as server:
                 print('BROWSER_INTEROP_READY http://localhost:19023/example.html', flush=True)
                 try:

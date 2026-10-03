@@ -14,6 +14,7 @@ local luapanda_debug = require "shared.debug.luapanda_debug"
 local query_service = nil    -- 本进程 Query Service，由 battle_main 注入一次。
 local battle_mgr = nil       -- 本进程 BattleMgr，由 battle_main 注入一次。
 local in_flight = 0          -- 正在等待自动战斗结果的请求数，由此 Service 独占。
+local shutting_down = false  -- 已收到关闭请求；不再接受新的 Gateway 数据。
 local MAX_IN_FLIGHT = 4      -- 超限立即返回 BUSY，避免无限排队。
 local MAX_EVENTS = 100       -- 一次网络结果允许的最大 Event 数。
 local MAX_POINTS = 200      -- 所有 MOVE_PATH 点的总数上限。
@@ -41,7 +42,7 @@ end
 --- 返回一个可预期业务拒绝；消息为固定短文案，不包含 Server 堆栈。
 --- code/message：当前请求结果码和诊断；新建 record，无 I/O、无 yield。
 local function rejected(code, message)
-    return { ok = true, response = { result = code, message = message } }
+    return { result = code, message = message }
 end
 
 --- 在编码前限制 Event、路点及事件文本；编码后的帧长仍由 Gateway 检查。
@@ -117,24 +118,20 @@ local function run_auto_battle(request)
         return rejected(RESULT.RESULT_TOO_LARGE, "battle result exceeds response limit")
     end
 
-    -- 收尾：组装跨进程返回的纯数据 record。
-    --- Event table 与 Proto BattleEvent 字段名一致，跨进程只传纯数据。
+    -- 收尾：返回与 Proto Response 字段一致的 record。
+    -- Gateway 直接编码 data；多包一层 response 会让所有业务字段被忽略。
     return
     {
-        ok = true,
-        response =
-        {
-            result = RESULT.OK,
-            message = "",
-            battle_id = result.battle_id,
-            battle_version = result.battle_version,
-            map_id = result.map_id,
-            map_version = result.map_version,
-            seed = result.seed,
-            battle_result = result.result,
-            end_logic_ms = result.end_logic_ms,
-            events = result.events,
-        },
+        result         = RESULT.OK,
+        message        = "",
+        battle_id      = result.battle_id,
+        battle_version = result.battle_version,
+        map_id         = result.map_id,
+        map_version    = result.map_version,
+        seed           = result.seed,
+        battle_result  = result.result,
+        end_logic_ms   = result.end_logic_ms,
+        events         = result.events,
     }
 end
 
@@ -168,6 +165,9 @@ end
 --- 执行业务分发；有返回数据时通过统一 send_data 发回 Gateway。
 --- payload：Gateway 转发的连接身份、command_id 和已解码 data；可能 yield。
 local function forward_data(payload)
+    if shutting_down then
+        return
+    end
     assert(query_service ~= nil and battle_mgr ~= nil,
         "battle_dispatch is not ready")
     assert(
@@ -209,6 +209,17 @@ local function forward_data(payload)
     end
 end
 
+--- 停止接收新请求，等待当前自动战斗返回，再退出 Dispatch Service。
+--- 返回 true；等待期间会 yield，调用方是 Battle shutdown coordinator。
+local function shutdown()
+    shutting_down = true
+    while in_flight > 0 do
+        skynet.sleep(1)
+    end
+    skynet.retpack(true)
+    skynet.exit()
+end
+
 --- 通知 Gateway 关闭指定连接；只传递连接身份，不保存或等待业务状态。
 --- data.connection_id 必须大于 0；广播关闭不属于本接口。
 local function close_connection(data)
@@ -237,6 +248,8 @@ skynet.start(function()
             skynet.retpack(configure(payload))
         elseif command == "ready" then
             skynet.retpack(query_service ~= nil and battle_mgr ~= nil)
+        elseif command == "shutdown" then
+            shutdown()
         elseif command == "send_data" then
             forward_data(payload)
         elseif command == "close" then

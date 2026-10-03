@@ -23,12 +23,17 @@ GATEWAY_PID_FILE="$RUN_DIR/gateway.pid"
 BATTLE_PID_FILE="$RUN_DIR/battle.pid"
 GATEWAY_LOG="$LOG_DIR/gateway.log"
 BATTLE_LOG="$LOG_DIR/battle.log"
+SHUTDOWN_LOG="$LOG_DIR/shutdownctl.log"
+SHUTDOWN_CONFIG="shutdownctl_process.lua"
 STARTUP_TIMEOUT_SEC=${LESSON2_STARTUP_TIMEOUT_SEC:-20}
 FORCE_STOP=0
 PROCESS_GATEWAY=0
 PROCESS_BATTLE=0
 ACTION="start"
-FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
+FLYWOW_ROOT="${FLYWOW_ROOT:-$SERVER_ROOT/third_party/skynet-flywow}"
+export FLYWOW_ROOT
+# 临时 shutdownctl 配置也使用同一绝对生成路径，不能依赖配置文件所在目录。
+export FLYWOW_PATHS_CONFIG="$SERVER_ROOT/run/flywow_paths.lua"
 
 # 输出一条带脚本前缀的普通日志；参数是要显示的完整消息，返回状态始终为 0。
 log() {
@@ -92,8 +97,8 @@ USAGE
 
 # submodule 是正常来源，sibling 只用于开发覆盖；返回已验证的框架根目录。
 find_flywow_root() {
-    [[ -f "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" &&
-       -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]]
+    [[ -f "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py" &&
+       -f "$FLYWOW_ROOT/gateway/service/flywow_gateway.lua" ]]
 }
 
 # 检查二进制、配置、框架和生成 registry；不启动进程。
@@ -104,10 +109,17 @@ doctor() {
     # 双进程 READY 依赖真正的 Battle 分发入口与已实现的 Manager/Worker。
     [[ -f "$SERVER_ROOT/service/battle/battle_dispatch.lua" &&
        -f "$SERVER_ROOT/service/battle/battle_mgr.lua" &&
-       -f "$SERVER_ROOT/service/battle/battle_worker.lua" ]] ||
+       -f "$SERVER_ROOT/service/battle/battle_worker.lua" &&
+       -f "$SERVER_ROOT/service/battle/shutdown_coordinator.lua" &&
+       -f "$SERVER_ROOT/service/gateway/shutdown_coordinator.lua" &&
+       -f "$SERVER_ROOT/service/admin/shutdownctl.lua" &&
+       -f "$SERVER_ROOT/config/shutdownctl_process.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
-    [[ -f "$FLYWOW_ROOT/lualib/gateway/endpoint.lua" ]] || fail "FlyWow async Gateway API missing; use a verified async submodule revision from server/third_party/skynet-flywow"
+    [[ -f "$FLYWOW_ROOT/gateway/service/flywow_gateway.lua" &&
+       -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/codec.lua" &&
+       -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/handshake.lua" ]] ||
+        fail "FlyWow Gateway sources missing; run git submodule update --init --recursive"
     [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=$FLYWOW_ROOT"
 }
@@ -176,6 +188,49 @@ wait_ready() {
     return 1
 }
 
+# 通过一次性 Admin Skynet 进程发送 Cluster shutdown；成功只表示目标已接受关闭并完成业务清理。
+run_shutdownctl() {
+    local target="$1"
+    local pid
+    local i
+    local config_file="$RUN_DIR/shutdownctl_${target}.lua"
+    sed "s/^shutdown_target = .*/shutdown_target = \"$target\"/" \
+        "$SERVER_ROOT/config/$SHUTDOWN_CONFIG" > "$config_file"
+    rm -f "$SHUTDOWN_LOG"
+    (
+        cd "$SERVER_ROOT"
+        SHUTDOWN_TARGET="$target" exec "$SKYNET_BIN" \
+            "$config_file"
+    ) >"$SHUTDOWN_LOG" 2>&1 &
+    pid="$!"
+
+    for ((i=0; i<20; i+=1)); do
+        if grep -Fq "SHUTDOWNCTL_OK target=$target" "$SHUTDOWN_LOG"; then
+            return 0
+        fi
+        if ! kill -0 "$pid" 2>/dev/null; then
+            # 子进程可能已经退出，但重定向文件还未完成写入；继续轮询最终标记。
+            sleep 1
+        fi
+        sleep 1
+    done
+    log "ERROR: shutdownctl timeout target=$target; see $SHUTDOWN_LOG"
+    return 1
+}
+
+# 等待指定 PID 消失；不发送信号，超时由调用方决定是否回退。
+wait_stopped() {
+    local pid_file="$1"
+    local config="$2"
+    for ((i=0; i<20; i+=1)); do
+        if ! read_owned_pid "$pid_file" "$config" >/dev/null 2>&1; then
+            return 0
+        fi
+        sleep 1
+    done
+    return 1
+}
+
 # 先 SIGTERM，超时只有显式 --force 才允许 SIGKILL。
 stop_one() {
     local role="$1"
@@ -231,12 +286,44 @@ start_all() {
 
 # 按角色停止；Gateway 先停，避免新请求进入正在关闭的 Battle。
 stop_all() {
-    if ((PROCESS_GATEWAY)); then
-        stop_one gateway gateway_process.lua "$GATEWAY_PID_FILE"
+    local gateway_running=0
+    local battle_running=0
+    local target=""
+
+    if ((PROCESS_GATEWAY)) &&
+        read_owned_pid "$GATEWAY_PID_FILE" gateway_process.lua >/dev/null 2>&1; then
+        gateway_running=1
+    fi
+    if ((PROCESS_BATTLE)) &&
+        read_owned_pid "$BATTLE_PID_FILE" battle_process.lua >/dev/null 2>&1; then
+        battle_running=1
     fi
 
-    if ((PROCESS_BATTLE)); then
-        stop_one battle battle_process.lua "$BATTLE_PID_FILE"
+    if ((gateway_running && battle_running)); then
+        target="all"
+    elif ((gateway_running)); then
+        target="gateway"
+    elif ((battle_running)); then
+        target="battle"
+    fi
+
+    if [[ -n "$target" ]] && run_shutdownctl "$target"; then
+        if ((gateway_running)) &&
+            ! wait_stopped "$GATEWAY_PID_FILE" gateway_process.lua; then
+            stop_one gateway gateway_process.lua "$GATEWAY_PID_FILE"
+        fi
+        if ((battle_running)) &&
+            ! wait_stopped "$BATTLE_PID_FILE" battle_process.lua; then
+            stop_one battle battle_process.lua "$BATTLE_PID_FILE"
+        fi
+    else
+        # 控制链不可用时保留原有信号兜底，避免无法停止卡住的开发进程。
+        if ((PROCESS_GATEWAY)); then
+            stop_one gateway gateway_process.lua "$GATEWAY_PID_FILE"
+        fi
+        if ((PROCESS_BATTLE)); then
+            stop_one battle battle_process.lua "$BATTLE_PID_FILE"
+        fi
     fi
     log "STOP_OK gateway=$PROCESS_GATEWAY battle=$PROCESS_BATTLE"
 }

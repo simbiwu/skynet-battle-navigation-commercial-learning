@@ -4,7 +4,7 @@
 -- 生命周期：game config 在 start 时保存一次；响应归当前消息协程所有。
 -- 不负责：不处理 TCP、不执行跨 Service call、不做寻路、不保存动态单位。
 local skynet = require "skynet"
-local battle_nav = require "battle_nav"
+local battle_nav = require "flywow.navigation"
 
 local M = {}
 local config -- 当前 Query Service 私有的只读配置；start 成功后不再替换。

@@ -24,10 +24,18 @@ skynet.start(function()
         port = config.port,
         transport = config.transport,
     }))
+    local shutdown_coordinator =
+        skynet.newservice("gateway/shutdown_coordinator")
+    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+        gateway_service = gateway_service,
+        proxy_service = proxy_service,
+    }))
+    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
 
     skynet.error("LESSON2_GATEWAY_PROCESS_READY gateway=", skynet.address(gateway_service),
                  " listen=", gateway.address, ":", gateway.port,
                  " transport=", gateway.transport,
-                 " remote=", config.cluster.remote_node)
+                 " remote=", config.cluster.remote_node,
+                 " shutdown=", skynet.address(shutdown_coordinator))
     skynet.exit()
 end)

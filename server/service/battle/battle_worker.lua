@@ -4,7 +4,7 @@
 -- 生命周期：Service 长驻；NavigationContext 只覆盖一次 simulate，结束后 close。
 -- 不负责：不监听网络、不访问 DB、不在核心模拟中 skynet.call。
 local skynet = require "skynet"
-local battle_nav = require "battle_nav"
+local battle_nav = require "flywow.navigation"
 local battle_core = require "battle.battle_core"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
@@ -45,6 +45,11 @@ skynet.start(function()
         end
         if command == "simulate" then
             skynet.retpack(simulate(assert(payload)))
+            return
+        end
+        if command == "shutdown" then
+            skynet.retpack(true)
+            skynet.exit()
             return
         end
         error("unknown battle worker command: " .. tostring(command))

@@ -180,6 +180,15 @@ class Processes:
         self.env["LUA_PANDA_ENABLE"] = "0"
         self.logs = ROOT / "logs/gateway_async_tests"
         self.logs.mkdir(parents=True, exist_ok=True)
+        # 独立测试使用独立路径配置，不覆盖正常启动的 server/run 产物。
+        paths_config = self.logs / "flywow_paths.lua"
+        subprocess.run([
+            "python3", str(flywow / "tools/module_paths.py"),
+            "--root", str(flywow), "--modules", "gateway", "navigation",
+            "--native", str(ROOT / "build/flywow_navigation/lua"),
+            "--output", str(paths_config),
+        ], check=True, timeout=10)
+        self.env["FLYWOW_PATHS_CONFIG"] = str(paths_config)
 
     # 启动一个专用配置并等待 READY；日志/进程归本 runner，不覆盖正常 Server 日志。
     def start(self, name, config, ready, ports):
@@ -493,7 +502,7 @@ def main():
     parser.add_argument("--scope", choices=["all", "smoke", "local", "course", "close"], default="all")
     args = parser.parse_args()
     framework = Path(args.flywow_root).resolve()
-    assert framework == (ROOT / "third_party/skynet-flywow").resolve(), "当前启动配置固定使用pinned submodule"
+    assert (framework / "tools/module_paths.py").is_file(), "需要支持模块布局的 FlyWow；开发时显式传 --flywow-root"
     processes = Processes(framework)
     try:
         if args.scope in ("all", "smoke"):

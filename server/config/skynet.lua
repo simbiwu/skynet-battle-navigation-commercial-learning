@@ -4,8 +4,7 @@
 -- 生命周期：进程启动时读取一次；不会进入业务 Service 的 Lua State。
 -- 不负责：不加载 BMAP、不监听业务端口、不包含业务配置。
 local skynet_root = "./third_party/skynet/"
--- FlyWow 固定使用宿主 Server 根目录下的相对路径。
-local flywow_root = [[./third_party/skynet-flywow/]]
+--- FlyWow 路径由启动前的模块配置生成器显式提供。
 
 thread = 4                              -- Skynet Worker OS Thread 数；课程开发基线。
 harbor = 0                              -- 第一课只运行单节点，不启用全局名字服务。
@@ -14,14 +13,15 @@ start = "main"                          -- 首个业务 Service：service/main.l
 bootstrap = "snlua bootstrap"           -- 使用 Skynet 标准 Lua Bootstrap。
 
 -- flywow_gateway 和 gateway.* 均由独立框架仓库提供；业务仓库不复制这些源码。
-luaservice = "./service/?.lua;" .. flywow_root .. "service/gateway/?.lua;" .. skynet_root .. "service/?.lua"
+luaservice = "./service/?.lua;" .. skynet_root .. "service/?.lua"
 lualoader = skynet_root .. "lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
-           flywow_root .. "lualib/?.lua;" ..
-           flywow_root .. "lualib/?/init.lua;" ..
            skynet_root .. "lualib/?.lua;" ..
            skynet_root .. "lualib/?/init.lua"
-lua_cpath = "./luaclib/?.so;" .. "./build/lua_battle_nav/?.so;" ..
+lua_cpath = "./luaclib/?.so;" ..
             "./third_party/lua-protobuf-runtime/?.so;" ..
-            flywow_root .. "luaclib/?.so;" .. skynet_root .. "luaclib/?.so"
+             skynet_root .. "luaclib/?.so"
 cpath = skynet_root .. "cservice/?.so"
+
+--- 追加宿主显式启用的模块路径；生成文件不创建 Service。
+include "$FLYWOW_PATHS_CONFIG"

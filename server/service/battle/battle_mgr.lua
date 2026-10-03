@@ -8,6 +8,8 @@ local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local workers = {}
 local next_worker = 1
+local shutting_down = false
+local active_simulations = 0
 
 -- 按稳定 round-robin 选择 Worker；Manager 单 Service owner 修改 next_worker。
 local function choose_worker()
@@ -18,9 +20,36 @@ end
 
 -- 把纯数据 snapshot 发给一个 Worker；本函数会在 skynet.call 处 yield。
 local function simulate(snapshot)
+    if shutting_down then
+        return nil, { code = "SERVER_SHUTTING_DOWN", message = "battle manager is shutting down" }
+    end
     local worker = choose_worker()
-    -- 这是明确允许的 yield 点。Manager 没有推进到一半的 Battle mutable state。
-    return skynet.call(worker, "lua", "simulate", snapshot)
+    active_simulations = active_simulations + 1
+    local ok, result, err = pcall(
+        skynet.call,
+        worker,
+        "lua",
+        "simulate",
+        snapshot
+    )
+    active_simulations = active_simulations - 1
+    if not ok then
+        return nil, { code = "WORKER_CALL_FAILED", message = tostring(result) }
+    end
+    return result, err
+end
+
+local function shutdown()
+    shutting_down = true
+    while active_simulations > 0 do
+        skynet.sleep(1)
+    end
+    for _, worker in ipairs(workers) do
+        skynet.call(worker, "lua", "shutdown")
+    end
+    workers = {}
+    skynet.retpack(true)
+    skynet.exit()
 end
 
 skynet.start(function()
@@ -39,6 +68,10 @@ skynet.start(function()
         end
         if command == "simulate" then
             skynet.retpack(simulate(assert(payload)))
+            return
+        end
+        if command == "shutdown" then
+            shutdown()
             return
         end
         error("unknown battle manager command: " .. tostring(command))

@@ -1,7 +1,7 @@
--- 职责：在 Gateway 与 Battle 进程之间转发已解码的业务数据。
--- 边界：Server Runtime Adapter；只保存 Gateway Service handle 和 Cluster 配置。
--- 输入/输出：send_data 请求/响应数据，close 连接控制；不保存业务请求状态。
--- 不负责：不解析协议、不编码 Protobuf、不等待业务结果、不判断业务超时或成功失败。
+--- 职责：在 Gateway 与 Battle 进程之间转发已解码的业务数据。
+--- 边界：Server Runtime Adapter；只保存 Gateway Service handle 和 Cluster 配置。
+--- 输入/输出：send_data 请求/响应数据，close 连接控制；不保存业务请求状态。
+--- 不负责：不解析协议、不编码 Protobuf、不等待业务结果、不判断业务超时或成功失败。
 
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
@@ -12,6 +12,7 @@ local state =
 {
     gateway_service = nil,
     started = false,
+    shutting_down = false,
 }
 
 --- 校验统一 send_data 合同；只检查传输路由字段，不解释业务 payload。
@@ -107,6 +108,14 @@ local function bind_gateway(options)
     return true
 end
 
+--- 停止 Proxy 接收新转发；Gateway Coordinator 随后让本 Service 退出。
+--- 返回 true；不执行业务 I/O，不保存连接状态。
+local function shutdown()
+    state.shutting_down = true
+    state.started = false
+    return true
+end
+
 --- 将 Battle 的 close 控制消息转发给 Gateway；不判断业务结果。
 --- connection_id 必须指向具体连接，广播关闭不在本接口内定义。
 local function close_gateway(data)
@@ -138,6 +147,10 @@ skynet.start(function()
         elseif command == "bind_gateway" then
             skynet.retpack(bind_gateway(data))
             return
+        elseif command == "shutdown" then
+            skynet.retpack(shutdown())
+            skynet.exit()
+            return
         elseif command == "send_data" then
             assert(state.started and state.gateway_service ~= nil,
                 "gateway proxy is not ready")
@@ -148,6 +161,11 @@ skynet.start(function()
             else
                 forward_to_gateway(data)
             end
+            return
+        elseif command == "gateway_disconnect" then
+            --- Gateway 已释放连接资源；本 Proxy 不保存连接或待回应请求。
+            --- 消费本地可信通知即可，不能把它当成未知业务命令抛错。
+            assert(source == state.gateway_service, "untrusted disconnect source")
             return
         elseif command == "close" then
             close_gateway(data)

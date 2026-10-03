@@ -22,6 +22,11 @@ skynet.start(function()
             skynet.retpack(true)
             return
         end
+        if command == "shutdown" then
+            skynet.retpack(true)
+            skynet.exit()
+            return
+        end
 
         assert(command == "query_cell",
             "navigation_query only accepts query_cell")

@@ -26,9 +26,18 @@ skynet.start(function()
     })
     cluster.open(process.cluster.local_listen, process.cluster.max_clients)
     cluster.register(process.cluster.service_name, dispatcher)
+    local shutdown_coordinator =
+        skynet.newservice("battle/shutdown_coordinator")
+    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+        query_service = query_service,
+        battle_mgr = mgr,
+        dispatcher = dispatcher,
+    }))
+    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
     skynet.error("LESSON2_BATTLE_PROCESS_READY node=", process.cluster.service_name,
                  " query=", skynet.address(query_service),
                  " manager=", skynet.address(mgr),
-                 " dispatch=", skynet.address(dispatcher))
+                 " dispatch=", skynet.address(dispatcher),
+                 " shutdown=", skynet.address(shutdown_coordinator))
     skynet.exit()
 end)

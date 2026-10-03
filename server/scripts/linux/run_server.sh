@@ -13,7 +13,10 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd -- "$SERVER_ROOT/.." && pwd)"
 SHARED_ROOT="$REPO_ROOT/shared"
-FLYWOW_ROOT="$SERVER_ROOT/third_party/skynet-flywow"
+FLYWOW_ROOT="${FLYWOW_ROOT:-$SERVER_ROOT/third_party/skynet-flywow}"
+export FLYWOW_ROOT
+# 临时 shutdownctl 配置也使用同一绝对生成路径，不能依赖配置文件所在目录。
+export FLYWOW_PATHS_CONFIG="$SERVER_ROOT/run/flywow_paths.lua"
 SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
 REGISTRY="$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua"
 PROTO="$SHARED_ROOT/protocol/navigation_query.proto"
@@ -89,6 +92,9 @@ parse_args() {
     fi
 }
 prepare_runtime() {
+    # 目录升级必须与框架版本成套使用；旧 gitlink 不支持模块入口，不能静默回退。
+    [[ -f "$FLYWOW_ROOT/tools/module_paths.py" ]] ||
+        fail "FlyWow 尚未支持模块布局；开发请显式设置 FLYWOW_ROOT，发布后同步固定 submodule"
     # 数据准备：确保 Skynet、协议工具和 Lua protobuf runtime 可用。
     "$SCRIPT_DIR/bootstrap_skynet.sh"
     "$SCRIPT_DIR/bootstrap_protocol_tools.sh"
@@ -96,9 +102,12 @@ prepare_runtime() {
     if [[ ! -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]]; then "$SCRIPT_DIR/build_lua_protobuf.sh"; fi
     # 生成协议运行时产物。
     mkdir -p "$(dirname "$REGISTRY")"
-    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
+    python3 "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
     # 构建 Native 依赖并校验 descriptor。
-    bash "$FLYWOW_ROOT/scripts/build_gateway_crypto.sh"         "$SERVER_ROOT/third_party/skynet"
+    bash "$FLYWOW_ROOT/gateway/scripts/build_gateway_crypto.sh"         "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/luaclib"
+    python3 "$FLYWOW_ROOT/tools/module_paths.py" --root "$FLYWOW_ROOT" \
+        --modules gateway navigation --native "$SERVER_ROOT/build/flywow_navigation/lua" \
+        --output "$SERVER_ROOT/run/flywow_paths.lua"
     "$SCRIPT_DIR/check_server_descriptor.sh"
     BUILD_TYPE="$BUILD_TYPE" "$SERVER_ROOT/native/lua_battle_nav/make.sh"
     # 收尾：确认所有启动所需产物存在。
@@ -115,7 +124,7 @@ run_build() {
 run_rebuild() {
     # 状态修改：停止现有课程进程并清理构建输出。
     "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle --force || true
-    rm -rf "$SERVER_ROOT/build/grid_map" "$SERVER_ROOT/build/lua_battle_nav"
+    rm -rf "$SERVER_ROOT/build/grid_map" "$SERVER_ROOT/build/lua_battle_nav" "$SERVER_ROOT/build/flywow_navigation"
     if [[ -f "$SERVER_ROOT/third_party/skynet/Makefile" ]]; then make -C "$SERVER_ROOT/third_party/skynet" clean >/dev/null 2>&1 || true; fi
     "$SCRIPT_DIR/build_skynet.sh"
     "$SCRIPT_DIR/build_lua_protobuf.sh"
