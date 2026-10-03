@@ -3,15 +3,21 @@
   "rootNamespace": "BattleNavigation.Tests",
   "references": [
     "BattleNavigation.Runtime",
-    "BattleNavigation.Editor"
+    "BattleNavigation.Editor",
+    "FlyWow.Navigation.Runtime",
+    "FlyWow.Navigation.Editor"
   ],
-  "includePlatforms": ["Editor"],
+  "includePlatforms": [
+    "Editor"
+  ],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "autoReferenced": false,
   "overrideReferences": false,
   "precompiledReferences": [],
-  "optionalUnityReferences": ["TestAssemblies"],
+  "optionalUnityReferences": [
+    "TestAssemblies"
+  ],
   "defineConstraints": [],
   "versionDefines": [],
   "noEngineReferences": false

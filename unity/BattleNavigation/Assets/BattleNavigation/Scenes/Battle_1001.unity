@@ -2947,6 +2947,7 @@ MonoBehaviour:
   m_Script: {fileID: 11500000, guid: 09d78ba9a7c7182409feff3604f78b43, type: 3}
   m_Name: 
   m_EditorClassIdentifier: 
+  exportDirectory: ../../shared/navigation/candidates
   mapId: 1001
   mapVersion: 1
   originMeters: {x: -15, y: -10}

@@ -4,9 +4,13 @@
   "references": [
     "BattleNavigation.Runtime",
     "Unity.AI.Navigation",
-    "Unity.AI.Navigation.Editor"
+    "Unity.AI.Navigation.Editor",
+    "FlyWow.Navigation.Runtime",
+    "FlyWow.Navigation.Editor"
   ],
-  "includePlatforms": ["Editor"],
+  "includePlatforms": [
+    "Editor"
+  ],
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "overrideReferences": false,

@@ -8,6 +8,7 @@ Thumbs.db
 # Local tool output
 *.log
 .downloads/
+.tmp/
 
 # Native / CMake output
 build/
@@ -23,4 +24,3 @@ logs/
 tmp/
 core
 core.*
-

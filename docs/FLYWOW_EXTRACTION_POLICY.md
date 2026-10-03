@@ -44,7 +44,7 @@ git submodule update --init --recursive
 
 FlyWow 是面向 MMO/SLG 的 Skynet Server 框架，目标包含可配套使用的地图、导航、Battle、技能与客户端接入模块。“业务无关”指不写死某个游戏的地图、兵种、技能公式和表现资源，不排斥框架提供通用战斗与技能机制。
 
-第三课完成在线指令、自动战斗和 Unity 表现闭环后，集中评估并抽取已验证的通用能力；不增设第 3.5 课，不把 FlyWow 抽取列为第三课通关条件，也不要求先完成可选第四课 Recast 或未来 H5 2D 项目。当前阶段只记录目标与边界，不迁移课程源码。
+第三课完成在线指令、自动战斗和 Unity 表现闭环后，集中评估并抽取已验证的通用能力；不增设第 3.5 课，不把 FlyWow 抽取列为第三课通关条件，也不要求先完成可选第四课 Recast 或未来 H5 2D 项目。用户已明确授权本次地图/导航抽取及旧 Gateway 目录整理，实施范围限于已验证的 Unity 地图生产与 Native 导航；Battle、Skill 和 Replay 业务继续留在课程宿主。当前实施与开发接入见 [Navigation 抽取记录](FLYWOW_NAVIGATION.md)。
 
 课程先解决真实业务问题，再判断是否值得抽取：
 
@@ -231,6 +231,6 @@ Gateway 不拥有地图或 Battle 状态
 Map/Battle Process 不接触客户端 fd、frame buffer 或 Protobuf codec
 ```
 
-Gateway 入站按帧顺序解码后用本地 `skynet.send` 投递，不等待业务响应；出站通过独立 `gateway_response` 接收响应并编码发送。Gateway 不保存业务请求等待表，也不依赖 Cluster；项目 Proxy 负责跨进程转发与有界返回路由。业务接入使用可选的 `flywow.gateway.endpoint` 薄模块。
+Gateway 入站按帧顺序解码后用本地 `skynet.send` 投递，不等待业务响应；出站通过独立 `gateway_response` 接收响应并编码发送。Gateway 不保存业务请求等待表，也不依赖 Cluster；项目 Proxy 负责跨进程转发与有界返回路由。业务接入使用可选的 `gateway.endpoint` 薄模块。
 
 协议、Gateway 和进程拆分的详细已确认决策以 `docs/ENGINEERING_DECISIONS.md` 中 D029、D030、D033、D039 为准。

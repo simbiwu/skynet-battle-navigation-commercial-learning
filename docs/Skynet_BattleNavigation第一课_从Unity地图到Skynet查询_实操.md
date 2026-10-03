@@ -6661,7 +6661,7 @@ config/
   skynet.lua
 ```
 
-`service/flywow_gateway.lua` 和 `lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
+`service/gateway/flywow_gateway.lua` 和 `lualib/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -6874,7 +6874,7 @@ return M
 local skynet = require "skynet"
 local config = require "config.game"
 local query_logic = require "battle.navigation.query_logic"
-local endpoint = require "flywow.gateway.endpoint"
+local endpoint = require "gateway.endpoint"
 
 -- 安装 Lua dispatch 并在成功加载地图后发布 READY；启动失败由 launcher 感知。
 -- gateway_dispatch handler 只接收已完成 Protobuf 解码的 request table。
@@ -6935,7 +6935,7 @@ git submodule status
 ./scripts/linux/run_server.sh doctor
 ```
 
-`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/service/flywow_gateway.lua` 和 `scripts/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向 sibling 仓库，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
+`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/service/gateway/flywow_gateway.lua` 和 `tools/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向 sibling 仓库，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
 
 同一进程需要多个监听端口时，不复制 Gateway 代码。由 composition root 多次调用 `skynet.newservice("flywow_gateway")`，为每个 Service 传入不同 `port`、`transport` 和业务 `handler_service`；每个实例拥有独立 Lua State、监听 fd、连接表和生命周期。主 Service 必须保存这些 handle，并在停服时分别调用 `stop`。
 
@@ -6995,7 +6995,7 @@ WebSocket 不由课程自己重复实现协议解析；Skynet 固定版本的 `h
 server/third_party/skynet-flywow/docs/gateway/README.md
 ```
 
-从下一小节开始的 `27.1`～`27.9` 是保留的历史 `socketdriver + netpack` 深读材料，用来理解 Skynet 原始 Socket 事件、消息 ownership、`queue` 和 `yield` 边界。它们不再是当前启动链的操作步骤；当前 Gateway 的构建、启动和验收以本节、`server/third_party/skynet-flywow/service/flywow_gateway.lua` 以及第 31 节中的 FlyWow 日志为准。
+从下一小节开始的 `27.1`～`27.9` 是保留的历史 `socketdriver + netpack` 深读材料，用来理解 Skynet 原始 Socket 事件、消息 ownership、`queue` 和 `yield` 边界。它们不再是当前启动链的操作步骤；当前 Gateway 的构建、启动和验收以本节、`server/third_party/skynet-flywow/service/gateway/flywow_gateway.lua` 以及第 31 节中的 FlyWow 日志为准。
 
 现在处理第一课网络链路中最接近真实 Skynet Server 的一层。旧实现用 `skynet.socket` 给每个连接启动一个 `client_loop`，然后反复 `socket.read(fd)`，自己维护字符串 buffer、半包和粘包。这个写法可以工作，也适合普通 Lua 网络程序入门，但它把 Skynet 底层已经提供的 socket event 与 `netpack` 分帧能力重新做了一遍。
 
@@ -7308,7 +7308,7 @@ SOCKET.open(fd, address)
 
 ```text
 删除：server/lualib/network/length_frame.lua
-历史底层示例：以下代码用于精读 `socketdriver + netpack` 的 ownership、queue 和事件分发，不要再新建 `server/service/navigation_gateway.lua`。当前运行链使用 `server/third_party/skynet-flywow/service/flywow_gateway.lua`。
+历史底层示例：以下代码用于精读 `socketdriver + netpack` 的 ownership、queue 和事件分发，不要再新建 `server/service/navigation_gateway.lua`。当前运行链使用 `server/third_party/skynet-flywow/service/gateway/flywow_gateway.lua`。
 ```
 
 ```lua
@@ -7962,7 +7962,7 @@ logger = nil
 start = "main"
 bootstrap = "snlua bootstrap"
 
--- flywow_gateway 和 flywow.gateway.* 由独立框架仓库提供；业务仓库不复制这些源码。
+-- flywow_gateway 和 gateway.* 由独立框架仓库提供；业务仓库不复制这些源码。
 luaservice = "./service/?.lua;" .. flywow_root .. "/service/?.lua;" .. skynet_root .. "service/?.lua"
 lualoader = skynet_root .. "lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
@@ -8286,14 +8286,14 @@ build_lua_protobuf_if_needed() {
 find_flywow_root() {
     local candidate
     if [[ -n "$FLYWOW_ROOT" ]]; then
-        [[ -f "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/flywow_gateway.lua" ]] || return 1
+        [[ -f "$FLYWOW_ROOT/tools/generate_gateway_registry.py" && -f "$FLYWOW_ROOT/service/gateway/flywow_gateway.lua" ]] || return 1
         FLYWOW_ROOT="$(cd -- "$FLYWOW_ROOT" && pwd)"
         return 0
     fi
     for candidate in \
         "$SERVER_ROOT/third_party/skynet-flywow" \
         "$SERVER_ROOT/../../skynet-flywow"; do
-        if [[ -f "$candidate/scripts/generate_gateway_registry.py" && -f "$candidate/service/flywow_gateway.lua" ]]; then
+        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/gateway/flywow_gateway.lua" ]]; then
             FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
             return 0
         fi
@@ -8305,7 +8305,7 @@ find_flywow_root() {
 build_gateway_registry() {
     find_flywow_root || fail "Skynet-FlyWow framework not found; set FLYWOW_ROOT"
     log "generating FlyWow Gateway protocol registry via $FLYWOW_ROOT"
-    python3 "$FLYWOW_ROOT/scripts/generate_gateway_registry.py" \
+    python3 "$FLYWOW_ROOT/tools/generate_gateway_registry.py" \
         --proto "$PROTO_SOURCE" \
         --output "$REGISTRY_OUTPUT"
 }
@@ -10341,7 +10341,7 @@ connectionPort
 文件：
 
 ```text
-server/third_party/skynet-flywow/service/flywow_gateway.lua
+server/third_party/skynet-flywow/service/gateway/flywow_gateway.lua
 ```
 
 建议断：

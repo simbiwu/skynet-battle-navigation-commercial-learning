@@ -1,3 +1,5 @@
+using FlyWow.Navigation;
+using FlyWow.Navigation.Editor;
 // 职责：一次性生成课程 Battle_1001 的基础 Scene 内容和 Authoring 组件。
 // 边界：Unity Editor Scaffolding；只用于课程样例场景，不是新地图日常导出入口。
 // 输入/输出：空或待重建 Scene -> 可继续 Bake/Export 的课程场景。
@@ -40,9 +42,17 @@ namespace BattleNavigation.Editor
             var scene = EditorSceneManager.NewScene(NewSceneSetup.EmptyScene, NewSceneMode.Single);
 
             // 层级按 Authoring 职责分组，不能把显示对象误当成 Server 数据边界。
-            // root 保存地图身份与 Grid 范围，是场景中唯一 BattleMapRoot。
-            var root = new GameObject("BattleMapRoot");
-            root.AddComponent<BattleMapRoot>();
+            // root 保存地图身份与 Grid 范围，是场景中唯一 NavigationMapRoot。
+            var root = new GameObject("NavigationMapRoot");
+            // 通用包不包含课程默认值，Battle_1001 身份和范围由宿主显式设置。
+            NavigationMapRoot map = root.AddComponent<NavigationMapRoot>();
+            map.mapId = 1001;
+            map.mapVersion = 1;
+            map.originMeters = new Vector2(-15f, -10f);
+            map.sizeXMeters = 30f;
+            map.sizeZMeters = 20f;
+            map.cellSizeMeters = 0.5f;
+            map.exportDirectory = "../../shared/navigation/candidates";
 
             // environment 是全部静态地图几何的父节点。
             var environment = NewChild(root.transform, "Environment");

@@ -1,7 +1,9 @@
 {
   "name": "BattleNavigation.Runtime",
   "rootNamespace": "BattleNavigation",
-  "references": [],
+  "references": [
+    "FlyWow.Navigation.Runtime"
+  ],
   "includePlatforms": [],
   "excludePlatforms": [],
   "allowUnsafeCode": false,

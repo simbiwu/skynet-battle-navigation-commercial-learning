@@ -3,7 +3,8 @@
   "rootNamespace": "BattleNavigation.Client.Editor",
   "references": [
     "BattleNavigation.Client",
-    "BattleNavigation.Replay"
+    "BattleNavigation.Replay",
+    "FlyWow.Navigation.Editor"
   ],
   "includePlatforms": [
     "Editor"

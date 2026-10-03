@@ -23,6 +23,17 @@
       "autoReconnect": true,
       "useCHook": false
     },
+    {
+      "type": "lua",
+      "request": "launch",
+      "name": "LuaPanda FlyWow Gateway",
+      "cwd": "${workspaceFolder}/server",
+      "connectionPort": 8820,
+      "stopOnEntry": false,
+      "autoPathMode": true,
+      "autoReconnect": true,
+      "useCHook": false
+    },
      {
       "type": "lua",
       "request": "launch",

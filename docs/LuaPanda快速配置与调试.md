@@ -146,7 +146,7 @@ cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
 | --- | ---: | --- |
 | Lesson1 Gateway | 8818 | 第二课由 Gateway Proxy Service 连接此 target |
 | Lesson1 Query | 8819 | 第二课 Query Service 复用此 target |
-| FlyWow Gateway | 8820 | FlyWow Gateway Service 入口调用 `luapanda_debug.start(8825)` |
+| FlyWow Gateway | 8820 | FlyWow Gateway Service 入口调用 `luapanda_debug.start(8820)` |
 | `battle_dispatch` | 8821 | Service 入口调用 `luapanda_debug.start(8821)` |
 | `battle_mgr` | 8822 | Service 入口调用 `luapanda_debug.start(8822)` |
 | `work1` | 8823 | 第一个 Worker 由 Manager 分配端口 |
@@ -166,7 +166,7 @@ local luapanda_debug = require "shared.debug.luapanda_debug"
 
 skynet.start(function()
     -- 8825 只属于 battle_worker 的 Lua State；不要占用已有 Service 的端口。
-    luapanda_debug.start(8820)
+    luapanda_debug.start(8825)
 
     -- Service 的正常初始化逻辑。
 end)

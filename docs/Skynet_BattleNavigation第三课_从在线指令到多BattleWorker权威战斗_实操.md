@@ -8338,7 +8338,7 @@ Unity 以固定频率调用 `SyncBattle` 拉取增量 Event。
 
 Gateway 仍只承载传输和协议；Battle Worker 产生权威 Event/Snapshot，Battle 侧决定投递对象与顺序。异步传输不可用时，按本课定义的确认、序号、Snapshot 恢复合同处理，不能把 `cluster.send` 本身视为可靠送达。
 
-FlyWow 固定版本的 `service/flywow_gateway.lua` 已把当前真实连接的数字 `connection_id` 放进 handler payload；第二课 `gateway_proxy.lua` 复制 payload 时会保留该字段。数字 ID 只在当前 Gateway Service 生命周期内唯一。第三课在 Proxy 转发前给它加进程作用域，避免 Gateway 重启后数字 ID 从 1 重新开始而误认旧 Battle 控制者。
+FlyWow 固定版本的 `service/gateway/flywow_gateway.lua` 已把当前真实连接的数字 `connection_id` 放进 handler payload；第二课 `gateway_proxy.lua` 复制 payload 时会保留该字段。数字 ID 只在当前 Gateway Service 生命周期内唯一。第三课在 Proxy 转发前给它加进程作用域，避免 Gateway 重启后数字 ID 从 1 重新开始而误认旧 Battle 控制者。
 
 [局部修改] `server/service/gateway/gateway_proxy.lua` 的 `dispatch_remote(payload)`：在创建 `forwarded` 后、设置 `route_token` 前加入以下校验和赋值，替换复制来的数字 `connection_id`；Proxy 的其余 `cluster.send`/等待/回推代码保持第二课原样。
 
