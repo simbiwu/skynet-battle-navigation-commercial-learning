@@ -10,7 +10,7 @@
 | --- | --- | --- |
 | 1 | `server/config/gateway.lua` | 协议产物、连接/帧上限、读超时、写缓冲和入站速率 |
 | 2 | `server/service/gateway/gateway_main.lua` | 先启动 Proxy，再把 handle 注入 Gateway；启动 ready 可以 call |
-| 3 | FlyWow `service/gateway/flywow_gateway.lua`：`start`、`accept_client` | 加载 registry/codec，监听；TCP/WS 接管连接，每连接一个读任务 |
+| 3 | FlyWow `gateway/service/gateway/flywow_gateway.lua`：`start`、`accept_client` | 加载 registry/codec，监听；TCP/WS 接管连接，每连接一个读任务 |
 | 4 | 同文件：`run_tcp`、`read_exact` | 读满2字节长度头，校验长度，再读满 payload；读取 Socket 时可能 yield |
 | 5 | 同文件：`dispatch_payload` | 校验版本和请求编号，按 registry 解码；本地 send 后继续读下一帧 |
 | 6 | `server/service/gateway/gateway_proxy.lua`：`dispatch_remote` | 创建项目 token 与有界返回上下文，cluster.send 后立即返回 |

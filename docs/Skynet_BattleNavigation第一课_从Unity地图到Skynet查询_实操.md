@@ -6661,7 +6661,7 @@ config/
   skynet.lua
 ```
 
-`service/gateway/flywow_gateway.lua` 和 `lualib/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
+`gateway/service/gateway/flywow_gateway.lua` 和 `gateway/lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -8293,7 +8293,7 @@ find_flywow_root() {
     for candidate in \
         "$SERVER_ROOT/third_party/skynet-flywow" \
         "$SERVER_ROOT/../../skynet-flywow"; do
-        if [[ -f "$candidate/tools/generate_gateway_registry.py" && -f "$candidate/service/gateway/flywow_gateway.lua" ]]; then
+        if [[ -f "$candidate/gateway/tools/generate_gateway_registry.py" && -f "$candidate/gateway/service/gateway/flywow_gateway.lua" ]]; then
             FLYWOW_ROOT="$(cd -- "$candidate" && pwd)"
             return 0
         fi
