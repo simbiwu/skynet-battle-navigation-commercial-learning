@@ -12574,9 +12574,9 @@ BATTLE_GATEWAY_INTERACTIVE_OK
 
 ```bash
 cd server
-./scripts/linux/run_lesson2_processes.sh doctor
-./scripts/linux/run_lesson2_processes.sh start
-./scripts/linux/run_lesson2_processes.sh status
+./scripts/lessons/run_lesson_02_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh start
+./scripts/lessons/run_lesson_02_processes.sh status
 ```
 
 脚本文件名虽然仍叫 `lesson2_processes.sh`，运行拓扑已经是课程公共双进程基线。第三课不要为了名字好看复制一份功能相同的 `run_lesson3_processes.sh`。

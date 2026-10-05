@@ -20,7 +20,7 @@ Unity Battle_1001 Scene
         v
 battle_1001.bmap + manifest
         |
-        | lesson1_prepare.sh
+        | prepare_lesson_01.sh
         v
 Server maps/
         |
@@ -142,7 +142,7 @@ battle_nav.so
 本仓库新增：
 
 ```text
-server/scripts/linux/lesson1_prepare.sh
+server/scripts/lessons/prepare_lesson_01.sh
 ```
 
 它是第一课的 orchestration 入口。它不会复制 `run_server.sh` 的底层构建逻辑，而是把已经存在的商业化脚本组合成一次可重复的最终准备流程：
@@ -188,7 +188,7 @@ WSL：
 cd "$(git rev-parse --show-toplevel)/server"
 
 BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
+./scripts/lessons/prepare_lesson_01.sh \
   --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
 ```
 
@@ -218,14 +218,14 @@ cell_size_mm = 500
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map
 ```
 
 #### 需要从零检查构建链
 
 ```bash
 BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
+./scripts/lessons/prepare_lesson_01.sh \
   --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation" \
   --rebuild
 ```
@@ -250,7 +250,7 @@ Unity 导出物
 最终使用者平时执行：
 
 ```text
-lesson1_prepare.sh
+prepare_lesson_01.sh
 ```
 
 排错时仍然可以单独执行：
@@ -262,7 +262,7 @@ build_skynet.sh
 build_lua_protobuf.sh
 build_server_descriptor.sh
 check_server_descriptor.sh
-native/grid_map/make_test.sh
+scripts/linux/run_server.sh build
 run_server.sh doctor
 ```
 
@@ -766,7 +766,7 @@ LuaPanda 到这里已经完成职责。下一层是 C++。
 先确保第一课是 Debug 构建：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map --rebuild
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map --rebuild
 ```
 
 仓库提供：
@@ -914,7 +914,7 @@ WorldToGrid
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map
 ```
 
 必须：
@@ -1117,7 +1117,7 @@ clearance_cells
    battle_1001.bmap
    battle_1001.manifest.json
 
-3. lesson1_prepare.sh
+3. prepare_lesson_01.sh
    LESSON1_SERVER_PREPARE_OK
    BMAP SHA256
 
@@ -1205,7 +1205,7 @@ clearance_cells
 #### 构建 / 运行
 
 ```text
-[ ] lesson1_prepare.sh 能完成最终准备。
+[ ] prepare_lesson_01.sh 能完成最终准备。
 [ ] run_server.sh doctor 通过。
 [ ] start/status/log/stop 正常。
 [ ] PID identity 校验不会误杀其他进程。

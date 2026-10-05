@@ -14,11 +14,11 @@ cd "$ROOT"
 python3 tools/apply_lesson1_31_update.py "$ROOT"
 
 chmod +x \
-  server/scripts/linux/lesson1_prepare.sh \
+  server/scripts/lessons/prepare_lesson_01.sh \
   server/scripts/linux/bootstrap_luapanda.sh \
   server/scripts/linux/debug_luapanda.sh
 
-bash -n server/scripts/linux/lesson1_prepare.sh
+bash -n server/scripts/lessons/prepare_lesson_01.sh
 bash -n server/scripts/linux/bootstrap_luapanda.sh
 bash -n server/scripts/linux/debug_luapanda.sh
 
@@ -36,4 +36,4 @@ if command -v git >/dev/null 2>&1 && git rev-parse --is-inside-work-tree >/dev/n
 fi
 
 echo "UPDATE_APPLIED_OK"
-echo "Next: cd server && BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map"
+echo "Next: cd server && BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map"

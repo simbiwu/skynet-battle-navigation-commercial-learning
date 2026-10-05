@@ -87,7 +87,7 @@ PART 1—8 建立运行所需的资产、服务和导航基础。PART 9—11 沿
 - 解释 newservice、handle 注入、call、ready 和 yield 在当前启动流程中的作用。
 - 核对 BMAP 相对路径从哪个工作目录解析，Native 模块如何被找到，以及 READY 日志实际保证了什么。
 
-主要入口：`server/scripts/linux/run_lesson2_processes.sh`、相关 Skynet 配置，`server/service/battle/battle_main.lua`、`navigation_query.lua`、`battle_mgr.lua`，`server/service/gateway/gateway_main.lua`，`server/lualib/battle/navigation/query_logic.lua`。
+主要入口：`server/scripts/lessons/run_lesson_02_processes.sh`、相关 Skynet 配置，`server/service/battle/battle_main.lua`、`navigation_query.lua`、`battle_mgr.lua`，`server/service/gateway/gateway_main.lua`，`server/lualib/battle/navigation/query_logic.lua`。
 
 完成标志：能解释为什么先等待地图和 Worker 就绪，再开放请求入口，并找到启动失败的第一处错误。
 

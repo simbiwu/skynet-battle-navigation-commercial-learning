@@ -35,3 +35,9 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 
 - 教程中的完整可复制代码按真实源码标准编写；步骤标明新建、完整替换、局部修改或只读，并能从上一步的真实基线继续。教学结构另见 `docs/CODEX_TEACHING_GUIDE.md`。
 - 按影响范围编译、运行聚焦测试，并在适用时验证失败路径、资源释放、确定性、并发与 yield/ownership。报告区分静态检查、编译、单元测试、集成运行及未验证项；未运行的验证不写成“通过”。
+
+## Shell 脚本规范
+
+Server 脚本按公开入口、宿主辅助和课程专用分层，文件名统一使用“动作_对象.sh”。新脚本应使用 `run_server.sh`、`prepare_lesson_01.sh`、`run_lesson_02_processes.sh` 等明确名称，禁止新增无对象的 `build.sh`、`make.sh`、`run.sh`、`test.sh` 和 `prepare.sh`。
+
+每个 `.sh` 文件头必须说明职责、边界、调用者、调用时机、参数、输入、产物、副作用和失败行为，并给出完整调用示例。课程脚本放在 `server/scripts/lessons/`，FlyWow 模块构建必须通过 submodule 的公开脚本调用。

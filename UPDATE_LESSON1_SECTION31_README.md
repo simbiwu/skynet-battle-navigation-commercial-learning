@@ -20,14 +20,14 @@ chmod +x APPLY_LESSON1_SECTION31_UPDATE.sh
 ```bash
 cd server
 BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
+./scripts/lessons/prepare_lesson_01.sh \
   --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
 ```
 
 重复验收：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map
 ```
 
 LuaPanda：

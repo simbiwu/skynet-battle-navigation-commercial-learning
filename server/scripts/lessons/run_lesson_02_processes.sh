@@ -85,11 +85,11 @@ parse_args() {
 usage() {
     cat <<'USAGE'
 Usage:
-  ./scripts/linux/run_lesson2_processes.sh start [--gateway] [--battle]
-  ./scripts/linux/run_lesson2_processes.sh stop [--gateway] [--battle] [--force]
-  ./scripts/linux/run_lesson2_processes.sh restart [--gateway] [--battle]
-  ./scripts/linux/run_lesson2_processes.sh status
-  ./scripts/linux/run_lesson2_processes.sh doctor
+  ./scripts/lessons/run_lesson_02_processes.sh start [--gateway] [--battle]
+  ./scripts/lessons/run_lesson_02_processes.sh stop [--gateway] [--battle] [--force]
+  ./scripts/lessons/run_lesson_02_processes.sh restart [--gateway] [--battle]
+  ./scripts/lessons/run_lesson_02_processes.sh status
+  ./scripts/lessons/run_lesson_02_processes.sh doctor
 
 Environment:
 USAGE

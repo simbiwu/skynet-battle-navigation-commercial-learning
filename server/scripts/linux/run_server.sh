@@ -109,7 +109,7 @@ prepare_runtime() {
         --modules gateway navigation --native "$SERVER_ROOT/build/flywow_navigation/lua" \
         --output "$SERVER_ROOT/run/flywow_paths.lua"
     "$SCRIPT_DIR/check_server_descriptor.sh"
-    BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_ROOT/navigation/scripts/build.sh" \
+    BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_ROOT/navigation/scripts/build_navigation.sh" \
         "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/build/flywow_navigation"
     # 收尾：确认所有启动所需产物存在。
     [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] ||
@@ -124,7 +124,7 @@ run_build() {
 }
 run_rebuild() {
     # 状态修改：停止现有课程进程并清理构建输出。
-    "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle --force || true
+    "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle --force || true
     rm -rf "$SERVER_ROOT/build/grid_map" "$SERVER_ROOT/build/lua_battle_nav" "$SERVER_ROOT/build/flywow_navigation"
     if [[ -f "$SERVER_ROOT/third_party/skynet/Makefile" ]]; then make -C "$SERVER_ROOT/third_party/skynet" clean >/dev/null 2>&1 || true; fi
     "$SCRIPT_DIR/build_skynet.sh"
@@ -134,29 +134,29 @@ run_rebuild() {
 }
 run_selected_start() {
     if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
-        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway --battle
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" start --gateway --battle
     elif ((PROCESS_GATEWAY)); then
-        "$SCRIPT_DIR/run_lesson2_processes.sh" start --gateway
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" start --gateway
     else
-        "$SCRIPT_DIR/run_lesson2_processes.sh" start --battle
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" start --battle
     fi
 }
 run_selected_stop() {
     if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
-        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --battle; fi
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle --force; else "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle; fi
     elif ((PROCESS_GATEWAY)); then
-        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --gateway; fi
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --force; else "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway; fi
     else
-        if ((FORCE_STOP)); then "$SCRIPT_DIR/run_lesson2_processes.sh" stop --battle --force; else "$SCRIPT_DIR/run_lesson2_processes.sh" stop --battle; fi
+        if ((FORCE_STOP)); then "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --battle --force; else "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --battle; fi
     fi
 }
 run_selected_status() {
     if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
-        "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway --battle
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" status --gateway --battle
     elif ((PROCESS_GATEWAY)); then
-        "$SCRIPT_DIR/run_lesson2_processes.sh" status --gateway
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" status --gateway
     else
-        "$SCRIPT_DIR/run_lesson2_processes.sh" status --battle
+        "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" status --battle
     fi
 }
 run_debug() {
@@ -184,7 +184,7 @@ main() {
         prepare) prepare_runtime ;;
         build) run_build ;;
         rebuild) run_rebuild ;;
-        doctor) "$SCRIPT_DIR/run_lesson2_processes.sh" doctor ;;
+        doctor) "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" doctor ;;
         status) run_selected_status ;;
         stop) run_selected_stop ;;
         debug) run_debug ;;

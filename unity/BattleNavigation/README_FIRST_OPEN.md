@@ -27,7 +27,7 @@ docs/Skynet_BattleNavigation第一课_从Unity地图到Skynet查询_实操.md
 -> Server 机器拉取同一 Git 提交
 ```
 
-`01 校验当前战斗场景`、`02 烘焙当前场景 NavMesh`、`03 导出当前场景 BMAP` 仍然保留，用于定位具体失败阶段。Exporter 只更新当前仓库 `shared/navigation/battle_<mapId>/` 的候选文件；它不提交 Git、不访问另一台机器，也不会让运行中的 Server 自动重载。WSL 的 `lesson1_prepare.sh` 只验证已经拉取的发布版本并构建 Server。
+`01 校验当前战斗场景`、`02 烘焙当前场景 NavMesh`、`03 导出当前场景 BMAP` 仍然保留，用于定位具体失败阶段。Exporter 只更新当前仓库 `shared/navigation/battle_<mapId>/` 的候选文件；它不提交 Git、不访问另一台机器，也不会让运行中的 Server 自动重载。WSL 的 `prepare_lesson_01.sh` 只验证已经拉取的发布版本并构建 Server。
 
 场景可以通过菜单 `Tools > 战斗导航 > 示例 > 90 重建 Battle_1001 示例场景` 重建。
 该菜单会覆盖场景内的手工调整，使用前会弹出确认框。

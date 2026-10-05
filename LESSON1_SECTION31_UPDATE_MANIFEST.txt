@@ -1,7 +1,7 @@
 BASELINE main@73405415491dca3e4fbb1b3dd02627af63f9a799
 
 ADD_ON_EXTRACT
-server/scripts/linux/lesson1_prepare.sh
+server/scripts/lessons/prepare_lesson_01.sh
 server/scripts/linux/bootstrap_luapanda.sh
 server/scripts/linux/debug_luapanda.sh
 server/lualib/debug/luapanda_debug.lua

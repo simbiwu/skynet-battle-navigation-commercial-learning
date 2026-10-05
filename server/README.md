@@ -89,13 +89,13 @@ Unity 验证通过的 BMAP 与 manifest 发布到仓库根目录 `shared/navigat
 第一课最终验收不再手工串联构建命令。先拉取同时包含 `shared/navigation` 与 `shared/protocol` 的课程提交，停止当前 Server，再执行：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh
 ```
 
 需要清理本机构建产物后完整验证时：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --rebuild
 ```
 
 LuaPanda 是 debug-only 工具链。安装/验证本地调试依赖：
@@ -135,15 +135,15 @@ Gateway 只拥有客户端连接、framing 和 Protobuf 编解码；Map/Battle P
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
-./scripts/linux/run_lesson2_processes.sh doctor
-./scripts/linux/run_lesson2_processes.sh start
-./scripts/linux/run_lesson2_processes.sh status
+./scripts/lessons/run_lesson_02_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh start
+./scripts/lessons/run_lesson_02_processes.sh status
 ```
 
 启动脚本先等待 Map/Battle Process 输出 `LESSON2_BATTLE_PROCESS_READY`，再启动 Gateway；Gateway 日志还应包含 `FLYWOW_GATEWAY_READY` 和 `LESSON2_GATEWAY_PROCESS_READY`。日志分别写入 `logs/lesson2/battle.log`、`logs/lesson2/gateway.log`。停止时使用：
 
 ```bash
-./scripts/linux/run_lesson2_processes.sh stop
+./scripts/lessons/run_lesson_02_processes.sh stop
 ```
 
 脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/gateway.lua`、`config/battle.lua` 和课程文档。
@@ -162,7 +162,7 @@ FlyWow 先提交并 Push，课程再固定已验证的 submodule 提交；正常
 ```bash
 export FLYWOW_ROOT=/path/to/updated-skynet-flywow
 ./scripts/linux/run_server.sh build
-./scripts/linux/run_lesson2_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh doctor
 python3 tests/gateway_async_integration.py
 ./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$FLYWOW_ROOT"
 ```

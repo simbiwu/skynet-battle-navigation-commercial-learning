@@ -45,12 +45,12 @@
 
 原 32～36 的有效内容已吸收进 31，不再在第 31 节之后重复一次验收/复盘。
 
-## 2. 新增 `lesson1_prepare.sh`
+## 2. 新增 `prepare_lesson_01.sh`
 
 路径：
 
 ```text
-server/scripts/linux/lesson1_prepare.sh
+server/scripts/lessons/prepare_lesson_01.sh
 ```
 
 职责：把第一课最终 Server 准备收敛成一个 orchestration 入口。

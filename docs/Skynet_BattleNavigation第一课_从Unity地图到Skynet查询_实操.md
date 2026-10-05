@@ -1422,7 +1422,7 @@ Prefab 不能替代这次工具迁移。Prefab 可以在工具导入后保存一
 -> battle_<mapId>.bmap + manifest
 ```
 
-当前 `lesson1_prepare.sh` 是 `Battle_1001` 的课程验收脚本，固定校验 `map_id=1001`、`map_version=1` 和 `cell_size_mm=500`。新 Scene 的 Unity 导出链是通用的，但 `shared/navigation/battle_1002/` 不会自动替换 Server 当前加载的 `battle_1001`。接入 Server 时还要显式增加对应地图配置和发布规则；不能只改文件名让旧配置误加载新地图。
+当前 `prepare_lesson_01.sh` 是 `Battle_1001` 的课程验收脚本，固定校验 `map_id=1001`、`map_version=1` 和 `cell_size_mm=500`。新 Scene 的 Unity 导出链是通用的，但 `shared/navigation/battle_1002/` 不会自动替换 Server 当前加载的 `battle_1001`。接入 Server 时还要显式增加对应地图配置和发布规则；不能只改文件名让旧配置误加载新地图。
 
 ##### Step 0：先通过编译门禁
 
@@ -8350,7 +8350,7 @@ prepare_runtime() {
 
 run_native_tests() {
     log "running Native tests"
-    "$SERVER_ROOT/native/grid_map/make_test.sh"
+    "$SERVER_ROOT/scripts/linux/run_server.sh build"
 }
 
 # 在构建入口统一执行项目 Lua 编码策略，避免仅靠 Code Review 发现动态签名回归。
@@ -9241,7 +9241,7 @@ battle_1001.bmap + manifest
         v
 shared/navigation/battle_1001/
         |
-        | lesson1_prepare.sh
+        | prepare_lesson_01.sh
         +-> pinned Skynet / protoc / lua-protobuf
         +-> published descriptor/hash check
         +-> grid_map tests
@@ -9362,7 +9362,7 @@ Unity Bake 本身不会影响运行中的 Server。要求先停止 Server 的原
 本仓库新增：
 
 ```text
-server/scripts/linux/lesson1_prepare.sh
+server/scripts/lessons/prepare_lesson_01.sh
 ```
 
 它是第一课的 orchestration 入口。它不会复制 `run_server.sh` 的底层构建逻辑，而是把已经存在的商业化脚本组合成一次可重复的最终准备流程：
@@ -9419,7 +9419,7 @@ shared/navigation/battle_1001/
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
 
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh
 ```
 
 这里建议第一课最终验收使用 `BUILD_TYPE=Debug`。原因不是 Debug 构建更接近生产，而是后面的 gdb 需要完整符号。性能基线再单独使用 Release/RelWithDebInfo，不要拿 Debug 数据做性能结论。
@@ -9448,13 +9448,13 @@ cell_size_mm = 500
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh
 ```
 
 #### 需要从零检查构建链
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --rebuild
 ```
 
 `--rebuild` 最终调用已有的：
@@ -9476,7 +9476,7 @@ shared/
 最终使用者平时执行：
 
 ```text
-lesson1_prepare.sh
+prepare_lesson_01.sh
 ```
 
 排错时仍然可以单独执行：
@@ -9488,7 +9488,7 @@ build_skynet.sh
 build_lua_protobuf.sh
 build_server_descriptor.sh
 check_server_descriptor.sh
-native/grid_map/make_test.sh
+scripts/linux/run_server.sh build
 run_server.sh doctor
 ```
 
@@ -10475,7 +10475,7 @@ LuaPanda 到这里已经完成职责。下一层是 C++。
 先确保第一课是 Debug 构建：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --rebuild
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --rebuild
 ```
 
 仓库提供：
@@ -10623,7 +10623,7 @@ WorldToGrid
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh
 ```
 
 必须：
@@ -10826,7 +10826,7 @@ clearance_cells
    battle_1001.bmap
    battle_1001.manifest.json
 
-3. lesson1_prepare.sh
+3. prepare_lesson_01.sh
    LESSON1_SERVER_PREPARE_OK
    BMAP SHA256
 
@@ -10914,7 +10914,7 @@ clearance_cells
 #### 构建 / 运行
 
 ```text
-[ ] lesson1_prepare.sh 能完成最终准备。
+[ ] prepare_lesson_01.sh 能完成最终准备。
 [ ] run_server.sh doctor 通过。
 [ ] start/status/log/stop 正常。
 [ ] PID identity 校验不会误杀其他进程。

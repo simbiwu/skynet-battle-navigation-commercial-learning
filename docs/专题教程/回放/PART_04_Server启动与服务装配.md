@@ -5,7 +5,7 @@
 ~~~
 ./scripts/linux/run_server.sh start
     ↓
-run_lesson2_processes.sh
+run_lesson_02_processes.sh
     ↓
 Battle OS Process
     ↓ start = battle/battle_main
@@ -91,12 +91,12 @@ cd "$SERVER_ROOT"
 
 prepare_runtime 最后输出 PREPARE_OK，表示文件和构建产物已准备，不表示 Query 已经执行 load_map，也不表示端口已监听。
 
-### 2.2 run_lesson2_processes.sh 的实际启动顺序
+### 2.2 run_lesson_02_processes.sh 的实际启动顺序
 
 入口文件：
 
 ~~~
-server/scripts/linux/run_lesson2_processes.sh
+server/scripts/lessons/run_lesson_02_processes.sh
 ~~~
 
 start_all 的顺序是：
@@ -1034,7 +1034,7 @@ LESSON2_GATEWAY_PROCESS_READY
 建议断点：
 
 ~~~text
-run_lesson2_processes.sh: start_one / wait_ready
+run_lesson_02_processes.sh: start_one / wait_ready
 battle_main.lua: newservice / configure / cluster.register
 navigation_query.lua: query_logic.start / dispatch
 query_logic.lua: battle_nav.load_map

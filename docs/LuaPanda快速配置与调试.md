@@ -122,7 +122,7 @@ LUA_PANDA_READY port=8819
 
 ## 5.1 第二课：Gateway/Battle 双进程
 
-`debug` 是 `run_server.sh` 的动作，不带 `--debug` 或 `--start` 参数。它准备 Server 运行环境，按需调用 `bootstrap_luapanda.sh`，导出 `LUA_PANDA_ENABLE=1` 和默认的 `LUA_PANDA_HOST=127.0.0.1`，再由 `run_lesson2_processes.sh` 启动 Battle 与 Gateway 两个 Skynet 进程。首次准备依赖可能需要一些时间。
+`debug` 是 `run_server.sh` 的动作，不带 `--debug` 或 `--start` 参数。它准备 Server 运行环境，按需调用 `bootstrap_luapanda.sh`，导出 `LUA_PANDA_ENABLE=1` 和默认的 `LUA_PANDA_HOST=127.0.0.1`，再由 `run_lesson_02_processes.sh` 启动 Battle 与 Gateway 两个 Skynet 进程。首次准备依赖可能需要一些时间。
 
 先在 VS Code 的 Run and Debug 中启动要调试的 LuaPanda target，再在 WSL 终端执行：
 
@@ -134,8 +134,8 @@ cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
 第二课的进程状态、日志和停止操作由双进程脚本管理：
 
 ```bash
-./scripts/linux/run_lesson2_processes.sh status
-./scripts/linux/run_lesson2_processes.sh stop
+./scripts/lessons/run_lesson_02_processes.sh status
+./scripts/lessons/run_lesson_02_processes.sh stop
 ```
 
 日志分别位于 `server/logs/lesson2/battle.log` 和 `server/logs/lesson2/gateway.log`。当前 `run_server.sh status/stop` 管理的是单进程 `server.pid`，不能用来查看或停止上述两个进程。

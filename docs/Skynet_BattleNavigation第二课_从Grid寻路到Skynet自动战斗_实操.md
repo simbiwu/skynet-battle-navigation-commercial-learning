@@ -144,7 +144,7 @@ Map/Battle Process
 | `server/service/gateway/gateway_main.lua` | [新建文件] | 创建 Proxy 和 FlyWow Gateway |
 | `server/service/gateway/gateway_proxy.lua` | [新建文件] | 异步转发并关联 Battle 回推结果 |
 | `server/service/battle/battle_main.lua` | [新建文件] | 创建 Query、开放 cluster 并注册入口 |
-| `server/scripts/linux/run_lesson2_processes.sh` | [新建文件] | 统一启动、停止、状态和诊断两个进程 |
+| `server/scripts/lessons/run_lesson_02_processes.sh` | [新建文件] | 统一启动、停止、状态和诊断两个进程 |
 
 这些文件属于 Server 编辑源 `~/workspace/skynet-battle-navigation-commercial-learning/server/`。Windows 主工作区只同步 Git 提交，不复制 WSL 目录。
 
@@ -155,9 +155,9 @@ Map/Battle Process
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
-./scripts/linux/run_lesson2_processes.sh doctor
-./scripts/linux/run_lesson2_processes.sh start
-./scripts/linux/run_lesson2_processes.sh status
+./scripts/lessons/run_lesson_02_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh start
+./scripts/lessons/run_lesson_02_processes.sh status
 ```
 
 默认端口是 Gateway `19011`、Gateway Process cluster `2527`、Map/Battle Process cluster `2528`。日志位于 `server/logs/lesson2/gateway.log` 和 `server/logs/lesson2/battle.log`，应分别看到：
@@ -171,10 +171,10 @@ LESSON2_GATEWAY_PROCESS_READY
 停止时必须让 Gateway 先停止，再停止 Battle，避免仍有客户端请求尝试访问已经退出的远程节点：
 
 ```bash
-./scripts/linux/run_lesson2_processes.sh stop
+./scripts/lessons/run_lesson_02_processes.sh stop
 ```
 
-`run_lesson2_processes.sh doctor` 只检查固定 Skynet、FlyWow submodule、协议 descriptor、registry 和两个 bootstrap 文件是否存在；它不会启动服务，也不会生成新的协议版本。修改端口时必须同时更新两个 `process_*.lua` 文件以及本节中的验证说明，不能在脚本中写死第二套配置。
+`run_lesson_02_processes.sh doctor` 只检查固定 Skynet、FlyWow submodule、协议 descriptor、registry 和两个 bootstrap 文件是否存在；它不会启动服务，也不会生成新的协议版本。修改端口时必须同时更新两个 `process_*.lua` 文件以及本节中的验证说明，不能在脚本中写死第二套配置。
 
 ### 为未来 2D 地图保留的接入边界
 
@@ -2649,7 +2649,7 @@ MoveUnit：按提交时刻的动态事实复验并提交
 
 ```text
 cd "$(git rev-parse --show-toplevel)"
-./server/native/grid_map/make_test.sh
+./server/scripts/linux/run_server.sh build
 ```
 
 必须看到 `grid_map_test` 和 `navigation_test` 全部通过。验证失败时先修复本节，不能带着不一致的接口继续进入第 8 节。
@@ -2982,7 +2982,7 @@ const NavResult<bool> moved = GridPathfinder::MoveUnit(
 
 ```bash
 cd "$(git rev-parse --show-toplevel)"
-./server/native/grid_map/make_test.sh
+./server/scripts/linux/run_server.sh build
 ```
 
 `navigation_test` 的 `TestSmoothedPathSegments()` 既断言开阔直线被缩成两个点，也调用 `ValidatePathStatic/ValidatePath` 逐段复验；还构造一条穿过动态占用格的非法长 Segment，确认它被拒绝。只断言“点变少了”不足以证明路径仍可走。
@@ -3168,7 +3168,7 @@ Center；真实起点已经在范围内时保持单点 Path。
 
 不要创建 `AttackAStar.cpp`。复制两套搜索代码，后面修 corner cutting 时很容易只修其中一套。
 
-运行 `./server/native/grid_map/make_test.sh`，确认 `navigation_test` 中的
+运行 `./server/scripts/linux/run_server.sh build`，确认 `navigation_test` 中的
 `TestFindPathToOccupiedTargetRange()` 和 `TestRangeGoalUsesActualStartPosition()`
 通过：目标中心由另一实体占用时停在合法攻击位置；起点 Cell Center
 合格但真实起点未入范围时返回可移动终点；范围为 0 且目标被占时不可达。
@@ -3911,7 +3911,7 @@ add_test(NAME navigation_test COMMAND navigation_test)
 [只读]
 
 ```text
-server/native/grid_map/make_test.sh
+server/scripts/linux/run_server.sh build
 ```
 
 ```bash
@@ -3926,7 +3926,7 @@ server/native/grid_map/make_test.sh
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-./native/grid_map/make_test.sh
+./scripts/linux/run_server.sh build
 ```
 
 `make_test.sh` 使用 CTest，所以新增 target 后无需再创建第二套测试脚本。
@@ -5343,7 +5343,7 @@ start = "battle/navigation_smoke"
 [新建文件]
 
 ```text
-server/native/lua_battle_nav/make.sh
+server/scripts/linux/run_server.sh build
 ```
 
 ```bash
@@ -5387,21 +5387,21 @@ printf "[battle-nav-build] ready: %s\n" "$BUILD_DIR/battle_nav.so"
 新建后只需赋予一次执行权限：
 
 ```bash
-chmod +x native/lua_battle_nav/make.sh
+chmod +x scripts/linux/run_server.sh build
 ```
 
 在 `server/` 目录运行构建脚本，再启动 Smoke。构建脚本可从其他目录调用；这里保持在
 `server/` 是为了下一条 Skynet 启动命令使用固定的相对配置路径：
 
 ```bash
-./native/lua_battle_nav/make.sh
+./scripts/linux/run_server.sh build
 FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
   ./third_party/skynet/skynet config/skynet_navigation_smoke.lua
 ```
 
 `scripts/linux/run_server.sh prepare` 也会在依赖和发布资产校验后调用同一个 Native 构建入口。
 只有看到最终的 `PREPARE_OK` 才代表整段准备流程成功；如果 C++ 编译失败，旧 `.so` 文件可能仍留在输出目录，不能据此判断新源码已经构建。
-单独修改 Native 后，直接运行 `./native/lua_battle_nav/make.sh` 更容易看清构建结果。
+单独修改 Native 后，直接运行 `./scripts/linux/run_server.sh build` 更容易看清构建结果。
 
 预期日志包含 `NAVIGATION_SMOKE_OK`。失败时先看 `NAV_QUERY_READY` 是否出现，
 再看 `new_context` 的错误码；验证后从终端停止进程，避免遗留的查询 Service
@@ -7006,7 +7006,7 @@ start = "battle/batch_runner"
 从 `server/` 目录运行。先构建 Native Binding，再启动 Skynet：
 
 ```bash
-./native/lua_battle_nav/make.sh
+./scripts/linux/run_server.sh build
 FLYWOW_ROOT="$PWD/third_party/skynet-flywow" \
   ./third_party/skynet/skynet config/skynet_batch.lua
 ```
@@ -8099,7 +8099,7 @@ skynet.start(function()
 end)
 ```
 
-[局部修改] `server/scripts/linux/run_lesson2_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua` 保持[只读]；`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 按本课边界调整：Proxy 使用 `cluster.send` 转发请求并用反向 `cluster.send` 接收 Battle 结果，通过有界 route token 路由表关联返回上下文，再异步发送 gateway_response；不 wait、不 wakeup、不 retpack 业务请求。两端进程配置需互相声明 Cluster 节点、监听地址和回推服务名；使用 endpoint 的 Battle 进程也需导出 FLYWOW_ROOT。不得把 Battle 路由或状态放入 Gateway。
+[局部修改] `server/scripts/lessons/run_lesson_02_processes.sh`：`doctor()` 对 `battle_dispatch.lua`、`battle/battle_mgr.lua`、`battle/battle_worker.lua` 增加存在性检查；保持原先 Battle 先 READY、Gateway 后监听和 Gateway 先停止的顺序。脚本不替你生成协议或运行 batch。`gateway_main.lua` 保持[只读]；`gateway_proxy.lua`、`config/process_gateway.lua`、`config/process_battle.lua` 按本课边界调整：Proxy 使用 `cluster.send` 转发请求并用反向 `cluster.send` 接收 Battle 结果，通过有界 route token 路由表关联返回上下文，再异步发送 gateway_response；不 wait、不 wakeup、不 retpack 业务请求。两端进程配置需互相声明 Cluster 节点、监听地址和回推服务名；使用 endpoint 的 Battle 进程也需导出 FLYWOW_ROOT。不得把 Battle 路由或状态放入 Gateway。
 
 在 `doctor()` 已有的 Service 文件检查后加入：
 
@@ -8506,12 +8506,12 @@ namespace BattleNavigation.Client
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-./scripts/linux/run_lesson2_processes.sh stop
+./scripts/lessons/run_lesson_02_processes.sh stop
 ./protocol/build_server_descriptor.sh
 BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
-./scripts/linux/run_lesson2_processes.sh doctor
-./scripts/linux/run_lesson2_processes.sh start
-./scripts/linux/run_lesson2_processes.sh status
+./scripts/lessons/run_lesson_02_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh start
+./scripts/lessons/run_lesson_02_processes.sh status
 ```
 
 确认生成 registry 中 `1001=QueryCell`、`1002=RunAutoBattle`，Server descriptor 的 source hash 与修改后的 `.proto` 一致。协议源码在 WSL 编辑源完成并按本课程双工作区规则串行同步后，Windows 工作区运行 `shared/protocol/build_unity_cs.ps1`，让 Unity 重新导入生成的 `NavigationQuery.cs`；Unity `.meta` 由 Editor 生成并随变更提交，不手改生成 C#。同一发布提交需要包含 `.proto`、Server descriptor/registry、Unity 生成物和哈希校验文件。

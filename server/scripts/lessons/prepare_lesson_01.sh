@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
-RUN_CTL="$SCRIPT_DIR/run_server.sh"
+RUN_CTL="$SCRIPT_DIR/../linux/run_server.sh"
 SHARED_MAP_DIR="$REPO_ROOT/shared/navigation/battle_1001"
 BMAP_FILE="$SHARED_MAP_DIR/battle_1001.bmap"
 MANIFEST_FILE="$SHARED_MAP_DIR/battle_1001.manifest.json"
@@ -25,7 +25,7 @@ EXPECTED_CELL_SIZE_MM=500
 usage() {
     cat <<'USAGE'
 Usage:
-  BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh [--rebuild]
+  BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh [--rebuild]
 
 Options:
   --rebuild  调用 run_server.sh rebuild；默认调用 build 做增量构建与测试。

@@ -442,7 +442,7 @@ max application payload: 65535 bytes
 
 跨进程边界只传输已解码的 request/result record。cluster 节点地址、监听端口和入口名放在 `config/process_gateway.lua`、`config/process_battle.lua`，由 composition root 注入；不通过全局名字隐藏单节点依赖。`battle_dispatch` 例外属于明确的跨启动树发现合同，并要求 Battle Process 先完成 `ready` 再发布 READY 日志。Gateway Proxy 使用 `cluster.send` 转发请求，Battle 完成后向已注册的 Gateway Proxy 入口发送关联结果；route token 只用于传输关联，不是 Battle 身份。`RunAutoBattle` 客户端等待最终响应，但跨进程请求和回推均为异步 send，超时和在途数量有界。
 
-本地脚本 `server/scripts/linux/run_lesson2_processes.sh` 负责有序启动、停止、状态检查和 doctor；默认 Gateway 端口为 19011，两个 cluster 端口为 2527/2528。该进程拆分验证部署边界，不提前创建尚未被当前行为使用的 BattleWorker 抽象；后续 BattleMgr/BattleWorker 接入 `battle_dispatch` 后，Gateway 合同保持不变。
+本地脚本 `server/scripts/lessons/run_lesson_02_processes.sh` 负责有序启动、停止、状态检查和 doctor；默认 Gateway 端口为 19011，两个 cluster 端口为 2527/2528。该进程拆分验证部署边界，不提前创建尚未被当前行为使用的 BattleWorker 抽象；后续 BattleMgr/BattleWorker 接入 `battle_dispatch` 后，Gateway 合同保持不变。
 
 ## D031 - 在线交互与整场回放共用同一个 BattleWorker
 

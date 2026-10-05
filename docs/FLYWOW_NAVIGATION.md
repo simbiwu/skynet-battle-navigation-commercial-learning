@@ -72,7 +72,7 @@ Windows 仍是共享导航资产编辑源；本次没有复制覆盖 WSL 的共�
 
 ## 4. 旧调用方迁移
 
-Native 使用 `require "flywow.navigation"`，共享库改为 `flywow_navigation.so`。旧宿主 `native/grid_map/make_test.sh` 和 `native/lua_battle_nav/make.sh` 只保留委托框架构建的薄入口，不保留第二份算法。
+Native 使用 `require "flywow.navigation"`，共享库改为 `flywow_navigation.so`。
 
 Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 合同。整理过程中发现早期 sibling 的 request_id/endpoint 合同与课程现行实现不一致，已明确统一实现、文档、测试及迁移决策，删除旧 endpoint。没有把两套不兼容合同并放在新目录。
 

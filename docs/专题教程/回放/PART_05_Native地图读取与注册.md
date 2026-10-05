@@ -1008,7 +1008,7 @@ PY
 
 ```bash
 export FLYWOW_ROOT="$PWD/third_party/skynet-flywow"
-bash "$FLYWOW_ROOT/navigation/scripts/build.sh" \
+bash "$FLYWOW_ROOT/navigation/scripts/build_navigation.sh" \
     "$PWD/third_party/skynet" "$PWD/build/flywow_navigation"
 ```
 

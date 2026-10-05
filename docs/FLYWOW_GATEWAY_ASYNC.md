@@ -83,7 +83,7 @@ Server 以 WSL 为编辑源，FlyWow 以主仓库内的 FlyWow 子模块为开�
 cd /path/to/course/server
 export FLYWOW_ROOT=/path/to/updated-skynet-flywow
 ./scripts/linux/run_server.sh build
-./scripts/linux/run_lesson2_processes.sh doctor
+./scripts/lessons/run_lesson_02_processes.sh doctor
 ./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$FLYWOW_ROOT"
 python3 tests/gateway_async_integration.py
 

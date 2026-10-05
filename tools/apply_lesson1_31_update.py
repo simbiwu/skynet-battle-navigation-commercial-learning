@@ -97,14 +97,14 @@ if marker_text not in readme:
 
 ```bash
 BUILD_TYPE=Debug \
-./scripts/linux/lesson1_prepare.sh \
+./scripts/lessons/prepare_lesson_01.sh \
   --unity-output "$(git rev-parse --show-toplevel)/unity/BattleNavigation/BuildArtifacts/Navigation"
 ```
 
 重复验收可复用已导入地图：
 
 ```bash
-BUILD_TYPE=Debug ./scripts/linux/lesson1_prepare.sh --reuse-map
+BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh --reuse-map
 ```
 
 LuaPanda 是 debug-only 工具链。安装/验证本地调试依赖：
