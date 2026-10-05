@@ -16,7 +16,7 @@ Gateway和客户端SDK完成P-256密钥交换、32字节随机挑战、HKDF-SHA2
                        独立响应入口 -> 编码 -> 写客户端
 ```
 
-Gateway拥有fd及连接；`gateway.handshake`拥有状态机、并发计数和期限；`flywow_gateway_crypto` Native userdata拥有敏感数据。握手模块不写Socket、不引用业务、不创建Service或协程。同步密码运算只在握手执行，不yield。
+Gateway拥有fd及连接；`flywow.gateway.handshake`拥有状态机、并发计数和期限；`flywow_gateway_crypto` Native userdata拥有敏感数据。握手模块不写Socket、不引用业务、不创建Service或协程。同步密码运算只在握手执行，不yield。
 
 ## 固定字节合同
 

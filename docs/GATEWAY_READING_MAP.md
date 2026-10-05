@@ -8,8 +8,8 @@
 server/service/gateway/gateway_main.lua
   -> server/service/gateway/gateway_proxy.lua
   -> server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua
-  -> server/third_party/skynet-flywow/gateway/lualib/gateway/handshake.lua
-  -> server/third_party/skynet-flywow/gateway/lualib/gateway/codec.lua
+  -> server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/handshake.lua
+  -> server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/codec.lua
   -> server/service/battle/battle_dispatch.lua
   -> server/service/battle/navigation_query.lua / battle_mgr.lua
 ```
@@ -72,7 +72,7 @@ read_exact
 ## 验证入口
 
 ```text
-server/third_party/skynet-flywow/tests/gateway_handshake_test.lua
+server/third_party/skynet-flywow/gateway/tests/gateway_handshake_test.lua
 server/tests/gateway_proxy_test.lua
 server/tests/gateway_async_integration.py
 ```

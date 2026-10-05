@@ -573,6 +573,6 @@ FlyWow 的 `gateway.endpoint` 是可选薄接入模块：构造响应上下文�
 
 FlyWow Gateway 与客户端 SDK 在连接进入 ready 前完成 P-256 ECDH、32 字节随机挑战、HKDF-SHA256 和完整 HMAC-SHA256 双向证明。每连接重新生成临时密钥和挑战，成功后释放秘密；不要求账号、宿主会话表或 Watchdog。合法协议客户端指完成握手的客户端，不附带账号授权语义。
 
-状态机独立放在 `gateway.handshake`，Native 绑定仅链接 OpenSSL 3 的 libcrypto EVP，不链接 libssl、不启用 SSL/TLS；Gateway Service 只执行接入、发送及关闭。Unity SDK 使用固定 Bouncy Castle 2.6.2，H5 使用 Web Crypto。业务 `.proto`、Envelope 版本3及 D039 异步合同保持现状；不增加包头加密、CRC 或逐包 HMAC。
+状态机独立放在 `flywow.gateway.handshake`，Native 绑定仅链接 OpenSSL 3 的 libcrypto EVP，不链接 libssl、不启用 SSL/TLS；Gateway Service 只执行接入、发送及关闭。Unity SDK 使用固定 Bouncy Castle 2.6.2，H5 使用 Web Crypto。业务 `.proto`、Envelope 版本3及 D039 异步合同保持现状；不增加包头加密、CRC 或逐包 HMAC。
 
 握手消息与 ready 后业务消息由连接状态区分，TCP 复用两字节长度帧，WS 使用 binary message。未 ready 不缓存或投递业务。并发握手数和总期限有界，复用既有扫描协程。连接协议不兼容旧客户端，必须双端升级，不自动降级。完整字节合同、构建、验收与未验证项见 `docs/FLYWOW_GATEWAY_HANDSHAKE.md`。

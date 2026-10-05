@@ -12,7 +12,7 @@ logger = nil                            -- nil 表示日志输出到标准输出
 start = "main"                          -- 首个业务 Service：service/main.lua。
 bootstrap = "snlua bootstrap"           -- 使用 Skynet 标准 Lua Bootstrap。
 
--- flywow_gateway 和 gateway.* 均由独立框架仓库提供；业务仓库不复制这些源码。
+-- flywow_gateway 和 flywow.gateway.* 均由独立框架仓库提供；业务仓库不复制这些源码。
 luaservice = "./service/?.lua;" .. skynet_root .. "service/?.lua"
 lualoader = skynet_root .. "lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
