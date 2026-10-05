@@ -98,7 +98,7 @@ USAGE
 # submodule 是正常来源，sibling 只用于开发覆盖；返回已验证的框架根目录。
 find_flywow_root() {
     [[ -f "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py" &&
-       -f "$FLYWOW_ROOT/gateway/service/flywow_gateway.lua" ]]
+       -f "$FLYWOW_ROOT/gateway/service/gateway/flywow_gateway.lua" ]]
 }
 
 # 检查二进制、配置、框架和生成 registry；不启动进程。
@@ -116,7 +116,7 @@ doctor() {
        -f "$SERVER_ROOT/config/shutdownctl_process.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
-    [[ -f "$FLYWOW_ROOT/gateway/service/flywow_gateway.lua" &&
+    [[ -f "$FLYWOW_ROOT/gateway/service/gateway/flywow_gateway.lua" &&
        -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/codec.lua" &&
        -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/handshake.lua" ]] ||
         fail "FlyWow Gateway sources missing; run git submodule update --init --recursive"

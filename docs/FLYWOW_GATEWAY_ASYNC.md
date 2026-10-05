@@ -77,7 +77,7 @@ FlyWow 的 `gateway.endpoint` 只提供薄的响应上下文，不接管现有 d
 
 ## 验证与工作区
 
-Server 以 WSL 为编辑源，FlyWow 以独立仓库为开发源。提交顺序是 FlyWow 提交并 Push、WSL Server 固定 submodule 并提交 Push、Windows 拉取后提交文档 Push、WSL 最后拉取。开发可通过显式 `FLYWOW_ROOT` 使用独立工作区；正常运行使用课程固定的 submodule。旧同步 API 与新 handler 不能混用。
+Server 以 WSL 为编辑源，FlyWow 以主仓库内的 FlyWow 子模块为开发源。提交顺序是 FlyWow 提交并 Push、WSL Server 固定 submodule 并提交 Push、Windows 拉取后提交文档 Push、WSL 最后拉取。开发可通过显式 `FLYWOW_ROOT` 只指向当前主仓库的 FlyWow 子模块；正常运行使用课程固定的 submodule。旧同步 API 与新 handler 不能混用。
 
 ```bash
 cd /path/to/course/server

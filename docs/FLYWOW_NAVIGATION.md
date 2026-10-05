@@ -4,15 +4,15 @@
 
 ## 1. 唯一源码与边界
 
-FlyWow 开发源位于 WSL `~/workspace/skynet-flywow`：
+FlyWow 开发源位于 WSL 主仓库子模块 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`：
 
 ```text
 gateway/
   lualib/flywow/gateway/
-  service/flywow_gateway.lua
+  service/gateway/flywow_gateway.lua
   native/gateway_crypto/
-  unity/
-  h5/
+  clients/unity/
+  clients/h5/
   tools/
   scripts/
 navigation/
@@ -22,7 +22,7 @@ navigation/
   unity/                    # com.flywow.navigation UPM Package
   tools/
   scripts/
-tools/module_paths.py
+scripts/module_paths.py
 ```
 
 静态 BMAP/Grid、A*、区域范围搜索、smoothing、动态占位、独占 Context、Lua Binding 及 Unity 的地图配置、Bake、采样、Clearance、校验、Overlay、导出迁入 Navigation。框架不依赖课程仓库布局；候选输出目录由宿主明确填写。
@@ -37,9 +37,9 @@ Unity 原脚本 GUID 保留；Scene 继续保存原地图 ID、版本、原点�
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-FLYWOW_ROOT="$HOME/workspace/skynet-flywow" ./scripts/linux/run_server.sh build
-FLYWOW_ROOT="$HOME/workspace/skynet-flywow" ./scripts/linux/run_server.sh start
-FLYWOW_ROOT="$HOME/workspace/skynet-flywow" ./scripts/linux/run_server.sh stop
+FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh build
+FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh start
+FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh stop
 ```
 
 启动工具生成 `server/run/flywow_paths.lua`，通过 `FLYWOW_PATHS_CONFIG` 注入配置。临时 shutdownctl 也使用相同路径，不再依赖临时配置所在目录。`--modules gateway navigation` 一次选择模块，统一追加 lualib、Service 和 Native 搜索路径，不需要每个配置手工拼接多条路径。
@@ -47,7 +47,7 @@ FLYWOW_ROOT="$HOME/workspace/skynet-flywow" ./scripts/linux/run_server.sh stop
 Windows Unity 使用框架源生成的离线 UPM 包。从 Windows 主仓库根目录执行：
 
 ```powershell
-./scripts/windows/Connect-FlyWowNavigation.ps1 -FlyWowRoot /home/simbi/workspace/skynet-flywow
+./scripts/windows/Connect-FlyWowNavigation.ps1 -FlyWowRoot /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow
 ```
 
 该工具在 `.tmp/navigation-packages/` 生成按内容 SHA-256 命名的可复现 `.tgz`，更新课程工程 manifest 的相对 `file:` 依赖。它不复制维护源码，不启动 Editor。Windows PowerShell 5.1 的中文脚本使用 UTF-8 BOM，输出 JSON 使用 UTF-8 无 BOM；两者保持 LF。

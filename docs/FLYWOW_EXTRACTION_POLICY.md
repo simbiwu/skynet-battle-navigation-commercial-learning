@@ -4,10 +4,10 @@
 
 ## 1. 两个仓库保持独立
 
-FlyWow 独立仓库开发源：
+本项目使用的 FlyWow 唯一开发源：
 
 ```text
-~/workspace/skynet-flywow
+~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow
 ```
 
 远端：
@@ -26,19 +26,26 @@ Git submodule 固定一个已经验证的 FlyWow 提交。
 
 主仓库提交的是 submodule gitlink，不复制 FlyWow 源码历史。
 
-开发调试可以通过：
-
-```text
-FLYWOW_ROOT
-```
-
-临时覆盖到 sibling 工作区；正常克隆和构建必须依赖：
+正常克隆和构建必须依赖：
 
 ```bash
 git clone --recurse-submodules ...
 # 或
 git submodule update --init --recursive
 ```
+
+不要直接修改或使用 `/home/simbi/workspace/skynet-flywow` 作为本项目开发源。
+
+## 1.1 功能模块目录
+
+FlyWow 根目录按功能模块组织，模块之间同级：
+
+```text
+gateway/
+navigation/
+```
+
+模块自己的运行时、Native、客户端、Unity、测试、工具和构建脚本都放在模块目录内，例如 `gateway/lualib/`、`gateway/native/`、`navigation/unity/`。FlyWow 根目录不直接放模块级的 `lualib/`、`native/`、`service/`、`unity/`、`clients/`、`tools/` 或测试目录；根级 `scripts/ci/` 只属于仓库质量门禁。
 
 ## 2. 产品目标、时点与抽取原则
 

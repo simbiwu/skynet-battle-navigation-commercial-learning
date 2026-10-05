@@ -93,7 +93,7 @@ parse_args() {
 }
 prepare_runtime() {
     # 目录升级必须与框架版本成套使用；旧 gitlink 不支持模块入口，不能静默回退。
-    [[ -f "$FLYWOW_ROOT/tools/module_paths.py" ]] ||
+    [[ -f "$FLYWOW_ROOT/scripts/module_paths.py" ]] ||
         fail "FlyWow 尚未支持模块布局；开发请显式设置 FLYWOW_ROOT，发布后同步固定 submodule"
     # 数据准备：确保 Skynet、协议工具和 Lua protobuf runtime 可用。
     "$SCRIPT_DIR/bootstrap_skynet.sh"
@@ -105,11 +105,12 @@ prepare_runtime() {
     python3 "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
     # 构建 Native 依赖并校验 descriptor。
     bash "$FLYWOW_ROOT/gateway/scripts/build_gateway_crypto.sh"         "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/luaclib"
-    python3 "$FLYWOW_ROOT/tools/module_paths.py" --root "$FLYWOW_ROOT" \
+    python3 "$FLYWOW_ROOT/scripts/module_paths.py" --root "$FLYWOW_ROOT" \
         --modules gateway navigation --native "$SERVER_ROOT/build/flywow_navigation/lua" \
         --output "$SERVER_ROOT/run/flywow_paths.lua"
     "$SCRIPT_DIR/check_server_descriptor.sh"
-    BUILD_TYPE="$BUILD_TYPE" "$SERVER_ROOT/native/lua_battle_nav/make.sh"
+    BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_ROOT/navigation/scripts/build.sh" \
+        "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/build/flywow_navigation"
     # 收尾：确认所有启动所需产物存在。
     [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] ||
         fail "共享运行资产不完整"
@@ -118,7 +119,7 @@ prepare_runtime() {
 run_build() {
     prepare_runtime
     "$SCRIPT_DIR/check_lua_varargs.sh"
-    "$SERVER_ROOT/native/grid_map/make_test.sh"
+    # Navigation 构建脚本已在 prepare_runtime 中完成 Native 编译和 CTest。
     log "BUILD_OK"
 }
 run_rebuild() {

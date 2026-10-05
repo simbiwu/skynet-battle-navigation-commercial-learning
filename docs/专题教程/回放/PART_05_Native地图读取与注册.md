@@ -30,7 +30,7 @@ query_logic.start(config)
 
 ## 2. 先把源码位置与阅读重点接好
 
-路径约定：`server/...` 相对于课程仓库；`navigation/...` 相对于 FlyWow 根目录。开发时 FlyWow 根由 `FLYWOW_ROOT` 指定；正式交付由宿主固定框架提交。本机开发源是 WSL 的 `~/workspace/skynet-flywow`。
+路径约定：`server/...` 相对于课程仓库；`navigation/...` 相对于 FlyWow 根目录。开发时 FlyWow 根由 `FLYWOW_ROOT` 指定；正式交付由宿主固定框架提交。本机开发源是 WSL 的 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`。
 
 以下文件全部为**只读阅读**，本节不要求替换生产源码。
 
@@ -1007,7 +1007,7 @@ PY
 前提：当前 Native Debug 产物已经构建。需要构建时，从 `server/` 执行：
 
 ```bash
-export FLYWOW_ROOT="$HOME/workspace/skynet-flywow"
+export FLYWOW_ROOT="$PWD/third_party/skynet-flywow"
 bash "$FLYWOW_ROOT/navigation/scripts/build.sh" \
     "$PWD/third_party/skynet" "$PWD/build/flywow_navigation"
 ```

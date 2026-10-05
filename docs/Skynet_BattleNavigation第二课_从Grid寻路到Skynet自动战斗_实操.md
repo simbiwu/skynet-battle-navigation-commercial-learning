@@ -105,7 +105,7 @@ PlayerCommand
 
 ## 第一课 Gateway 与第二课战斗调度的边界
 
-第二课不重新实现网络接入。第一课已经由 `server/third_party/skynet-flywow/service/gateway/flywow_gateway.lua` 负责 TCP/WebSocket、framing、Protobuf 解码、连接生命周期和错误合同；第二课先完成 BattleMgr、BattleWorker 和 `battle_core`，第 23.5 节才把它们接到独立 Battle Process 的分发入口。
+第二课不重新实现网络接入。第一课已经由 `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua` 负责 TCP/WebSocket、framing、Protobuf 解码、连接生命周期和错误合同；第二课先完成 BattleMgr、BattleWorker 和 `battle_core`，第 23.5 节才把它们接到独立 Battle Process 的分发入口。
 
 进入战斗业务时，Gateway 传递的是已经解码的 `command`、`request`、`request_id` 和 `connection_id`。业务层根据 command 调用 BattleMgr；BattleMgr 可以 `skynet.call` BattleWorker 并 yield，BattleWorker 再调用 no-yield 的 `battle_core.simulate()`。网络 fd、frame buffer 和 Protobuf codec 不得进入 BattleWorker 或模拟核心。
 
