@@ -69,7 +69,7 @@ Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 
 
 ## 5. 阅读入口与已验证范围
 
-框架内 `navigation/README.md`、`INTEGRATION.md`、`CONTRACT.md`、`UPGRADE.md` 分别说明目录、接入、公开接口及成套迁移。源码保留并整理 A*、smoothing、Clearance、footprint、移动复验、Lua 栈与 userdata 生命周期注释；Cell 中心计算补充直接关系、提取公因子步骤及数值例子。
+框架内 `navigation/README.md`、`导航接入指南.md`、`CONTRACT.md`、`UPGRADE.md` 分别说明目录、接入、公开接口及成套迁移。源码保留并整理 A*、smoothing、Clearance、footprint、移动复验、Lua 栈与 userdata 生命周期注释；Cell 中心计算补充直接关系、提取公因子步骤及数值例子。
 
 本次验证结果：
 
