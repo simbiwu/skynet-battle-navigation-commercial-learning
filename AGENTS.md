@@ -10,7 +10,8 @@
 
 - 用户没有明确说“开始、修改、实现、更新、执行、同步”等时，只分析和给方案，不修改文件。
 - 未经用户明确要求，不 commit、push、force push、改远端分支，也不覆盖另一工作区的未提交内容。
-- 涉及编辑源、Windows/WSL 同步或 Git 操作，先读 `docs/WORKSPACE_WORKFLOW.md`。本仓库的文档和 Unity 以 Windows 工作区为编辑源，Server 以 WSL 工作区为编辑源。
+- 涉及编辑源、Windows/WSL 同步或 Git 操作，先读 `docs/WORKSPACE_WORKFLOW.md`。WSL 主工作区是 Server、FlyWow、文档及非 Unity 文件的唯一编辑源；Unity 工程和 Unity 生成的导航资产保留 Windows 编辑源。
+- FlyWow 只能在 WSL 主工作区内的 `server/third_party/skynet-flywow/` 子模块修改；不要直接修改独立的 `/home/simbi/workspace/skynet-flywow` 工作区。FlyWow 子模块必须先提交并推送，再由主仓库更新 submodule 指针并提交推送。
 - 已有未提交修改属于用户；只改当前任务涉及的内容。
 
 ## 按需读取
