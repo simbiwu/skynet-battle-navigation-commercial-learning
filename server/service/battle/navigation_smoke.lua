@@ -4,7 +4,7 @@
 -- 生命周期：运行一次；查询 Service 先加载地图，本 Service 验证后退出。
 -- 不负责：不计算 AI/伤害，不编写 Replay，不做性能测试。
 local skynet = require "skynet"
-local battle_nav = require "flywow.navigation"
+local battle_nav = require "flywow_navigation"
 
 -- 把 Binding 的 nil,{code,message} 合同变成可读的 Smoke 失败日志。
 -- value/error 属于本次同步调用；成功返回原值，失败抛错终止此检查；不 I/O、不 yield。

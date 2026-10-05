@@ -28,6 +28,7 @@ collect_project_lua_files() {
 main() {
     local files=()
     local violations
+    # 只扫描项目 Lua；third_party 是供应商代码，不在本项目规则检查范围内。
     mapfile -t files < <(collect_project_lua_files)
 
     if ((${#files[@]} == 0)); then

@@ -22,6 +22,7 @@ test -s "$RUNTIME/pb.so"
 test -s "$DESCRIPTOR"
 
 # LUA_PATH/C。本次只临时覆盖子进程环境，不污染调用 Shell。
+# 在受控 Lua 搜索路径中运行检查器，确保验证的是仓库锁定的 protobuf runtime。
 LUA_PATH="$RUNTIME/?.lua;;" \
 LUA_CPATH="$RUNTIME/?.so;;" \
     "$LUA" "$ROOT/protocol/check_descriptor.lua" "$DESCRIPTOR"

@@ -16,13 +16,13 @@ gateway/
   tools/
   scripts/
 navigation/
-  lualib/flywow/navigation.lua
+  lualib/flywow_navigation.lua
   native/grid_map/
   native/lua/
   unity/                    # com.flywow.navigation UPM Package
   tools/
   scripts/
-scripts/module_paths.py
+scripts/build_flywow.sh
 ```
 
 静态 BMAP/Grid、A*、区域范围搜索、smoothing、动态占位、独占 Context、Lua Binding 及 Unity 的地图配置、Bake、采样、Clearance、校验、Overlay、导出迁入 Navigation。框架不依赖课程仓库布局；候选输出目录由宿主明确填写。
@@ -31,30 +31,19 @@ Battle_1001 场景、出生点、Battle Tick、技能、Gateway/Battle 进程组
 
 Unity 原脚本 GUID 保留；Scene 继续保存原地图 ID、版本、原点和 Cell 边长。课程 SceneBuilder 现在显式设置 Battle_1001 参数，避免通用包默认值改变课程地图。
 
-## 2. 如何重新接入开发源
+## 2. 当前构建与运行时配置
 
-本次没有 commit/push，未把旧 submodule gitlink 宣称为新版本。WSL Server 明确选择开发源：
+FlyWow 固定从主仓库 Server submodule 加载；不使用 FLYWOW_ROOT 覆盖目录，也不在构建时生成搜索路径 Lua 文件。从 Server 根目录执行：
 
-```bash
-cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh build
-FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh start
-FLYWOW_ROOT="$PWD/third_party/skynet-flywow" ./scripts/linux/run_server.sh stop
-```
+~~~bash
+./scripts/linux/run_server.sh build
+~~~
 
-启动工具生成 `server/run/flywow_paths.lua`，通过 `FLYWOW_PATHS_CONFIG` 注入配置。临时 shutdownctl 也使用相同路径，不再依赖临时配置所在目录。`--modules gateway navigation` 一次选择模块，统一追加 lualib、Service 和 Native 搜索路径，不需要每个配置手工拼接多条路径。
+入口调用 third_party/skynet-flywow/scripts/build_flywow.sh，三个 Native 模块统一输出到 third_party/skynet-flywow/build/native/，CMake 中间文件按模块放在 build/cmake/<module>/。
 
-Windows Unity 使用框架源生成的离线 UPM 包。从 Windows 主仓库根目录执行：
+Gateway、Battle 和单进程配置直接列出自己需要的 lua_path、luaservice、lua_cpath、cpath 和 preload。路径相对 server/ 工作目录，因此阅读配置时能直接看见模块来源；不通过环境变量或生成器拼接。Gateway 只加入 Gateway 模块搜索路径，Battle 只加入 Navigation/Logger。
 
-```powershell
-./scripts/windows/Connect-FlyWowNavigation.ps1 -FlyWowRoot /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow
-```
-
-该工具在 `.tmp/navigation-packages/` 生成按内容 SHA-256 命名的可复现 `.tgz`，更新课程工程 manifest 的相对 `file:` 依赖。它不复制维护源码，不启动 Editor。Windows PowerShell 5.1 的中文脚本使用 UTF-8 BOM，输出 JSON 使用 UTF-8 无 BOM；两者保持 LF。
-
-给另一 Windows Unity 工程接入时指定 `-ProjectPath`；产物和工程应位于可形成相对路径的同一磁盘。纯 Unity Package Manager 接入也可选择 Add package from tarball。WSL UNC 文件夹直接作为 UPM `file:` 依赖在本机验证失败，因此使用离线包。
-
-正式交付需要先发布验证后的 FlyWow 提交，再更新宿主固定 gitlink；Unity 同时锁定配套包产物或相同提交。开发归档不能代替正式版本交付。
+Server 设置为 WSL 唯一编辑源，FlyWow 通过主仓库固定 submodule 修改。Unity 仍在 Windows 编辑。正式交付时按 docs/WORKSPACE_WORKFLOW.md 的顺序发布 FlyWow 并更新主仓库 gitlink。
 
 ## 3. 资产合同保持与增强
 
@@ -72,7 +61,7 @@ Windows 仍是共享导航资产编辑源；本次没有复制覆盖 WSL 的共�
 
 ## 4. 旧调用方迁移
 
-Native 使用 `require "flywow.navigation"`，共享库改为 `flywow_navigation.so`。
+Lua 外部入口使用 `require "flywow_navigation"`，文件位于 `navigation/lualib/flywow_navigation.lua`；它继续加载 Native 模块 `flywow_navigation_native`，最终产物统一位于 `third_party/skynet-flywow/build/native/flywow_navigation_native.so`。
 
 Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 合同。整理过程中发现早期 sibling 的 request_id/endpoint 合同与课程现行实现不一致，已明确统一实现、文档、测试及迁移决策，删除旧 endpoint。没有把两套不兼容合同并放在新目录。
 

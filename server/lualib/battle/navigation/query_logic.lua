@@ -4,7 +4,15 @@
 -- 生命周期：game config 在 start 时保存一次；响应归当前消息协程所有。
 -- 不负责：不处理 TCP、不执行跨 Service call、不做寻路、不保存动态单位。
 local skynet = require "skynet"
-local battle_nav = require "flywow.navigation"
+-- Navigation 首次接入说明：
+-- 源码入口：third_party/skynet-flywow/navigation/lualib/flywow_navigation.lua。
+-- 首次构建从 Server 根目录执行 ./scripts/linux/run_server.sh build；
+-- 它调用 FlyWow/scripts/build_flywow.sh，生成
+-- third_party/skynet-flywow/build/native/flywow_navigation_native.so。
+-- battle_process.lua 明确配置 lua_path、lua_cpath 和 cpath；
+-- 前者定位 Lua Wrapper，后两者定位 Native 模块，不生成额外路径配置文件。
+-- require 先加载 Wrapper，再由 Wrapper require flywow_navigation_native。
+local battle_nav = require "flywow_navigation"
 
 local M = {}
 local config -- 当前 Query Service 私有的只读配置；start 成功后不再替换。

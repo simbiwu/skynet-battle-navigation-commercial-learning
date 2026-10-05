@@ -41,6 +41,7 @@ log() { printf '[lesson1-prepare] %s\n' "$*"; }
 # 输出明确错误并以非零状态结束。
 fail() { printf '[lesson1-prepare] ERROR: %s\n' "$*" >&2; exit 1; }
 
+# 参数只决定校验目标和是否重建；脚本不会把 Lesson 资产复制到 Server 运行目录。
 while [[ $# -gt 0 ]]; do
     case "$1" in
         --rebuild)
@@ -103,6 +104,7 @@ validate_published_map
 if ((REBUILD)); then
     "$RUN_CTL" rebuild
 else
+    # 复用唯一构建入口，保证 Lesson 看到的协议、Native 和 descriptor 与真实 Server 一致。
     "$RUN_CTL" build
 fi
 

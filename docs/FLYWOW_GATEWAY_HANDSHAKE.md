@@ -87,8 +87,8 @@ python3 scripts/ci/check_repository.py
 Server目录运行真实集成，验收依赖Python cryptography 46.0.5及Node 22：
 
 ```bash
-python3 tests/gateway_async_integration.py --flywow-root "$PWD/third_party/skynet-flywow"
-python3 tests/gateway_sdk_interop.py --flywow-root "$PWD/third_party/skynet-flywow"
+python3 tests/gateway_async_integration.py
+python3 tests/gateway_sdk_interop.py
 ```
 
 Windows的Tools/GatewayHandshakeInterop.csproj编译真实客户端源码；.NET 10仅是验收宿主。SDK runner可通过--dotnet和--unity-runner接入该程序集。Node结果不代替浏览器验收，.NET结果不代替Unity发布验证。
@@ -108,10 +108,10 @@ Windows的Tools/GatewayHandshakeInterop.csproj编译真实客户端源码；.NET
 浏览器复验夹具：
 
 ```bash
-python3 tests/gateway_sdk_interop.py --flywow-root "$PWD/third_party/skynet-flywow" --serve-browser
+python3 tests/gateway_sdk_interop.py --serve-browser
 # 打开 http://localhost:19023/example.html，看到H5_BROWSER_WEBCRYPTO_SKYNET_OK。
 # Ctrl+C关闭夹具，finally回收本次启动的Skynet。
-python3 tests/gateway_handshake_benchmark.py --flywow-root "$PWD/third_party/skynet-flywow"
+python3 tests/gateway_handshake_benchmark.py
 ```
 
 2026-10-02本机WSL Ubuntu/OpenSSL 3.5.5/Python cryptography 46.0.5结果；每种transport 64次串行连接，时间包含Python客户端密钥计算、连接、握手、WS Upgrade和本机调度。

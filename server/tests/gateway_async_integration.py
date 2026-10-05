@@ -1,6 +1,6 @@
 # 职责：在真实 pinned Skynet、Protobuf、TCP/WS 和 Cluster 中回归异步 Gateway。
 # 边界：Integration Test；只启动并终止本 runner 创建的进程，不接管已有 Server。
-# 输入/输出：FLYWOW_ROOT -> 延迟/乱序/推送/协议错误/断线及实际课程请求断言。
+# 输入/输出：固定 FlyWow submodule -> 延迟/乱序/推送/协议错误/断线及实际课程请求断言。
 # 生命周期：日志写 server/logs/gateway_async_tests；每个进程 finally 中 TERM/等待，超时仅 KILL 自己的子进程。
 # 不负责：不下载依赖、不生成地图，不把此聚焦回归宣称为容量或长期稳定性测试。
 import argparse
@@ -173,24 +173,13 @@ class Client:
 
 class Processes:
     # 保存显式框架路径和自己创建的子进程；不读写部署 PID 文件。
-    def __init__(self, flywow):
-        self.env = dict(os.environ, FLYWOW_ROOT=str(flywow))
+    def __init__(self):
+        self.env = dict(os.environ)
         self.children = []
         self.active_logs = []
         self.env["LUA_PANDA_ENABLE"] = "0"
         self.logs = ROOT / "logs/gateway_async_tests"
         self.logs.mkdir(parents=True, exist_ok=True)
-        # 独立测试使用独立路径配置，不覆盖正常启动的 server/run 产物。
-        paths_config = self.logs / "flywow_paths.lua"
-        subprocess.run([
-            "python3", str(flywow / "tools/module_paths.py"),
-            "--root", str(flywow), "--modules", "gateway", "navigation",
-            "--native", str(ROOT / "build/flywow_navigation/lua"),
-            "--output", str(paths_config),
-        ], check=True, timeout=10)
-        self.env["FLYWOW_PATHS_CONFIG"] = str(paths_config)
-
-    # 启动一个专用配置并等待 READY；日志/进程归本 runner，不覆盖正常 Server 日志。
     def start(self, name, config, ready, ports):
         for port in ports:
             with socket.socket() as probe:
@@ -199,7 +188,25 @@ class Processes:
                 probe.listen(1)
         log = self.logs / (name + ".log")
         handle = log.open("w")
-        child = subprocess.Popen([str(ROOT / "third_party/skynet/skynet"), str(ROOT / "config" / config)],
+        config_path = ROOT / "config" / config
+        if config in ("gateway_process.lua", "battle_process.lua",
+                      "skynet_gateway_async_smoke.lua", "skynet.lua"):
+            # 测试配置使用独立日志目录；Smoke 复用 Gateway 参数，只替换业务入口。
+            daily = self.logs / (name + "_daily_" + str(time.time_ns()))
+            daily.mkdir()
+            source = (ROOT / "config" / "gateway_process.lua"
+                      if config == "skynet_gateway_async_smoke.lua" else config_path)
+            text = source.read_text()
+            role = ("battle" if config == "battle_process.lua" else
+                    "server" if config == "skynet.lua" else "gateway")
+            text = text.replace("./logs/" + role, str(daily))
+            if config == "skynet_gateway_async_smoke.lua":
+                text = text.replace('start = "gateway/gateway_main"',
+                                    'start = "tests/gateway_async_smoke"')
+            config_path = self.logs / (name + "_config.lua")
+            config_path.write_text(text)
+            self.active_logs.append(daily)
+        child = subprocess.Popen([str(ROOT / "third_party/skynet/skynet"), str(config_path)],
                                  cwd=ROOT, env=self.env, stdout=handle, stderr=subprocess.STDOUT)
         self.children.append((child, handle))
         self.active_logs.append(log)
@@ -207,6 +214,9 @@ class Processes:
         while time.monotonic() < until:
             self.assert_clean(wait=False)
             text = log.read_text()
+            if config in ("gateway_process.lua", "battle_process.lua",
+                          "skynet_gateway_async_smoke.lua", "skynet.lua"):
+                text += "".join(path.read_text() for path in daily.glob("*.log"))
             if ready in text:
                 return
             assert child.poll() is None, text
@@ -218,7 +228,8 @@ class Processes:
         if wait:
             time.sleep(0.1)
         for log in self.active_logs:
-            text = log.read_text()
+            text = ("".join(path.read_text() for path in log.glob("*.log"))
+                if log.is_dir() else log.read_text())
             assert "stack traceback:" not in text and "lua call [" not in text, text
         for child, _ in self.children:
             assert child.poll() is None, "test server exited"
@@ -498,12 +509,11 @@ def cluster_close(processes):
 # 默认覆盖全部合同；可用scope执行聚焦验证。任何错误传播，finally回收所有子进程。
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument("--flywow-root", default=str(ROOT / "third_party/skynet-flywow"))
     parser.add_argument("--scope", choices=["all", "smoke", "local", "course", "close"], default="all")
     args = parser.parse_args()
-    framework = Path(args.flywow_root).resolve()
-    assert (framework / "tools/module_paths.py").is_file(), "需要支持模块布局的 FlyWow；开发时显式传 --flywow-root"
-    processes = Processes(framework)
+    flywow = ROOT / "third_party/skynet-flywow"
+    assert (flywow / "scripts/build_flywow.sh").is_file(), "请初始化固定 FlyWow submodule"
+    processes = Processes()
     try:
         if args.scope in ("all", "smoke"):
             processes.start("smoke", "skynet_gateway_async_smoke.lua", "GATEWAY_ASYNC_SMOKE_READY", [19021, 19022])

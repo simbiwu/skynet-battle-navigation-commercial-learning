@@ -47,17 +47,25 @@ navigation/
 
 模块自己的运行时、Native、客户端、Unity、测试、工具和构建脚本都放在模块目录内，例如 `gateway/lualib/`、`gateway/native/`、`navigation/unity/`。FlyWow 根目录不直接放模块级的 `lualib/`、`native/`、`service/`、`unity/`、`clients/`、`tools/` 或测试目录；根级 `scripts/ci/` 只属于仓库质量门禁。
 
-## 1.2 ????
+## 1.2 Lua、Native 与构建产物命名
 
-FlyWow ????????????? `gateway/` ? `navigation/`??????????? `flywow_`??????????????? FlyWow ???
+FlyWow 模块的 Lua 外部入口使用带框架前缀的文件名，避免宿主项目中出现通用模块名冲突：
 
-- Lua ?????? `flywow.<module>`??? `flywow.gateway.handshake` ? `flywow.navigation`?
-- Skynet Service ?? `flywow_<module>`??? `flywow_gateway`????? Service ????????
-- Native Lua ????? `flywow_<module>`??????? `luaopen_flywow_<module>` ???
-- ???? C/C++ ??????????????????????? `flywow_`?
-- `gateway.protocol.*` ??????????? registry ???????? FlyWow ?????????
+- Lua 入口文件使用 `flywow_<module>.lua`，例如 `navigation/lualib/flywow_navigation.lua`。
+- 业务侧通过 `require "flywow_<module>"` 加载 Lua 外部入口。
+- Native Lua 模块使用 `flywow_<module>_native.so`，并提供对应的 `luaopen_flywow_<module>_native` 入口。
+- Lua Wrapper 与 Native 必须使用不同模块名，避免 `package.path` 优先命中 Wrapper 后递归加载自身。
+- FlyWow 所有最终 Lua Native `.so` 统一输出到 `build/native/`；CMake 中间文件统一输出到 `build/cmake/<module>/`。
+- 模块内部 C/C++ 类型、命名空间和测试标识继续使用 `flywow_` 前缀。
+- `gateway.protocol.*` 由宿主协议 registry 生成，属于 FlyWow 基础设施，但不属于模块公开 Lua API。
 
-?????????????? Lua `require`???????????????????????????????????
+首次出现跨模块或跨语言的 `require` 时，注释必须说明 Lua 入口文件、Native 模块、构建脚本、可复制命令、最终 `.so` 路径、`package.path`/`package.cpath` 的作用以及当前调用者。普通的 Skynet 基础模块引用不需要重复这段构建链路。
+
+## 1.3 Server 接入路径与构建入口
+
+本项目的 Server 固定使用主仓库中的 FlyWow submodule。进程配置中的 lua_path、luaservice、lua_cpath、cpath 与 preload 直接填写相对 server/ 的路径，让运行依赖在配置文件内可见。禁止用 FLYWOW_ROOT、FLYWOW_PATHS_CONFIG、module_paths.py 或生成 Lua 配置文件间接构造这些路径。
+
+宿主唯一公开构建入口是 server/scripts/linux/run_server.sh build；它调用 FlyWow scripts/build_flywow.sh。FlyWow 各模块共用 build/native 作为最终 .so 目录，中间构建文件保留在 build/cmake/<module>/。新增模块接入统一入口，不因模块数量增加一个脚本。
 
 ## 2. 产品目标、时点与抽取原则
 
@@ -253,3 +261,7 @@ Map/Battle Process 不接触客户端 fd、frame buffer 或 Protobuf codec
 Gateway 入站按帧顺序解码后用本地 `skynet.send` 投递，不等待业务响应；出站通过独立 `gateway_response` 接收响应并编码发送。Gateway 不保存业务请求等待表，也不依赖 Cluster；项目 Proxy 负责跨进程转发与有界返回路由。业务接入使用可选的 `gateway.endpoint` 薄模块。
 
 协议、Gateway 和进程拆分的详细已确认决策以 `docs/ENGINEERING_DECISIONS.md` 中 D029、D030、D033、D039 为准。
+
+## Logger 接入边界
+
+统一使用 skynet.error，只配置 log_path 与 level；每日追加，不清理旧日志，不添加 instance。Native Service 通过 cpath 加载，最终 .so 统一归 build/native/；与 Lua Binding 的 package.cpath 不同。Lua preload、SDK 与 Native 按固定提交发布，未配置时 SDK 回退官方 Logger。详情见框架 docs/logger/README.md。

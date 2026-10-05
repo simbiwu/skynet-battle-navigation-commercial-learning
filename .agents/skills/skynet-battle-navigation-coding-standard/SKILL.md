@@ -14,6 +14,8 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 - 在不能从名称和代码直接看出的地方解释 WHY 与不变量，尤其是坐标/取整、二进制格式、fd/buffer 生命周期、Skynet yield 后身份重验、路径/动态占位、资源上限和过载行为。复杂换算可用一个短输入/输出例子；避免逐行翻译代码。
 - 公式或紧凑换算进入源码注释时，先说明变量、单位、原点/边界和直接关系，再说明整理或变形的原因；关键常数（例如半格偏移、字节偏移、取整方向）必须写出 WHY，并给一个可复算的短例子。不能只留下最终公式，让读者自行猜测公式如何从业务含义得到。
 - 修改公开合同或持久数据格式时，同步受影响的调用方、示例、版本/兼容说明和测试。
+- 值与标记必须解释业务语义：枚举值、状态值、命令字符、位标记、数字等级和缩写的注释，必须说明每个值代表什么以及会触发什么行为；禁止只罗列符号或数字。内部编码应封装在具有业务语义的常量或函数后，调用处不得直接拼接或解释协议字符、魔法数字和位标记。
+
 
 ### LuaDoc 与编辑器可读性
 
@@ -35,6 +37,20 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 
 - 教程中的完整可复制代码按真实源码标准编写；步骤标明新建、完整替换、局部修改或只读，并能从上一步的真实基线继续。教学结构另见 `docs/CODEX_TEACHING_GUIDE.md`。
 - 按影响范围编译、运行聚焦测试，并在适用时验证失败路径、资源释放、确定性、并发与 yield/ownership。报告区分静态检查、编译、单元测试、集成运行及未验证项；未运行的验证不写成“通过”。
+
+## Lua 外部入口与 Native 产物命名
+
+FlyWow 模块的 Lua 外部入口使用 `flywow_<module>.lua`，业务侧通过 `require "flywow_<module>"` 加载；对应的 C++ Lua Binding 使用 `flywow_<module>_native.so` 和 `luaopen_flywow_<module>_native`。Wrapper 与 Native 必须使用不同模块名，避免 Lua 搜索路径优先命中 Wrapper 后递归加载自身。
+
+FlyWow 最终 Lua Native `.so` 统一放在 FlyWow 子模块的 `build/native/`，CMake 中间文件放在 `build/cmake/<module>/`。首次出现跨模块或跨语言的 `require` 时，必须说明源文件、构建脚本、可复制命令、生成物位置、运行时路径配置以及 Wrapper 到 Native 的加载链路。
+
+## FlyWow Runtime 路径与构建入口
+
+- Server 固定从 server/third_party/skynet-flywow submodule 使用 FlyWow；Lua/C 搜索路径在各自 Skynet process config 中以相对路径直接列出，路径基准明确为 Server 工作目录。
+- 不为可由相对路径表达的目录增加 FLYWOW_ROOT、FLYWOW_PATHS_CONFIG 等 Runtime 环境变量，不新增 module_paths.py 或生成式 Lua 搜索路径配置。
+- Gateway、Battle 等 OS 进程只配置自己实际使用的模块；Gateway service/lualib 不进入 Battle 搜索路径。
+- FlyWow Native 统一由 submodule/scripts/build_flywow.sh 构建；宿主公开入口为 server/scripts/linux/run_server.sh build。中间文件位于 FlyWow build/cmake/<module>/，最终 .so 统一位于 FlyWow build/native/。
+- 新增 Native 模块时接入统一构建入口；只有出现独立调用者和独立生命周期后，才考虑增加公开 Shell 入口。
 
 ## Shell 脚本规范
 

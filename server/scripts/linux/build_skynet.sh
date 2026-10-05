@@ -16,6 +16,7 @@ cd "$SERVER_ROOT"
 # Makefile 是源码完整性的最低检查；缺失时给出明确失败而不是让 make 输出难懂错误。
 test -f third_party/skynet/Makefile
 # linux 目标同时构建 Skynet 和它实际使用的 Lua 5.4 ABI。
+# 只调用 Skynet 官方 Makefile 的 linux 目标；本脚本不复制或改写框架源码。
 make -C third_party/skynet linux
 
 # 这些文件是后续 Lua C 模块和 Server 启动的明确前置条件。

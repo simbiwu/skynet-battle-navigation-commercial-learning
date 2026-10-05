@@ -21,9 +21,8 @@ def usage(pid):
 # 固定样本TCP/WS握手，报告包含客户端密钥计算及本机调度的端到端耗时。
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--flywow-root', required=True)
     args = parser.parse_args()
-    processes = Processes(Path(args.flywow_root).resolve())
+    processes = Processes()
     try:
         processes.start('handshake_benchmark', 'skynet_gateway_async_smoke.lua', 'GATEWAY_ASYNC_SMOKE_READY', [19021, 19022])
         pid = processes.children[0][0].pid

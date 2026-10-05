@@ -1,21 +1,30 @@
 -- 职责：Gateway Skynet 进程启动配置；由 run_server.sh 直接传给 Skynet。
--- 边界：进程启动层；只设置 Skynet 全局启动参数，不返回 Gateway 业务运行配置。
--- 使用：启动 Gateway 时传入此文件；业务 Service 仍 require config.gateway。
--- 不负责：不保存监听端口、协议资源上限或动态路由配置。
-local skynet_root = "./third_party/skynet/"                 -- 固定 Skynet 根目录；路径相对 Server 工作目录。
+-- 边界：只设置进程级路径、日志和入口；业务参数仍由 config.gateway 提供。
+-- 相对路径：以下路径均以 Server 根目录为基准，因此启动前工作目录必须是 server/。
+thread = 4
+harbor = 0
+logger = "./logs/gateway" -- Skynet 把日志文件参数交给 FlyWow Logger；按天写入此目录。
+logservice = "flywow_logger"
+flywow_logger_level = "normal" -- normal 及以上级别入盘，debug 被忽略。
+start = "gateway/gateway_main"
+bootstrap = "snlua bootstrap"
 
-thread = 4                                                  -- Skynet Worker OS 线程数；影响同一进程的消息调度并行度。
-harbor = 0                                                   -- 单机模式；不启用 Skynet Harbor 集群。
-logger = nil                                                 -- nil 表示日志输出到标准输出，由 run_server 日志接管。
-start = "gateway/gateway_main"                              -- 进程入口 Service；负责组装 Proxy 和 FlyWow Gateway。
-bootstrap = "snlua bootstrap"                               -- Skynet 标准 Lua Bootstrap。
-luaservice = "./service/?.lua;" .. skynet_root .. "service/?.lua" -- Service 搜索路径。
-lualoader = skynet_root .. "lualib/loader.lua"              -- 使用固定 Skynet Lua loader。
+-- Service 文件分散在 Server、Skynet 和 FlyWow Gateway；Skynet 按顺序查找。
+luaservice = "./service/?.lua;./third_party/skynet/service/?.lua;" ..
+             "./third_party/skynet-flywow/gateway/service/?.lua;" ..
+             "./third_party/skynet-flywow/gateway/service/gateway/?.lua"
+lualoader = "./third_party/skynet/lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
-                  skynet_root .. "lualib/?.lua;" .. skynet_root .. "lualib/?/init.lua" -- Lua 模块搜索路径。
-lua_cpath = "./luaclib/?.so;" ..
-            "./third_party/lua-protobuf-runtime/?.so;" .. skynet_root .. "luaclib/?.so" -- C 模块搜索路径。
-cpath = skynet_root .. "cservice/?.so"                       -- Skynet C Service 动态库搜索路径。
+           "./third_party/skynet/lualib/?.lua;" ..
+           "./third_party/skynet/lualib/?/init.lua;" ..
+           "./third_party/skynet-flywow/gateway/lualib/?.lua;" ..
+           "./third_party/skynet-flywow/gateway/lualib/?/init.lua;" ..
+           "./third_party/skynet-flywow/logger/lualib/?.lua"
+lua_cpath = "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
+            "./third_party/skynet/luaclib/?.so;" ..
+            "./third_party/skynet-flywow/build/native/?.so"
+cpath = "./third_party/skynet/cservice/?.so;" ..
+        "./third_party/skynet-flywow/build/native/?.so"
 
---- 追加宿主显式启用的模块路径；生成文件不创建 Service。
-include "$FLYWOW_PATHS_CONFIG"
+-- Logger 的 Lua 适配在每个 Lua State 启动时加载，skynet.error API 保持不变。
+preload = "./third_party/skynet-flywow/logger/lualib/flywow_logger_preload.lua"

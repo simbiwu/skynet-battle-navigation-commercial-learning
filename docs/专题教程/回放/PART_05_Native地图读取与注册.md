@@ -2,7 +2,7 @@
 
 本节接着 PART 4 的 `query_logic.start(config)` 往下读：磁盘上的 `battle_1001.bmap` 怎样变成 C++ 内存中的地图，怎样登记供同进程的 Worker 使用，以及一次世界坐标查询怎样读到正确的 Cell。
 
-本节只使用当前新路径。Navigation 源码位于 FlyWow 的 `navigation/`；课程 Server 保留启动、配置和业务适配代码。Lua 局部变量仍叫 `battle_nav`，但它实际执行的是 `require "flywow.navigation"`。
+本节只使用当前新路径。Navigation 源码位于 FlyWow 的 `navigation/`；课程 Server 保留启动、配置和业务适配代码。Lua 局部变量仍叫 `battle_nav`，但它实际执行的是 `require "flywow_navigation"`。
 
 这里不展开 metatable、userdata 和完整 Lua 栈注册过程；它们在 PART 6。Context 的动态状态在 PART 7，A* 与 smoothing 在 PART 8。读到这些入口时，只确认它们怎样取得本节已经加载好的静态地图。
 
@@ -39,7 +39,7 @@ query_logic.start(config)
 | `server/config/battle.lua` | 明确本进程应该加载哪张地图 | `map.id/version/bmap` | Cluster 配置 |
 | `server/service/battle/navigation_query.lua` | 启动 Query 并在地图加载后安装消息处理 | `query_logic.start(config)`、READY 输出顺序 | 调试器接线 |
 | `server/lualib/battle/navigation/query_logic.lua` | 把配置要求和 Native 实际资产身份核对起来 | `M.start`、`M.query` | 协议错误表的全部枚举 |
-| FlyWow `navigation/lualib/flywow/navigation.lua` | 提供 Lua 的公开入口和类型说明 | 最后的 Native `require`、地图身份与位置类型 | 本课尚未使用的 Path 类型 |
+| FlyWow `navigation/lualib/flywow_navigation.lua` | 提供 Lua 的公开入口和类型说明 | 最后的 Native `require`、地图身份与位置类型 | 本课尚未使用的 Path 类型 |
 | FlyWow `navigation/native/lua/src/lua_navigation.cpp` | 从 Lua 进入实际 Native 操作 | `l_load_map`、`l_query_cell`、`l_new_context` 中的 `Find` | metatable 注册和动态导航方法 |
 | FlyWow `navigation/native/grid_map/include/bmap_format.h` | 规定文件常量和内存数据字段 | Header/Cell 长度、Metadata、NavCell、WorldPosition | 无 |
 | FlyWow `navigation/native/grid_map/src/bmap_reader.cpp` | 验证文件并构造地图 | `BMapReader::Read` 按顺序完整阅读 | CRC 每一轮 bit 运算可先略读 |
@@ -72,7 +72,7 @@ map =
 只读 `server/lualib/battle/navigation/query_logic.lua`，关键节选：
 
 ```lua
-local battle_nav = require "flywow.navigation"
+local battle_nav = require "flywow_navigation"
 
 -- M.start 内部：config 归当前 Query Service 持有。
 config = assert(options)
@@ -881,7 +881,7 @@ Native 返回高度 83 mm、Area 0、Clearance 5、walkable=true
 只读 `server/service/battle/battle_worker.lua` 中的 Context 入口：
 
 ```lua
-local battle_nav = require "flywow.navigation"
+local battle_nav = require "flywow_navigation"
 local context, err = battle_nav.new_context(
     snapshot.map_id,
     snapshot.map_version,
@@ -1007,9 +1007,7 @@ PY
 前提：当前 Native Debug 产物已经构建。需要构建时，从 `server/` 执行：
 
 ```bash
-export FLYWOW_ROOT="$PWD/third_party/skynet-flywow"
-bash "$FLYWOW_ROOT/navigation/scripts/build_navigation.sh" \
-    "$PWD/third_party/skynet" "$PWD/build/flywow_navigation"
+./scripts/linux/run_server.sh build
 ```
 
 下面是**新建临时观察文件**，位置在 `server/run/`；不是替换业务模块。它使用 Skynet 自带的固定 Lua 解释器，避免拿系统 Lua 检验修改版 Lua ABI。
@@ -1019,10 +1017,10 @@ mkdir -p run
 cat > run/part05_map_probe.lua <<'LUA'
 --- 职责：独立观察当前地图的加载、只读 Cell 查询和重复注册拒绝。
 --- 边界：一次性进程；只读正式 BMAP，不启动 Skynet Service，不管理动态状态。
---- 输入：FlyWow 根、Native 产物目录、BMAP 路径；失败抛错、成功输出观察值。
-package.path = arg[1] .. "/navigation/lualib/?.lua;" .. package.path
-package.cpath = arg[2] .. "/?.so;" .. package.cpath
-local navigation = require "flywow.navigation"
+--- 输入：固定 FlyWow 相对路径与 BMAP 路径；失败抛错、成功输出观察值。
+package.path = "./third_party/skynet-flywow/navigation/lualib/?.lua;" .. package.path
+package.cpath = "./third_party/skynet-flywow/build/native/?.so;" .. package.cpath
+local navigation = require "flywow_navigation"
 local identity, load_error = navigation.load_map(arg[3])
 assert(identity, load_error and load_error.message)
 assert(identity.map_id == 1001 and identity.map_version == 1)
@@ -1045,7 +1043,6 @@ print("DUPLICATE", duplicate_error.code)
 LUA
 
 ./third_party/skynet/3rd/lua/lua run/part05_map_probe.lua \
-    "$FLYWOW_ROOT" "$PWD/build/flywow_navigation/lua" \
     ../shared/navigation/battle_1001/battle_1001.bmap
 ```
 

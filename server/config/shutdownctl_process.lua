@@ -16,5 +16,3 @@ lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
 lua_cpath = "./luaclib/?.so;" .. skynet_root .. "luaclib/?.so"
 cpath = skynet_root .. "cservice/?.so"
 
---- 追加宿主显式启用的模块路径；生成文件不创建 Service。
-include "$FLYWOW_PATHS_CONFIG"

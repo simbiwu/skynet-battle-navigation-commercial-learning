@@ -160,11 +160,11 @@ Proxy 最多64条返回路由、保留10秒；没有 wait/wakeup/请求协程结
 FlyWow 先提交并 Push，课程再固定已验证的 submodule 提交；正常运行无需覆盖。开发独立 FlyWow 工作区时显式指定框架：
 
 ```bash
-export FLYWOW_ROOT=/path/to/updated-skynet-flywow
+使用固定子模块 server/third_party/skynet-flywow
 ./scripts/linux/run_server.sh build
 ./scripts/lessons/run_lesson_02_processes.sh doctor
 python3 tests/gateway_async_integration.py
-./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$FLYWOW_ROOT"
+./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$PWD/third_party/skynet-flywow"
 ```
 
 集成脚本使用专用19021/19022端口验证延迟/乱序、半包/WS fragment、推送、编码错误、业务失败、断线和网络限制；再使用19001、19011、2527、2528验证实际本地 Query 和双进程 Query/RunAutoBattle。已有进程占用端口时明确失败，不接管部署PID文件；finally只停止自己创建的进程。日志位于 `logs/gateway_async_tests/`。这不是商业容量或长时间 soak 验证。

@@ -21,9 +21,11 @@ test -f "$SOURCE/pb.c"
 test -f "$SOURCE/protoc.lua"
 test -f "$LUA_HEADERS/lua.h"
 command -v cc >/dev/null
+# 输出目录是 Server 自己的第三方运行时边界，先创建后再安装编译产物。
 mkdir -p "$OUTPUT"
 
 # 生成 position-independent shared object，供 Lua require 加载为 pb.so。
+# 以位置无关代码生成 Lua 可加载共享库，并使用当前 Lua 头文件保持 ABI 一致。
 cc -O2 -shared -fPIC -Wall -Wextra \
     -I "$LUA_HEADERS" \
     "$SOURCE/pb.c" \

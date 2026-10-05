@@ -30,10 +30,7 @@ FORCE_STOP=0
 PROCESS_GATEWAY=0
 PROCESS_BATTLE=0
 ACTION="start"
-FLYWOW_ROOT="${FLYWOW_ROOT:-$SERVER_ROOT/third_party/skynet-flywow}"
-export FLYWOW_ROOT
-# 临时 shutdownctl 配置也使用同一绝对生成路径，不能依赖配置文件所在目录。
-export FLYWOW_PATHS_CONFIG="$SERVER_ROOT/run/flywow_paths.lua"
+FLYWOW_DIR="$SERVER_ROOT/third_party/skynet-flywow"
 
 # 输出一条带脚本前缀的普通日志；参数是要显示的完整消息，返回状态始终为 0。
 log() {
@@ -95,10 +92,10 @@ Environment:
 USAGE
 }
 
-# submodule 是正常来源，sibling 只用于开发覆盖；返回已验证的框架根目录。
+# FlyWow 固定从 Server submodule 加载；doctor 验证实际运行来源。
 find_flywow_root() {
-    [[ -f "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py" &&
-       -f "$FLYWOW_ROOT/gateway/service/gateway/flywow_gateway.lua" ]]
+    [[ -f "$FLYWOW_DIR/gateway/tools/generate_gateway_registry.py" &&
+       -f "$FLYWOW_DIR/gateway/service/gateway/flywow_gateway.lua" ]]
 }
 
 # 检查二进制、配置、框架和生成 registry；不启动进程。
@@ -116,12 +113,12 @@ doctor() {
        -f "$SERVER_ROOT/config/shutdownctl_process.lua" ]] ||
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
-    [[ -f "$FLYWOW_ROOT/gateway/service/gateway/flywow_gateway.lua" &&
-       -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/codec.lua" &&
-       -f "$FLYWOW_ROOT/gateway/lualib/flywow/gateway/handshake.lua" ]] ||
+    [[ -f "$FLYWOW_DIR/gateway/service/gateway/flywow_gateway.lua" &&
+       -f "$FLYWOW_DIR/gateway/lualib/flywow/gateway/codec.lua" &&
+       -f "$FLYWOW_DIR/gateway/lualib/flywow/gateway/handshake.lua" ]] ||
         fail "FlyWow Gateway sources missing; run git submodule update --init --recursive"
     [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
-    log "DOCTOR_OK flywow=$FLYWOW_ROOT"
+    log "DOCTOR_OK flywow=third_party/skynet-flywow"
 }
 
 # 创建 PID 与日志目录并限制新文件权限；无参数、失败由 set -e 传播，不清理旧日志。
@@ -151,6 +148,12 @@ start_one() {
     local log_file="$4"
     local pid
     if pid="$(read_owned_pid "$pid_file" "$config")"; then fail "$role already running: pid=$pid"; fi
+    # 同日追加文件不能清空；记录启动前偏移，wait_ready 只读取本次新增日志。
+    local log_day="$(date +%F)"
+    local daily="$SERVER_ROOT/logs/$role/$log_day.log"
+    local offset=0
+    if [[ -f "$daily" ]]; then offset="$(stat -c %s "$daily")"; fi
+    printf '%s %s\n' "$log_day" "$offset" > "$pid_file.log_offset"
     rm -f "$pid_file"
     (
         cd "$SERVER_ROOT"
@@ -170,6 +173,8 @@ wait_ready() {
     local config="$3"
     local log_file="$4"
     local marker="$5"
+    local start_day offset today
+    read -r start_day offset < "$pid_file.log_offset"
     local pid
     local i
     if ! pid="$(read_owned_pid "$pid_file" "$config")"; then
@@ -177,7 +182,14 @@ wait_ready() {
         return 1
     fi
     for ((i=0; i<STARTUP_TIMEOUT_SEC || STARTUP_TIMEOUT_SEC == 0; i+=1)); do
-        grep -Fq "$marker" "$log_file" && return 0
+        today="$(date +%F)"
+        if [[ "$today" != "$start_day" ]]; then offset=0; fi
+        # 正式日志由 Native Logger 按日写入；重定向文件只保留 stderr 诊断。
+        # 先检查 PID，再查新增 READY，避免误认已退出进程的历史标记。
+        if kill -0 "$pid" 2>/dev/null &&
+            tail -c "+$((offset + 1))" "$SERVER_ROOT/logs/$role/$today.log" 2>/dev/null | grep -F "$marker" >/dev/null; then
+            return 0
+        fi
         if ! kill -0 "$pid" 2>/dev/null; then
             log "ERROR: $role stopped before READY; see $log_file"
             return 1
@@ -232,6 +244,7 @@ wait_stopped() {
 }
 
 # 先 SIGTERM，超时只有显式 --force 才允许 SIGKILL。
+# 先请求业务优雅退出并等待；只有显式 --force 且超时才升级为 SIGKILL。
 stop_one() {
     local role="$1"
     local config="$2"
@@ -263,6 +276,7 @@ stop_one() {
 }
 
 # 按角色选择启动顺序：Battle 先 READY，Gateway 再连接 Battle；单角色模式只启动所选进程。
+# 启动顺序是依赖关系的一部分：Battle 先发布 READY，Gateway 才允许接入。
 start_all() {
     doctor
     ensure_dirs
@@ -285,6 +299,7 @@ start_all() {
 }
 
 # 按角色停止；Gateway 先停，避免新请求进入正在关闭的 Battle。
+# 停止顺序反过来，先阻止 Gateway 接收新请求，再关闭 Battle 业务状态。
 stop_all() {
     local gateway_running=0
     local battle_running=0
@@ -329,6 +344,7 @@ stop_all() {
 }
 
 # 按角色报告状态，不修改进程。
+# status 只读取 PID/命令行，不发送信号，也不改变任何进程状态。
 status_all() {
     if ((PROCESS_BATTLE)); then
         if pid="$(read_owned_pid "$BATTLE_PID_FILE" battle_process.lua)"; then
@@ -347,6 +363,7 @@ status_all() {
 }
 
 # 解析入口参数并执行一个完整动作；参数来自命令行，任何未知动作或失败都会以非零状态退出。
+# 入口只负责调度已解析动作；每个动作的资源边界和失败行为由对应函数承担。
 main() {
     parse_args "$@"
     case "$ACTION" in

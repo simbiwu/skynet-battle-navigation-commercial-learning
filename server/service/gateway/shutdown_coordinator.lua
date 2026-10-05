@@ -34,6 +34,9 @@ local function shutdown()
     skynet.call(state.handles.gateway_service, "lua", "stop")
     skynet.call(state.handles.proxy_service, "lua", "shutdown")
     skynet.error("GATEWAY_SHUTDOWN_COMPLETE")
+    --- 业务已完成收尾；等待 Native Logger 刷新后再向 shutdownctl 确认。
+    --- flush 会 yield；写盘失败抛错误，关闭流程不能谎报成功。
+    require("flywow_logger").flush()
     return true
 end
 

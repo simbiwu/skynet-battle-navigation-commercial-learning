@@ -9,21 +9,23 @@ from pathlib import Path
 import subprocess
 from gateway_async_integration import Processes
 
+ROOT = Path(__file__).resolve().parents[1]
+
 
 # 启动专用服务，顺序执行SDK；命令失败明确传播，并回收自己启动的进程。
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--flywow-root', required=True)
+    
     parser.add_argument('--dotnet')
     parser.add_argument('--unity-runner')
     parser.add_argument('--serve-browser', action='store_true')
     args = parser.parse_args()
     assert bool(args.dotnet) == bool(args.unity_runner)
-    framework = Path(args.flywow_root).resolve()
-    processes = Processes(framework)
+    framework = ROOT / 'third_party/skynet-flywow'
+    processes = Processes()
     try:
         processes.start('sdk', 'skynet_gateway_async_smoke.lua', 'GATEWAY_ASYNC_SMOKE_READY', [19021, 19022])
-        subprocess.run(['node', str(framework / 'gateway/h5/example.mjs'), 'ws://127.0.0.1:19022'], check=True, timeout=20)
+        subprocess.run(['node', str(framework / 'gateway/clients/h5/example.mjs'), 'ws://127.0.0.1:19022'], check=True, timeout=20)
         if args.dotnet:
             subprocess.run([args.dotnet, args.unity_runner, '19021'], check=True, timeout=20)
         print('GATEWAY_SDK_INTEROP_OK')

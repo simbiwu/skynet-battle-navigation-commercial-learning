@@ -18,8 +18,10 @@ PROTOC="${PROTOC:-$SERVER_ROOT/third_party/protoc-$PROTOC_VERSION/bin/protoc}"
 OUT="$PROTO_ROOT/generated/server"
 mkdir -p "$OUT"
 
+# 生成 descriptor 必须使用清单锁定的 protoc；缺少它就停止，不用宿主机未知版本替代。
 test -x "$PROTOC"
 "$PROTOC" --version
+# 删除旧文件，避免 protoc 失败后调用方误读上一次成功生成的 descriptor。
 rm -f "$OUT/navigation_query.pb"
 "$PROTOC" \
   --descriptor_set_out="$OUT/navigation_query.pb" \
@@ -27,8 +29,10 @@ rm -f "$OUT/navigation_query.pb"
   -I "$PROTO_ROOT" \
   "$PROTO_ROOT/navigation_query.proto"
 
+# descriptor 是 Server 运行时合同；非空检查确认编译命令真的产出了文件。
 test -s "$OUT/navigation_query.pb"
 # 校验清单只记录文件名，避免把开发机绝对路径写入可提交资产。
+# hash 让部署端能确认二进制 descriptor 与协议版本一致，且不把绝对路径写入资产。
 (cd "$OUT" && sha256sum navigation_query.pb > navigation_query.pb.sha256)
 sha256sum "$PROTO_ROOT/navigation_query.proto" | awk '{print $1}' > "$OUT/navigation_query.source.sha256"
 echo "SERVER_DESCRIPTOR_OK $OUT/navigation_query.pb"

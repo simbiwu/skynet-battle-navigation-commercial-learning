@@ -12,4 +12,5 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 # exec 保留 run_server.sh 的退出码和信号语义，避免包装脚本吞掉失败。
 # exec：用目标进程替换当前脚本进程，保留信号转发和最终退出码。
+# exec 保留同一个退出码和信号语义；所有停止逻辑集中在唯一 Server 入口。
 exec "$SCRIPT_DIR/run_server.sh" stop "$@"

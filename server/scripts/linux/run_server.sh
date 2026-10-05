@@ -13,10 +13,9 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd -- "$SERVER_ROOT/.." && pwd)"
 SHARED_ROOT="$REPO_ROOT/shared"
-FLYWOW_ROOT="${FLYWOW_ROOT:-$SERVER_ROOT/third_party/skynet-flywow}"
-export FLYWOW_ROOT
-# 临时 shutdownctl 配置也使用同一绝对生成路径，不能依赖配置文件所在目录。
-export FLYWOW_PATHS_CONFIG="$SERVER_ROOT/run/flywow_paths.lua"
+# FlyWow 固定随 Server submodule 使用；Runtime 相对路径直接写在 process config 中。
+FLYWOW_DIR="$SERVER_ROOT/third_party/skynet-flywow"
+FLYWOW_BUILD_DIR="$FLYWOW_DIR/build"
 SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
 REGISTRY="$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua"
 PROTO="$SHARED_ROOT/protocol/navigation_query.proto"
@@ -48,6 +47,7 @@ usage() {
   ./scripts/linux/run_server.sh prepare | build | rebuild | doctor | status
 USAGE
 }
+# 先把命令行转换成动作和角色选择，后续函数只处理已验证的内部状态。
 parse_args() {
     if [[ $# -gt 0 && "$1" != --* ]]; then ACTION="$1"; shift; fi
     while [[ $# -gt 0 ]]; do
@@ -91,47 +91,46 @@ parse_args() {
         fail "--gdb 只能选择一个进程"
     fi
 }
+# 所有启动/构建入口共用同一条准备链，保证协议、Native、路径和 descriptor 不会各自漂移。
 prepare_runtime() {
-    # 目录升级必须与框架版本成套使用；旧 gitlink 不支持模块入口，不能静默回退。
-    [[ -f "$FLYWOW_ROOT/scripts/module_paths.py" ]] ||
-        fail "FlyWow 尚未支持模块布局；开发请显式设置 FLYWOW_ROOT，发布后同步固定 submodule"
-    # 数据准备：确保 Skynet、协议工具和 Lua protobuf runtime 可用。
     "$SCRIPT_DIR/bootstrap_skynet.sh"
     "$SCRIPT_DIR/bootstrap_protocol_tools.sh"
     if [[ ! -x "$SKYNET_BIN" ]]; then "$SCRIPT_DIR/build_skynet.sh"; fi
     if [[ ! -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]]; then "$SCRIPT_DIR/build_lua_protobuf.sh"; fi
+    # proto 是唯一源；registry 是 Gateway 启动时读取的路由索引，生成而不是手写，避免编号漂移。
     # 生成协议运行时产物。
     mkdir -p "$(dirname "$REGISTRY")"
-    python3 "$FLYWOW_ROOT/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
-    # 构建 Native 依赖并校验 descriptor。
-    bash "$FLYWOW_ROOT/gateway/scripts/build_gateway_crypto.sh"         "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/luaclib"
-    python3 "$FLYWOW_ROOT/scripts/module_paths.py" --root "$FLYWOW_ROOT" \
-        --modules gateway navigation --native "$SERVER_ROOT/build/flywow_navigation/lua" \
-        --output "$SERVER_ROOT/run/flywow_paths.lua"
+    python3 "$FLYWOW_DIR/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
+    # 构建 FlyWow Native 模块并校验 descriptor。
+    # FlyWow 的公开构建入口一次构建所需 Native 模块，统一写入 submodule/build/native。
+    BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_DIR/scripts/build_flywow.sh" \
+        "$SERVER_ROOT/third_party/skynet"
+    # Lua/C 搜索路径已在 process config 明确列出，不生成或注入额外配置文件。
     "$SCRIPT_DIR/check_server_descriptor.sh"
-    BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_ROOT/navigation/scripts/build_navigation.sh" \
-        "$SERVER_ROOT/third_party/skynet" "$SERVER_ROOT/build/flywow_navigation"
     # 收尾：确认所有启动所需产物存在。
     [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] ||
         fail "共享运行资产不完整"
     log "PREPARE_OK"
 }
+# build 只做可复现准备和检查，不启动长期运行的 Skynet 进程。
 run_build() {
     prepare_runtime
     "$SCRIPT_DIR/check_lua_varargs.sh"
-    # Navigation 构建脚本已在 prepare_runtime 中完成 Native 编译和 CTest。
+    # FlyWow 构建入口已完成 Native 编译和各模块 CTest。
     log "BUILD_OK"
 }
+# rebuild 先清理可再生状态，再重新编译，适合切换 ABI/依赖版本后的完整验证。
 run_rebuild() {
     # 状态修改：停止现有课程进程并清理构建输出。
     "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle --force || true
-    rm -rf "$SERVER_ROOT/build/grid_map" "$SERVER_ROOT/build/lua_battle_nav" "$SERVER_ROOT/build/flywow_navigation"
+    rm -rf "$FLYWOW_BUILD_DIR" "$SERVER_ROOT/build/native"
     if [[ -f "$SERVER_ROOT/third_party/skynet/Makefile" ]]; then make -C "$SERVER_ROOT/third_party/skynet" clean >/dev/null 2>&1 || true; fi
     "$SCRIPT_DIR/build_skynet.sh"
     "$SCRIPT_DIR/build_lua_protobuf.sh"
     run_build
     log "REBUILD_OK"
 }
+# 进程生命周期交给课程控制器；本层只把已解析的角色选择转换成明确参数。
 run_selected_start() {
     if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
         "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" start --gateway --battle
@@ -141,6 +140,7 @@ run_selected_start() {
         "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" start --battle
     fi
 }
+# 停止同样经过统一控制器，确保优雅 shutdown 和 --force 兜底行为一致。
 run_selected_stop() {
     if ((PROCESS_GATEWAY && PROCESS_BATTLE)); then
         if ((FORCE_STOP)); then "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle --force; else "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" stop --gateway --battle; fi
@@ -159,6 +159,7 @@ run_selected_status() {
         "$SCRIPT_DIR/../lessons/run_lesson_02_processes.sh" status --battle
     fi
 }
+# 调试入口仍复用生产准备链，只额外注入 LuaPanda 或 GDB，避免调试环境偷偷使用另一套资产。
 run_debug() {
     prepare_runtime
     "$SCRIPT_DIR/bootstrap_luapanda.sh"
@@ -173,8 +174,8 @@ run_debug() {
         exec gdb -x "$SERVER_ROOT/debug/gdb/lesson1.gdb" --args "$SKYNET_BIN" "$config"
     fi
     run_selected_start
-    if ((PROCESS_GATEWAY)); then grep -Fq LUA_PANDA_READY "$SERVER_ROOT/logs/lesson2/gateway.log" || fail "Gateway LuaPanda 未就绪"; fi
-    if ((PROCESS_BATTLE)); then grep -Fq LUA_PANDA_READY "$SERVER_ROOT/logs/lesson2/battle.log" || fail "Battle LuaPanda 未就绪"; fi
+    if ((PROCESS_GATEWAY)); then grep -Fq LUA_PANDA_READY "$SERVER_ROOT/logs/gateway/$(date +%F).log" || fail "Gateway LuaPanda 未就绪"; fi
+    if ((PROCESS_BATTLE)); then grep -Fq LUA_PANDA_READY "$SERVER_ROOT/logs/battle/$(date +%F).log" || fail "Battle LuaPanda 未就绪"; fi
     log "DEBUG_READY LuaPanda"
 }
 main() {
