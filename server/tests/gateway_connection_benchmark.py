@@ -136,12 +136,12 @@ async def workload(connections, rate, duration):
                 result["late_over_10ms"] += 1
             seq += 1
             marker = index+1+seq*8192
-            payload = number(1,3)+number(2,1001)+blob(3,number(1,marker)+number(2,1))
+            payload = number(1,3)+number(2,1001)+number(3,seq)+blob(4,number(1,marker)+number(2,1))
             try:
                 await connection.send(payload)
                 data = fields(await asyncio.wait_for(connection.receive(),3))
-                body = fields(data[3])
-                assert data[1]==3 and data[2]==1001 and body[1]==1 and body[3]==marker, "response mismatch"
+                body = fields(data[4])
+                assert data[1]==3 and data[2]==1001 and data[3]==seq and body[1]==1 and body[3]==marker, "response mismatch"
                 now = time.perf_counter()
                 rtt.add((now-actual)*1000)
                 scheduled.add((now-due)*1000)

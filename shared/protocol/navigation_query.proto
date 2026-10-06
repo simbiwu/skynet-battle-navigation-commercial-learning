@@ -11,7 +11,7 @@
 // 4. 主动下发命令没有客户端 Request，Battle 通过 command_id 和目标连接发送 Response。
 // 5. 本文件不使用 service/rpc、自定义 option 或注释 command_id；Python 只按上述固定规则生成 Server registry。
 // 6. Unity 通过 protoc 生成消息和 CommandId；Server 由同一协议生成 Lua registry；两端不得手写另一份命令映射。
-// 7. Envelope 只包含 protocol_version、command 和 body；请求响应关联由 Server 连接身份管理，不进入客户端协议。
+// 7. Envelope 使用 request_id 关联请求与响应；0 保留给无请求关联的主动消息。
 syntax = "proto3";
 
 package battle.navigation.v1;
@@ -25,7 +25,8 @@ enum CommandId {
 message Envelope {
   uint32 protocol_version = 1; // 线协议兼容边界版本。
   uint32 command = 2;          // CommandId 的数值；body 类型由消息方向和命令定义决定。
-  bytes body = 3;              // command 对应消息的 Protobuf bytes。
+  uint64 request_id = 3;       // 客户端请求/响应关联编号；0 保留给主动消息。
+  bytes body = 4;              // command 对应消息的 Protobuf bytes。
 }
 
 message WorldPosition {

@@ -31,6 +31,7 @@ skynet.start(function()
             gateway_epoch = message.gateway_epoch,
             connection_id = message.connection_id,
             command_id = message.command_id,
+            request_id = message.request_id,
             data = { result = 1, map_id = message.data.map_id },
         })
     end)

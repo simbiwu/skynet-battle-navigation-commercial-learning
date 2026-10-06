@@ -1,0 +1,14 @@
+// 职责：为本工作区的 Lua Language Server 配置 Lua 5.4 和项目模块解析路径。
+// 边界：仅影响 VS Code 编辑器导航与分析，不改变 Skynet 运行时 package.path。
+// 输入/输出：Lua require 模块名 -> 工作区 Lua 源码位置。
+{
+  "Lua.runtime.version": "Lua 5.4",
+  "Lua.runtime.path": [
+    "?.lua",
+    "?/init.lua",
+    "server/lualib/?.lua",
+    "server/lualib/?/init.lua",
+    "server/third_party/skynet-flywow/navigation/lualib/?.lua",
+    "server/third_party/skynet-flywow/navigation/lualib/?/init.lua"
+  ]
+}

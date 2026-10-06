@@ -13,6 +13,8 @@
 5. 协议不使用 service、rpc、自定义 option 或 command_id 注释。Python 生成器只解析 CommandId 和消息名。
 6. Unity 使用 protoc 生成消息和 CommandId；Server 使用同一份 proto 生成 Lua registry。两端不得手写第二份命令映射。
 
+Envelope 固定包含 `protocol_version`、`command`、`request_id` 和 `body`。`request_id` 是 uint64 关联编号：普通请求由客户端生成并由 Server 原样回显；`0` 保留给无请求关联的主动消息。`body` 使用字段号 4。Gateway 的连接身份与跨 Service 路由字段属于 Server 内部消息，不放入 Envelope。
+
 ## 生成与调用
 
 从仓库根目录执行：

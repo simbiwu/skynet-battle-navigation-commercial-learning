@@ -181,6 +181,8 @@ local function forward_data(payload)
     assert(math.type(payload.command_id) == "integer" and
         payload.command_id > 0,
         "command_id must be positive")
+    assert(math.type(payload.request_id) == "integer" and payload.request_id ~= 0,
+        "request_id must be non-zero for a client request")
 
     local call_ok, response = pcall(dispatch_gateway, payload)
     if not call_ok then
@@ -201,6 +203,7 @@ local function forward_data(payload)
             gateway_epoch = payload.gateway_epoch,
             connection_id = payload.connection_id,
             command_id = payload.command_id,
+            request_id = payload.request_id,
             data = response,
         }
     )

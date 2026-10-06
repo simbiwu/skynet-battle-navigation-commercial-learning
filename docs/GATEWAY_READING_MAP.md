@@ -67,7 +67,7 @@ read_exact
 1. 当前对象归哪个 Service、Lua State 或 Native userdata 所有？
 2. 当前调用是否可能 yield？yield 返回后重新验证了什么身份？
 3. 失败是回业务错误、丢弃迟到结果，还是摘除并关闭连接？
-4. 当前字段是 fd、connection_id、request_id 还是 route_token？它们不能互换。
+4. 当前字段是 fd、connection_id 还是 request_id？它们不能互换：fd 属于传输层，connection_id 标识 Gateway 连接，request_id 关联一次请求与响应。
 
 ## 验证入口
 

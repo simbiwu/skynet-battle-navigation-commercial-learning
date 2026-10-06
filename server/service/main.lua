@@ -34,6 +34,7 @@ local function dispatch(source, command, payload)
         gateway_epoch = payload.gateway_epoch,
         connection_id = payload.connection_id,
         command_id    = payload.command_id,
+        request_id    = payload.request_id,
         data          = response,
     })
 end

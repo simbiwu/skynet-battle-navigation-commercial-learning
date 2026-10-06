@@ -22,12 +22,14 @@ skynet.start(function()
         {
             gateway_epoch = message.gateway_epoch, connection_id = message.connection_id,
             command_id = message.command_id, data = response,
+            request_id = message.request_id,
         })
         if marker == 4 then
             skynet.send(source, "lua", "send_data",
             {
                 gateway_epoch = message.gateway_epoch, connection_id = 0,
                 command_id = message.command_id, data = { result = 1, map_id = 400 },
+                request_id = 0,
             })
         elseif marker == 601 then
             skynet.send(source, "lua", "close",

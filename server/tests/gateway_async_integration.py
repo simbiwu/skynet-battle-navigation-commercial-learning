@@ -7,6 +7,7 @@ import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
+from itertools import count
 import os
 from pathlib import Path
 import socket
@@ -16,6 +17,7 @@ import time
 from gateway_handshake_client import perform, hello, respond
 
 ROOT = Path(__file__).resolve().parents[1]
+REQUEST_IDS = count(1)
 
 
 # 编码正整数 varint；测试只构造本协议中的有限编号，不依赖额外 Python protobuf 包。
@@ -72,11 +74,13 @@ def fields(data):
 
 
 # 构造当前Envelope；map_id仅在测试夹具中作为标记，真实Query使用1001。
-def envelope(map_id=1001, command=1001, version=3):
+def envelope(map_id=1001, command=1001, version=3, request_id=None):
+    if request_id is None:
+        request_id = next(REQUEST_IDS)
     body = number(1, map_id)
     if command == 1001:
         body += number(2, 1) + blob(3, b"")
-    return number(1, version) + number(2, command) + blob(3, body)
+    return number(1, version) + number(2, command) + number(3, request_id) + blob(4, body)
 
 
 # 从当前 Socket 读满指定字节；EOF 是失败，不把短读当成完整帧。
@@ -250,10 +254,12 @@ class Processes:
 
 
 # 验证同连接异步乱序、广播、业务/编码失败、主动关闭与跨断线迟到回包。
-def response(client, marker=None, result=1):
+def response(client, marker=None, result=1, request_id=None):
     value = client.receive()
     assert value[2] == 1001, value
-    body = fields(value[3])
+    if request_id is not None:
+        assert value.get(3, 0) == request_id, value
+    body = fields(value[4])
     assert body[1] == result, body
     if marker is not None:
         assert body[3] == marker, body
@@ -264,20 +270,32 @@ def smoke(websocket):
     port = 19022 if websocket else 19021
     client = Client(port, websocket)
     try:
-        client.send(envelope(1), fragment=True)
-        client.send(envelope(2))
-        response(client, 2)
-        response(client, 1)
-        client.send(envelope(0xFFFFFFFF))
-        response(client, 0xFFFFFFFF)
-        client.send(envelope(5))
-        client.send(envelope(6))
-        response(client, 5, result=7)
-        response(client, 6)
+        payload = envelope(1)
+        first_id = fields(payload)[3]
+        client.send(payload, fragment=True)
+        payload = envelope(2)
+        second_id = fields(payload)[3]
+        client.send(payload)
+        response(client, 2, request_id=second_id)
+        response(client, 1, request_id=first_id)
+        payload = envelope(0xFFFFFFFF)
+        request_id = fields(payload)[3]
+        client.send(payload)
+        response(client, 0xFFFFFFFF, request_id=request_id)
+        payload = envelope(5)
+        fifth_id = fields(payload)[3]
+        client.send(payload)
+        payload = envelope(6)
+        sixth_id = fields(payload)[3]
+        client.send(payload)
+        response(client, 5, result=7, request_id=fifth_id)
+        response(client, 6, request_id=sixth_id)
         # 编码失败不会产生回包，也不能阻止下一条健康请求。
         client.send(envelope(3))
-        client.send(envelope(7))
-        response(client, 7)
+        payload = envelope(7)
+        request_id = fields(payload)[3]
+        client.send(payload)
+        response(client, 7, request_id=request_id)
         client.sock.settimeout(.1)
         try:
             client.receive()
@@ -288,9 +306,11 @@ def smoke(websocket):
         client.close()
     first, second = Client(port, websocket), Client(port, websocket)
     try:
-        first.send(envelope(4))
-        response(first, 4)
-        response(first, 400)
+        payload = envelope(4)
+        request_id = fields(payload)[3]
+        first.send(payload)
+        response(first, 4, request_id=request_id)
+        response(first, 400, request_id=0)
         response(second, 400)
     finally:
         first.close()
@@ -300,8 +320,10 @@ def smoke(websocket):
     old.close()
     client = Client(port, websocket)
     try:
-        client.send(envelope(2))
-        response(client, 2)
+        payload = envelope(2)
+        request_id = fields(payload)[3]
+        client.send(payload)
+        response(client, 2, request_id=request_id)
         client.sock.settimeout(.65)
         try:
             client.receive()
@@ -318,15 +340,16 @@ def smoke(websocket):
             for _ in range(2):
                 try:
                     value = client.receive()
-                    assert marker == 601 and fields(value[3])[3] == 601
+                    assert marker == 601 and fields(value[4])[3] == 601
                 except (EOFError, ConnectionResetError):
                     break
             else:
                 raise AssertionError("business close must disconnect client")
         finally:
             client.close()
-    # 当前协议允许无业务标记的请求；不再把旧request_id=0当协议错误。
-    for payload in (envelope(7, command=9999), envelope(7, version=99), b"\xff"):
+    # 未知命令、协议版本和零 request_id 都必须在网络边界被拒绝。
+    for payload in (envelope(7, command=9999), envelope(7, version=99),
+                    envelope(7, request_id=0), b"\xff"):
         client = Client(port, websocket)
         try:
             client.send(payload)
@@ -451,26 +474,35 @@ def course(port, battle):
     client = Client(port)
     try:
         for _ in range(10):
-            client.send(envelope(1001))
+            payload = envelope(1001)
+            request_id = fields(payload)[3]
+            client.send(payload)
             value = client.receive()
-            assert value[2] == 1001
-            assert fields(value[3])[1] in (1, 4, 5), value
+            assert value[2] == 1001 and value[3] == request_id
+            assert fields(value[4])[1] in (1, 4, 5), value
         if battle:
-            client.send(envelope(1001, command=1002))
-            client.send(envelope(1001))
+            battle_payload = envelope(1001, command=1002)
+            query_payload = envelope(1001)
+            battle_id = fields(battle_payload)[3]
+            query_id = fields(query_payload)[3]
+            client.send(battle_payload)
+            client.send(query_payload)
             responses = [client.receive(), client.receive()]
             assert {value[2] for value in responses} == {1001, 1002}
+            assert {value[3] for value in responses} == {battle_id, query_id}
             result = next(value for value in responses if value[2] == 1002)
-            assert fields(result[3])[1] == 1, result
+            assert fields(result[4])[1] == 1, result
     finally:
         client.close()
     # 不同地图标记产生明确拒绝，检查多连接响应未串线。
     def query(index):
         connection = Client(port)
         try:
-            connection.send(envelope(2000+index))
+            payload = envelope(2000+index)
+            request_id = fields(payload)[3]
+            connection.send(payload)
             value = connection.receive()
-            assert value[2] == 1001 and fields(value[3])[1] == 2, value
+            assert value[2] == 1001 and value[3] == request_id and fields(value[4])[1] == 2, value
         finally:
             connection.close()
     with ThreadPoolExecutor(max_workers=8) as pool:

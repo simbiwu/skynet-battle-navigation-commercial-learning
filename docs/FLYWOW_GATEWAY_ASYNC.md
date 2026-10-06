@@ -13,9 +13,9 @@
 | 3 | FlyWow `gateway/service/gateway/flywow_gateway.lua`：`start`、`accept_client` | 加载 registry/codec，监听；TCP/WS 接管连接，每连接一个读任务 |
 | 4 | 同文件：`run_tcp`、`read_exact` | 读满2字节长度头，校验长度，再读满 payload；读取 Socket 时可能 yield |
 | 5 | 同文件：`dispatch_payload` | 校验版本和请求编号，按 registry 解码；本地 send 后继续读下一帧 |
-| 6 | `server/service/gateway/gateway_proxy.lua`：`dispatch_remote` | 创建项目 token 与有界返回上下文，cluster.send 后立即返回 |
+| 6 | `server/service/gateway/gateway_proxy.lua`：`dispatch_remote` | 将 gateway_epoch、connection_id、command_id、request_id 和业务数据转发；cluster.send 后立即返回 |
 | 7 | `server/service/battle/battle_dispatch.lua`：`forward_result`、`dispatch_gateway` | 调 Query 或 BattleMgr，业务处理可以 yield；完成后反向 cluster.send |
-| 8 | Proxy：`receive_battle_result`、`reply_entry` | 删除 token 路由，形成业务 response，context:reply 单向投递 Gateway |
+| 8 | Proxy：`receive_battle_result`、`reply_entry` | 接收带原 request_id 的业务 response，context:reply 单向投递 Gateway |
 | 9 | FlyWow：`deliver_response` | 核对 handler 来源、实例与连接；按 command 编码，一次完整消息写入 |
 | 10 | FlyWow：`detach`、`timeout_loop`；Proxy：`disconnected`、`expire_pending` | 网络读超时与项目返回路由过期分属两层，均不等待业务协程 |
 
@@ -30,17 +30,17 @@ WebSocket 由 pinned Skynet 的 `http.websocket` 完成 Upgrade、mask、fragmen
   -> Gateway 继续读取 B
 
 Proxy
-  -> 保存 token 对应的返回上下文，最多64项
+  -> 透传 gateway_epoch、connection_id、command_id、request_id 与业务数据
   -> cluster.send(Battle Dispatch, gateway_dispatch, forwarded)
   -> 立即返回，不 wait、不 wakeup、不 retpack
 
 Battle Dispatch
   -> Query / BattleMgr / Worker
   -> 业务完成
-  -> cluster.send(Proxy, battle_result, token, result)
+  -> cluster.send(Proxy, battle_result, request_id, result)
 
 Proxy
-  -> 删除 token 路由
+  -> 将 request_id 放入 Gateway response record
   -> context:reply(response)
   -> skynet.send(Gateway, gateway_response, response_record)
 
@@ -52,7 +52,7 @@ Gateway
   -> 客户端按 request_id 关联
 ```
 
-Gateway 保存连接表、codec/registry 和网络统计，不保存 token、请求等待协程或业务结果。返回地址随消息传递；`.proto` 定义如何编码，当前连接表定义发给哪个有效连接。结果可以 B 先于 A 返回，业务顺序仍由 Battle 决定。
+Gateway 保存连接表、codec/registry 和网络统计，不保存请求等待协程或业务结果。返回地址（gateway_epoch、connection_id、request_id）随消息传递；`.proto` 定义线上 request_id，当前连接表定义发给哪个有效连接。Proxy 不维护 per-request token 表。结果可以 B 先于 A 返回，客户端用 request_id 关联，业务顺序仍由 Battle 决定。
 
 ## 业务接入
 
@@ -70,8 +70,8 @@ FlyWow 的 `gateway.endpoint` 只提供薄的响应上下文，不接管现有 d
 
 - 协议损坏、未知命令、网络读超时、速率超限和持续写缓冲增长按网络策略关闭连接。
 - 业务失败和响应编码失败不关闭健康连接，不阻止后续读取。
-- Proxy 的容量、发送、结果结构和10秒路由过期错误映射为已有 QueryCell/RunAutoBattle 响应类型。
-- 断线移除 Proxy 路由；重复、迟到或旧实例结果丢弃，不自动撤销已经接纳的业务。
+- Proxy 的发送失败和 Battle 错误映射为已有 QueryCell/RunAutoBattle 响应类型；request_id 随失败响应原样返回。
+- 断线后迟到响应由 Gateway 按 gateway_epoch/connection_id 丢弃；重复、迟到或旧实例结果不会投递到新连接，不自动撤销已经接纳的业务。
 - Gateway 实例身份与不复用的连接编号防止误投；fd 不传给 Battle。
 - 入站速率限制不是对任意下游 Skynet mailbox 的硬容量保证；项目 handler 必须快速消费并限制业务在途和自建队列。
 
