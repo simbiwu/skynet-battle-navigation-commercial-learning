@@ -43,4 +43,4 @@
 - 课程顺序与完成条件由 `docs/COURSE_ROADMAP.md` 和对应 `codex/LESSON_xx_SPEC.md` 决定；旧教程不能覆盖较新的 Spec 或已编号 Engineering Decision。
 - 修改后按影响范围做真实验证，报告静态检查、编译、单元测试、集成运行、适用的并发/确定性/Benchmark，以及尚未验证项。不能把代码审阅说成测试通过。测试策略见 `docs/TEST_STRATEGY.md`。
 - 冲突优先级：用户当前明确指令 > 本文件 > 对应 Lesson Spec / 已编号 Engineering Decision > 其他说明文档。
-- Git 提交说明涉及多项内容时，必须在提交说明中逐项列出，不得只用笼统标题概括。
+- Git 提交说明的标题和正文必须使用中文；稳定技术术语、API 名称、命令和路径可保留英文。涉及多项内容时，必须在正文中逐项列出具体改动，不得只用笼统标题概括。
