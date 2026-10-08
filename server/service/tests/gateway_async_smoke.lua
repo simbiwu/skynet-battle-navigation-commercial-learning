@@ -3,6 +3,7 @@
 --- 生命周期：runner独占启动回收；Gateway_disconnect仅作连接生命周期通知，无业务回复。
 local skynet = require "skynet"
 skynet.start(function()
+    skynet.name(".gw_async_smoke", skynet.self())
     skynet.dispatch("lua", function(_session, source, command, message)
         if command == "gateway_disconnect" then return end
         assert(command == "send_data", "gateway data command is required")
@@ -42,7 +43,7 @@ skynet.start(function()
         local gateway = skynet.newservice("flywow_gateway")
         skynet.call(gateway, "lua", "start",
         {
-            handler_service = skynet.self(), transport = transport, port = 19020 + index,
+            handler_service = ".gw_async_smoke", transport = transport, port = 19020 + index,
             read_timeout_ticks = 100, idle_timeout_ticks = 200,
             max_clients = 8, write_warning_close_kb = 64,
             max_pending_handshakes = 2, handshake_timeout_ticks = 100,

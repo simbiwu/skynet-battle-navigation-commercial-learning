@@ -61,7 +61,7 @@ cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 ./scripts/linux/run_server.sh doctor
 ```
 
-需要OpenSSL 3的libcrypto开发文件、pkg-config、C++14编译器；发行版可能将开发文件统一放在OpenSSL开发包中。构建脚本查询pkg-config libcrypto，只链接密码算法库，不链接libssl、不启用SSL/TLS；运行部署需要匹配的libcrypto.so.3。框架使用pinned Skynet Lua头，输出server/luaclib/flywow_gateway_crypto.so；缺少绑定启动失败，不降级。当前验证OpenSSL 3.5.5；部署镜像固定实际包版本，现有Skynet/Lua/Unity不升级。
+需要OpenSSL 3的libcrypto开发文件、pkg-config、C++17编译器；发行版可能将开发文件统一放在OpenSSL开发包中。构建脚本查询pkg-config libcrypto，只链接密码算法库，不链接libssl、不启用SSL/TLS；运行部署需要匹配的libcrypto.so.3。框架使用pinned Skynet Lua头，输出server/luaclib/flywow_gateway_crypto.so；缺少绑定启动失败，不降级。当前验证OpenSSL 3.5.5；部署镜像固定实际包版本，现有Skynet/Lua/Unity不升级。
 
 Unity在Windows构建SDK，课程只引用生成程序集，SDK源码只在框架维护：
 

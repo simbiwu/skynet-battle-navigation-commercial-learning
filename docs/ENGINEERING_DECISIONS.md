@@ -576,3 +576,11 @@ FlyWow Gateway 与客户端 SDK 在连接进入 ready 前完成 P-256 ECDH、32 
 状态机独立放在 `flywow.gateway.handshake`，Native 绑定仅链接 OpenSSL 3 的 libcrypto EVP，不链接 libssl、不启用 SSL/TLS；Gateway Service 只执行接入、发送及关闭。Unity SDK 使用固定 Bouncy Castle 2.6.2，H5 使用 Web Crypto。业务 `.proto`、Envelope 版本3及 D039 异步合同保持现状；不增加包头加密、CRC 或逐包 HMAC。
 
 握手消息与 ready 后业务消息由连接状态区分，TCP 复用两字节长度帧，WS 使用 binary message。未 ready 不缓存或投递业务。并发握手数和总期限有界，复用既有扫描协程。连接协议不兼容旧客户端，必须双端升级，不自动降级。完整字节合同、构建、验收与未验证项见 `docs/FLYWOW_GATEWAY_HANDSHAKE.md`。
+
+
+
+## D041 - FlyWow 与项目 Native 固定使用 C++17
+
+FlyWow 的 C++ 模块以及本项目所有 Native C++ 模块统一使用 C++17，构建文件必须显式设置 "CMAKE_CXX_STANDARD 17"、"CMAKE_CXX_STANDARD_REQUIRED ON" 和 "CMAKE_CXX_EXTENSIONS OFF"；直接编译入口同样必须传递 "-std=c++17"。Skynet v1.8.0 与其自带 Lua 5.4.7 运行时保持原有 C/Lua 构建，不把 C++17 要求扩展到它们。
+
+C++17 是 FlyWow 与项目 Native 层的可复现构建合同，不允许单个模块降回更早标准或依赖编译器默认标准。使用 if constexpr、类型特征 _v 等 C++17 语言/库能力时，保持 Lua ABI、C 接口、userdata ownership 和现有运行时边界不变。 FlyWow 子模块先完成自身构建与测试，再由主仓库更新 gitlink。

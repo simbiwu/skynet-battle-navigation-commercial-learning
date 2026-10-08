@@ -139,7 +139,7 @@ Lesson 4 optional:
 - Linux / WSL2
 - Skynet v1.8.0
 - Skynet bundled modified Lua 5.4.7
-- C++14
+- C++17
 - CMake
 
 ### Client Editor（中国开发基线）

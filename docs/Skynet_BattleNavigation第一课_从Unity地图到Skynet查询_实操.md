@@ -5548,7 +5548,7 @@ native/grid_map/CMakeLists.txt
 cmake_minimum_required(VERSION 3.16)
 project(battle_grid_map LANGUAGES CXX C)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
@@ -6594,7 +6594,7 @@ upvalue 不属于普通调用参数，所以 `l_query_cell()` 仍从栈索引 `1
 cmake_minimum_required(VERSION 3.16)
 project(battle_nav_lua LANGUAGES CXX)
 
-set(CMAKE_CXX_STANDARD 14)
+set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 # Binding 必须使用当前 Skynet 源码树中的 Lua ABI，不能偶然链接系统 Lua。

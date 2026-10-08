@@ -41,6 +41,7 @@ end
 
 --- 先创建 Query、注册 Adapter，再启动监听；避免 Gateway 就绪时尚无查询依赖。
 skynet.start(function()
+    skynet.name(".nav_handler", skynet.self())
     query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     skynet.dispatch("lua", function(_session, source, command, payload)
@@ -49,7 +50,7 @@ skynet.start(function()
     gateway_service = skynet.newservice("flywow_gateway")
     assert(skynet.call(gateway_service, "lua", "start",
     {
-        handler_service = skynet.self(),
+        handler_service = ".nav_handler",
     }))
     skynet.error("NAV_SERVER_READY query=", skynet.address(query_service),
         " gateway=", skynet.address(gateway_service))

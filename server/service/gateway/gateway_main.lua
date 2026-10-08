@@ -19,7 +19,7 @@ skynet.start(function()
     assert(skynet.call(proxy_service, "lua", "bind_gateway", { gateway_service = gateway_service }))
 
     local gateway = assert(skynet.call(gateway_service, "lua", "start", {
-        handler_service = proxy_service,
+        handler_service = ".gateway_proxy",
         host = config.host,
         port = config.port,
         transport = config.transport,

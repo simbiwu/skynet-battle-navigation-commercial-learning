@@ -96,6 +96,7 @@ local function start()
     )
 
     state.started = true
+    skynet.name(".gateway_proxy", skynet.self())
 
     return
     {

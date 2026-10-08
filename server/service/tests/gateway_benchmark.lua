@@ -4,6 +4,7 @@
 local skynet = require "skynet"
 local gateway
 skynet.start(function()
+    skynet.name(".gw_benchmark", skynet.self())
     skynet.dispatch("lua", function(_session, source, command, message)
         if command == "gateway_disconnect" then
             return
@@ -38,7 +39,7 @@ skynet.start(function()
     gateway = skynet.newservice("flywow_gateway")
     skynet.call(gateway, "lua", "start",
     {
-        handler_service = skynet.self(),
+        handler_service = ".gw_benchmark",
         transport = skynet.getenv("bench_transport") or "tcp",
         port = 19131,
         max_clients = 8192,

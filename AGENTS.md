@@ -2,7 +2,7 @@
 
 本文件只规定每项任务都要遵守的边界。项目主线是 Unity Authoring → 版本化导航资产 → C++ Native Navigation → Skynet 权威 Battle → Unity Replay。课程细节按任务读取 `codex/LESSON_xx_SPEC.md`；技术选型与版本以 `docs/ENGINEERING_DECISIONS.md` 为准，不静默升级。文档路由见 `codex/CODEX_START_HERE.md`。
 
-固定基线：Skynet v1.8.0、其自带修改版 Lua 5.4.7、C++14、CMake/Linux/WSL2、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7；Recast 1.6.0 仅在可选 Lesson 4 使用。
+固定基线：Skynet v1.8.0、其自带修改版 Lua 5.4.7、C++17、CMake/Linux/WSL2、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7；Recast 1.6.0 仅在可选 Lesson 4 使用。
 
 本仓库独立，不合并 `Skynet-slg-learning` 的业务代码；FlyWow 通过固定提交的 submodule 使用。
 
@@ -43,3 +43,4 @@
 - 课程顺序与完成条件由 `docs/COURSE_ROADMAP.md` 和对应 `codex/LESSON_xx_SPEC.md` 决定；旧教程不能覆盖较新的 Spec 或已编号 Engineering Decision。
 - 修改后按影响范围做真实验证，报告静态检查、编译、单元测试、集成运行、适用的并发/确定性/Benchmark，以及尚未验证项。不能把代码审阅说成测试通过。测试策略见 `docs/TEST_STRATEGY.md`。
 - 冲突优先级：用户当前明确指令 > 本文件 > 对应 Lesson Spec / 已编号 Engineering Decision > 其他说明文档。
+- Git 提交说明涉及多项内容时，必须在提交说明中逐项列出，不得只用笼统标题概括。
