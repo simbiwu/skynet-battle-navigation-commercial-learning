@@ -115,10 +115,14 @@ local function choose_target(state, self)
     return best
 end
 
--- 判断攻击者当前位置是否已经进入目标攻击范围；使用整数平方距离。
+-- 全部普通攻击从双方圆形体型边缘量射程；零射程复用 Grid 接近容差。
 local function in_attack_range(self, target)
-    local range2 = self.attack_range_mm * self.attack_range_mm
-    return distance2(self.position, target.position) <= range2
+    local edge_range = self.attack_range_mm == 0 and self.zero_range_tolerance_mm or self.attack_range_mm
+    local range = self.radius_mm + target.radius_mm + edge_range
+    local dx = math.abs(self.position.x_mm - target.position.x_mm)
+    local dz = math.abs(self.position.z_mm - target.position.z_mm)
+    -- 单轴先拒绝，避免极端配置把平方和加法推过 Lua 整数上限。
+    return dx <= range and dz <= range and dz * dz <= range * range - dx * dx
 end
 
 -- Path userdata 只在 replan 点读取一次，复制成 Lua 连续世界点供后续 Tick 使用。
@@ -165,9 +169,10 @@ local function ensure_attack_path(state, context, self, target)
         return self.path ~= nil, false
     end
 
-    local path, err = context:find_path_to_range(
+    local path, err = context:find_path_to_unit_range(
         self.agent_profile_id,
         self.position,
+        target.agent_profile_id,
         target.position,
         self.attack_range_mm,
         self.id)
@@ -366,6 +371,21 @@ function M.create(snapshot, context)
     local units = sorted_units(snapshot)
     local cell_size_mm = integer_between(
         context:cell_size_mm(), "cell_size_mm", 1, 1000000000)
+    local radius_by_profile = {}
+    for _, profile in ipairs(assert(snapshot.profiles, "profiles required")) do
+        assert(radius_by_profile[profile.id] == nil, "duplicate profile id")
+        radius_by_profile[profile.id] = integer_between(profile.radius_mm, "radius_mm", 0, 1000000000)
+    end
+    local tolerance = math.floor(math.sqrt(2) * cell_size_mm)
+    while tolerance * tolerance < 2 * cell_size_mm * cell_size_mm do
+        tolerance = tolerance + 1
+    end
+    for _, unit in ipairs(units) do
+        unit.radius_mm = assert(radius_by_profile[unit.agent_profile_id], "unknown agent_profile_id")
+        unit.zero_range_tolerance_mm = tolerance
+        assert(unit.radius_mm + 1000000000 + math.max(unit.attack_range_mm, tolerance) <= 3037000499,
+            "attack radius exceeds integer squared-distance limit")
+    end
     -- 状态修改：创建本场 Battle 独占的可变状态。
     local state = {
         battle_id = assert(snapshot.battle_id),

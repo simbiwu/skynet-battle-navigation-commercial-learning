@@ -81,3 +81,21 @@ Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 
 - Gateway/Battle 优雅关闭通过，测试进程按 owner 清理。
 
 没有把 Editor 测试当作 Player/IL2CPP 验证，也没有把网络结果验证当作人工完整观看 Unity Replay。未做商业规模压测或长期 soak；CI 新增 Native 核心构建门禁，远端 CI 未执行。正式发布和两个主工作区的 Git 同步尚未执行。
+
+
+### Battle 射程语义
+
+当前 Battle 的所有普通攻击统一以双方 AgentProfile.radius_mm 为圆形体型半径，
+使用 XZ 边缘间距作为 attack_range_mm；远距离同样从双方体型边缘量起。
+寻路调用 find_path_to_unit_range，正射程保持精确整数半径之和判断。
+零射程接近与攻击共用 ceil(sqrt(2)*cell_size_mm) 格子接近容差，不代表物理相切。
+已经重叠的单位仍能攻击；导航终点排除目标体型内部。
+Battle 不默认启用 allow_partial，保持现有 NO_PATH 退避策略。
+半径仅初始化时从 snapshot.profiles 复制，不新增协议或 Occupancy 反查。
+
+本轮验证：Native 构建与两个 CTest 通过；新增真实 Lua 单位范围/partial 用例通过；
+真实 Native + Battle 用例覆盖正射程边界、零射程容差、寻路迁移与两次模拟事件一致性。
+Native 用例包含四个独立 Context 的并发查询。
+原有 navigation_binding_test.lua 第 143 行（手动重复 GC 后读取 Path）仍失败，
+使用改动前 FlyWow HEAD 独立构建也复现；本轮没有修改该 GC 行为。
+尚未验证完整 Skynet Gateway/Battle 双进程、Unity Replay 和新增零范围搜索的性能基准。
