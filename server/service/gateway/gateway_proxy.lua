@@ -4,7 +4,7 @@
 --- 不负责：不解析协议、不编码 Protobuf、不等待业务结果、不判断业务超时或成功失败。
 
 local cluster = require "skynet.cluster"
-local skynet = require "skynet"
+local skynet = require "skynet.manager"
 local process = require "config.gateway"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 

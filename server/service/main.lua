@@ -3,7 +3,7 @@
 --- 输入/输出：Gateway 已解码 send_data -> QueryCell 调用 -> Gateway send_data。
 --- 生命周期：保存显式 Service handles，随进程存活；查询 call 可能 yield。
 --- 不负责：不持有 fd、动态占位或业务等待表，不让 Query 依赖 Gateway。
-local skynet = require "skynet"
+local skynet = require "skynet.manager"
 local registry = require "gateway.protocol.navigation_registry"
 local query_service = nil
 local gateway_service = nil

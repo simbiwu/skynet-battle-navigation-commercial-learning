@@ -20,6 +20,7 @@ local function scenario()
         },
     }
     function skynet.self() return 77 end
+    function skynet.name(name, handle) assert(name == ".gateway_proxy" and handle == 77) end
     function skynet.start(fn) fn() end
     function skynet.dispatch(protocol, fn)
         assert(protocol == "lua")
@@ -61,6 +62,7 @@ local function scenario()
         test.remote_sends[#test.remote_sends + 1] = payload
     end
     package.loaded["skynet"] = skynet
+    package.loaded["skynet.manager"] = skynet
     package.loaded["skynet.cluster"] = cluster
     package.loaded["config.gateway"] = config
     package.loaded["shared.debug.luapanda_debug"] = { start = function() end }
