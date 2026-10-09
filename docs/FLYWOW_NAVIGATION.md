@@ -85,18 +85,20 @@ Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 
 
 ### Battle 射程语义
 
-当前 Battle 的所有普通攻击统一以双方 AgentProfile.radius_mm 为圆形体型半径，
-使用 XZ 边缘间距作为 attack_range_mm；远距离同样从双方体型边缘量起。
-寻路调用 find_path_to_unit_range，正射程保持精确整数半径之和判断。
-零射程接近与攻击共用 ceil(sqrt(2)*cell_size_mm) 格子接近容差，不代表物理相切。
-已经重叠的单位仍能攻击；导航终点排除目标体型内部。
-Battle 不默认启用 allow_partial，保持现有 NO_PATH 退避策略。
-Battle Core 在 Lua 中从 snapshot.profiles 读取半径；Native AgentProfile 由 navigation_query 启动时从
-config.battle.profiles 加载一次，所有 Context 只通过 profile_id 查询共享只读配置。
+普通攻击读取进程级共享配置 UnitProfile.combat.attack_range_mm，按攻击方与目标的中心点
+XZ 距离判定，单位为整数毫米。该字段不读取、不叠加 NavigationProfile.radius_mm；
+0 表示中心重合，近战单位应配置正数中心距。
 
-本轮验证：Native 构建与两个 CTest 通过；新增真实 Lua 单位范围/partial 用例通过；
-真实 Native + Battle 用例覆盖正射程边界、零射程容差、寻路迁移与两次模拟事件一致性。
-Native 用例包含四个独立 Context 的并发查询。
-原有 navigation_binding_test.lua 第 143 行（手动重复 GC 后读取 Path）仍失败，
-使用改动前 FlyWow HEAD 独立构建也复现；本轮没有修改该 GC 行为。
-尚未验证完整 Skynet Gateway/Battle 双进程、Unity Replay 和新增零范围搜索的性能基准。
+NavigationProfile.radius_mm 只负责导航 footprint、占位和单位间可接近距离。
+context:find_path_to_unit_range 不接收 attack_range_mm，只按双方导航半径之和确定
+不可重叠的中心距下界，并用 ceil(sqrt(2)*cell_size_mm) 适配离散格子的接近终点。
+路径推进期间 Battle 每 Tick 独立检查战斗射程；进入攻击中心距后停止移动并执行攻击。
+
+UnitProfile 配置按稳定 unit_id 存放在进程级 sharedata；Navigation 专用字段在独立配置表中，
+由 Navigation Registry 管理。两者不复制或互相派生。已有 Battle 每次攻击判定从当前
+sharedata 配置读取；Native 导航调用从当前 NavigationProfile Registry 读取导航值。
+
+本轮验证：统一构建入口通过，FlyWow 所有 Native 模块构建及各自 CTest 通过；
+导航 Lua Binding 2 项和真实 Native Battle 射程回归通过。静态 A* Benchmark 与修改前同条件数据接近：
+80x60 p50 112.5→105.3us，256x256 1253.3→1199.3us，512x512 4219.6→4215.4us。
+该基准不覆盖 Battle 的 sharedata 读取或单位接近查询，因此不把它当作这两项的性能测量。

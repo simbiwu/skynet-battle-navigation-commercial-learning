@@ -72,32 +72,29 @@ FireWall、Haste/Slow/Burning 和 BRPL 文件封装在本文中作为可选扩�
 
 ## 0. 第二课完成后，我们已经有什么
 
-> 当前基线补充（以 WSL 主工作区为准）：Ground Navigation 与 Unity Authoring 已迁入 FlyWow navigation 模块。Lua 入口是 require flywow_navigation，Native 产物是 flywow_navigation_native.so。Profile 在 navigation_query.start() 中通过 load_profiles(config.profiles) 一次加载到进程级只读 Registry；BattleWorker 只用 new_context(map_id, map_version) 创建 Battle-local scratch/occupancy。课程 Unity 工程通过离线 UPM .tgz 消费 FlyWow 包；修改包源码后需重新打包并在 Windows Unity 更新包，再执行对应 Editor 测试。
+> 当前基线补充（以 WSL 主工作区为准）：Ground Navigation 与 Unity Authoring 已迁入 FlyWow navigation 模块。Lua 入口是 `require "flywow_navigation"`，Native 产物是 `flywow_navigation_native.so`。Battle 进程入口在启动子 Service 前，将通用 UnitProfile 发布到 Skynet `sharedata`，并把 NavigationProfile 完整表发布到 Native Registry；地图由 `navigation_query` 启动时主动加载 `maps` 中列出的全部 BMAP。每场 Battle 的 `new_context(map_id)` 固定持有当前地图，并独占动态占位和查询 scratch；每次导航调用按 `unit_id` 查询当前 NavigationProfile，不把 Profile 快照保存到 Context。`map_version` 是地图资产身份，不是 Registry 查找键。
 
 > server/config/battle.lua、Battle 源码和 FlyWow 子模块可能已有你的未提交修改。每个完整替换步骤前先核对 diff，把仍有效的改动并入目标版本；教程步骤不得覆盖用户已有内容。
 
 第三课禁止重新创建第二课已经建立的概念。第二课最终稳定调用面至少包括：
 
 ```lua
-navigation.new_context(map_id, map_version)
+navigation.new_context(map_id)
 
-context:find_path(profile_id, start_world, end_world, self_unit_id)
-context:find_path_to_range(
-    profile_id,
-    start_world,
-    target_world,
-    attack_range_mm,
-    self_unit_id)
+context:find_path(unit_id, start_world, end_world, unit_instance_id)
+context:find_path_to_range(unit_id, start_world, target_world, range_mm, unit_instance_id)
+context:find_path_to_unit_range(
+    mover_unit_id, start_world, target_unit_id, target_world, mover_unit_instance_id)
 
-context:place_unit(profile_id, unit_id, world_position)
+context:place_unit(unit_id, unit_instance_id, world_position)
 context:advance_path({
-    profile_id = profile_id,
     unit_id = unit_id,
+    unit_instance_id = unit_instance_id,
     path = path,
     from_world = current_world,
     distance_mm = tick_distance_mm,
 })
-context:release_unit(unit_id)
+context:release_unit(unit_instance_id)
 context:cell_size_mm()
 context:close()
 
@@ -108,6 +105,7 @@ path:length_mm()
 
 第二课 Battle Core 已经形成：
 
+
 ```text
 battle_core.create(snapshot, context)
 battle_core.step(state, context)
@@ -115,6 +113,8 @@ battle_core.is_finished(state)
 battle_core.finish(state)
 battle_core.simulate(snapshot, context)
 ```
+
+这里的 `unit_id` 是静态单位类型 ID；`unit_instance_id` 是本场 Battle 中某个真实单位的唯一 ID。同类型的多个单位可以共用一个 `unit_id`，但各自有不同的 `unit_instance_id`。NavigationProfile 按 `unit_id` 提供导航半径等通行参数；UnitProfile 由 Battle 进程入口发布到 `sharedata`，其中 `combat.attack_range_mm` 是双方中心点的 XZ 攻击距离。`find_path_to_range` 的 `range_mm` 是通用导航停靠距离；单位追击使用 `find_path_to_unit_range`，只根据双方 NavigationProfile 半径找可站立接近点，不传攻击距离。是否可以攻击由 Battle Core 单独判断。
 
 第二课还有这些已经成立的规则：
 
@@ -572,10 +572,10 @@ sync read        不 yield
 server/config/battle.lua
 ```
 
-该文件已包含 map、profiles、cluster。保留现有字段，只在返回 table 顶层追加本节的 Battle Runtime 字段；不要用示例替换整个文件。当前启动链先执行 navigation.load_profiles(config.profiles)，再加载 BMAP；Worker 用 navigation.new_context(map_id, map_version) 创建私有查询状态。配置属于进程启动期只读数据，不属于某一场 Battle。
+该文件包含 `maps`、`unit_profiles`、`navigation_profiles`、`cluster` 和 Battle Runtime 字段。保留现有字段，只修改本节明确要求的配置；不要用示例替换整个文件。Battle 进程入口先发布 `unit_profiles` 到 `sharedata`，再调用 `load_navigation_profiles(navigation_profiles)`；`navigation_query` 遍历 `maps` 主动加载 BMAP。Worker 用 `navigation.new_context(map_id)` 创建 Battle 私有动态状态。Context 固定地图；导航 Profile Registry 被完整替换后，后续导航调用使用新表。
 
 ```lua
--- 将以下字段追加到现有返回 table 顶层；保留 map/profiles/cluster。
+-- 将以下字段追加到现有返回 table 顶层；保留 maps/unit_profiles/navigation_profiles/cluster。
 -- 边界：Server Runtime Config；由 BattleMgr/BattleWorker 启动时只读加载。
 -- 输入/输出：无运行时输入 -> 固定配置 table。
 -- 生命周期：Battle Process 启动时读取；存在在线 Battle 时不得热改 worker_count。
@@ -1278,9 +1278,7 @@ local function create_online(request)
     end
 
     local snapshot = assert(request.snapshot)
-    local context, nav_error = navigation.new_context(
-        snapshot.map_id,
-        snapshot.map_version)
+    local context, nav_error = navigation.new_context(snapshot.map_id)
     if context == nil then
         return nil, {
             code = nav_error and nav_error.code or "CONTEXT_CREATE_FAILED",
@@ -1443,9 +1441,7 @@ local function simulate(snapshot)
     assert(type(snapshot) == "table", "simulate snapshot must be table")
     assert_shard(assert(snapshot.battle_id))
 
-    local context, nav_error = navigation.new_context(
-        snapshot.map_id,
-        snapshot.map_version)
+    local context, nav_error = navigation.new_context(snapshot.map_id)
     if context == nil then
         return nil, {
             code = nav_error and nav_error.code or "CONTEXT_CREATE_FAILED",
@@ -1848,7 +1844,7 @@ TargetMask 是否匹配
     hp = 100,
     max_hp = 100,
 
-    agent_profile_id = 1,         -- Ground 使用
+    unit_id = 1,                  -- 静态 Unit 类型 ID；NavigationProfile 也按此 ID 查询
     flight_height_mm = 0,         -- Air 使用
 
     target_id = nil,
@@ -2573,7 +2569,7 @@ AirMapExporter
   -> <已验证候选目录>/map.amap
   -> AirMapReader
   -> AirMapRegistry（进程级 immutable asset registry）
-  -> navigation.new_context(map_id, map_version)
+  -> navigation.new_context(map_id)
   -> Battle-local NavigationContext
   -> AirGridPathfinder
 ```
@@ -2742,10 +2738,10 @@ BattleWorker #3 Lua State -> require flywow_navigation
 
          flywow_navigation_native.so process image
                  ↓
-        C++ static MapRegistry / AirMapRegistry / AgentProfileRegistry
+        C++ static MapRegistry / AirMapRegistry / NavigationProfileRegistry
 ```
 
-每个 Skynet Service 有独立 Lua State，不代表同一个进程里动态库的 C++ process-global static 会自动复制一份。Map、AirMap 和 Profile Registry 都是进程级只读资产；启动时完成注册，运行期只读。Registry 的注册与查找必须线程安全，返回的资产必须 immutable。`load_profiles(config.profiles)` 在 `navigation_query.start()` 执行一次；各 BattleWorker 只用 `new_context(map_id, map_version)` 创建自己的 Context 和 scratch，不再重复传入 Profile 表。
+每个 Skynet Service 有独立 Lua State，不代表同一 OS 进程里的 Native 共享库静态状态会复制一份。MapRegistry 和 NavigationProfileRegistry 是进程级 Registry：地图按 `map_id` 保存当前不可变地图，Profile Registry 保存当前不可变配置表。进程入口发布 UnitProfile 到 `sharedata`，并调用 `load_navigation_profiles`；地图由 Query Service 启动时全部加载。Context 创建时固定地图，但不保存 Profile 快照；每次导航 API 调用都临时读取当前 Profile 表并按连续 `unit_id` O(1) 查找。热替换 Profile 不改变正在运行的 Context，后续导航调用读取新配置。
 
 这正好和每场 Battle 私有的：
 
@@ -2824,7 +2820,7 @@ navigation.load_air_map(path)
 `l_new_context()` 仍然保持第二课公开 Lua 调用：
 
 ```lua
-navigation.new_context(map_id, map_version)
+navigation.new_context(map_id)
 ```
 
 内部改成：
@@ -2855,7 +2851,7 @@ advance_air_path
 server/config/battle.lua
 ```
 
-在现有 config.battle 的 map table 中追加 AMAP 路径；保留 profiles、cluster 和 Runtime 字段。发布新 AMAP 时，先生成并验证一套新的 BMAP/AMAP/Manifest 候选包，再把 map table 一次切换到该候选；不要将新 AMAP 与当前旧版 BMAP 混用：
+如本可选扩展需要配置 AMAP，保留现有 `maps`、`unit_profiles`、`navigation_profiles`、`cluster` 和 Runtime 字段；发布时先生成并验证同一版本的 BMAP/AMAP/Manifest 候选包，再更新地图配置，避免混用版本：
 
 ```lua
 map = {
@@ -2875,8 +2871,8 @@ server/lualib/battle/navigation/query_logic.lua
 启动顺序：
 
 ```lua
-local profiles_loaded, profiles_error = navigation.load_profiles(config.profiles)
-assert(profiles_loaded, profiles_error and profiles_error.message or "load_profiles failed")
+-- 进程入口已在创建子 Service 前发布 UnitProfile 并加载 NavigationProfile。
+-- Query Service 的 start 只负责主动加载全部地图，不重复加载 Profile。
 
 local ground, ground_error = navigation.load_map(config.map.bmap)
 assert(ground, ground_error and ground_error.message or "load BMAP failed")
@@ -4244,15 +4240,15 @@ Lua 调用方继续使用 FlyWow 公开入口：
 local navigation = require "flywow_navigation"
 ```
 
-Native 在同一模块中扩展 load_air_map(path)、new_context(map_id, map_version) 和 Context 的 Air 查询方法。沿用现有 LuaBinding/LuaTable 约定：参数读取失败及领域错误统一返回 nil, { code = ..., message = ... }；公开 Binding API 不新增 luaL_check* 或 luaL_error。
+Native 在同一模块中扩展 load_air_map(path)、保持 `new_context(map_id)` 调用形式并加入 Context 的 Air 查询方法。沿用现有 LuaBinding/LuaTable 约定：参数读取失败及领域错误统一返回 `nil, { code = ..., message = ... }`；公开 Binding API 不新增 `luaL_check*` 或 `luaL_error`。
 
-load_air_map 在 Battle Process 启动阶段读取并注册 immutable AMAP，返回实际 map_id、map_version、width、height。new_context 通过进程级 MapRegistry 与 AirMapRegistry 查找资产：找不到 AMAP 时允许 Ground-only Context；找到时校验身份和尺寸，再把 shared_ptr<const AirMap> 传入 Context。Ground/Air scratch 仍由每个 Context 独占。
+load_air_map 在 Battle Process 启动阶段读取并注册 immutable AMAP，返回实际 map_id、map_version、width、height。`new_context(map_id)` 通过进程级 MapRegistry 与 AirMapRegistry 查找资产：找不到 AMAP 时允许 Ground-only Context；找到时校验身份和尺寸，再把 `shared_ptr<const AirMap>` 传入 Context。Ground/Air scratch 仍由每个 Context 独占。
 
 注册入口时沿用 module.setFunction(...) 与 registerContext(...) 模式；闭包捕获进程级 Registry 地址，不捕获 Lua State 私有 Context。同步更新 FlyWow Wrapper 的 LuaDoc，说明失败 record、ownership 和同步不 yield 合同。
 
 ### 22.8 Server 启动时怎样保证 BMAP/AMAP 是同一个发布版本
 
-[局部修改] server/config/battle.lua：该文件已有 map、profiles、cluster 和 Battle Runtime 配置。只在现有 map table 中同步更新版本和 BMAP/AMAP 路径；下方是 map 字段片段，不要替换整个 return table。
+[局部修改] server/config/battle.lua：该文件已有 `maps`、`unit_profiles`、`navigation_profiles`、`cluster` 和 Battle Runtime 配置。此处仅示意地图资产配置，不要替换整个 `return` table。
 
 ```lua
 map = {
@@ -4265,13 +4261,12 @@ map = {
 
 只有当 BMAP、AMAP、Manifest 都通过验证并进入同一个已提交候选目录后，才把配置切到该目录。旧版 battle_1001.bmap 不能与新版本 AMAP 混用。
 
-[局部修改] server/lualib/battle/navigation/query_logic.lua 的 start(options)：先加载 Profile，再加载 BMAP 和 AMAP，并逐字段核对身份：
+[局部修改] server/lualib/battle/navigation/query_logic.lua 的 start(options)：加载 BMAP 和 AMAP，并逐字段核对身份。UnitProfile 和 NavigationProfile 已由进程入口发布，不在此处重复加载：
 
 ```lua
-local profiles_loaded, profiles_error = navigation.load_profiles(config.profiles)
-assert(profiles_loaded,
-       profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
-       "load_profiles failed")
+-- UnitProfile 已由进程入口发布到 sharedata；NavigationProfile 已由
+-- battle_nav.load_navigation_profiles(config.navigation_profiles) 发布到 Native Registry。
+-- 本 Service 只负责加载地图，不在 Query Service 中重复加载 Profile。
 
 local ground, ground_error = navigation.load_map(config.map.bmap)
 assert(ground,
@@ -4292,7 +4287,7 @@ assert(ground.width == loaded_air.width and ground.height == loaded_air.height,
        "BMAP/AMAP dimensions mismatch")
 ```
 
-navigation_query 在启动阶段加载 Profile 与两份静态资产；Worker 不重新读磁盘。进程级 Native Registry 持有不可变资产，new_context(map_id, map_version) 取得共享资产并创建 Battle-local scratch/occupancy。
+Battle 进程入口发布 UnitProfile 到 sharedata，并加载 NavigationProfile；Query Service 启动时加载地图。Worker 不重新读磁盘。`new_context(map_id)` 固定当前地图并创建 Battle-local scratch/occupancy；每次导航调用按 `unit_id` 查询当前 NavigationProfile，不把 Profile 快照保存在 Context。
 
 故障检查覆盖：AMAP 缺失、payload CRC 错、map_id/map_version 不匹配、宽高不一致，以及 BMAP/AMAP 只更新一份。每种情况都应在 Battle Process ready 前明确失败。
 
@@ -4857,7 +4852,7 @@ MoveSpeed 回答：
 
 ```text
 Haste / Slow
--> 不改 AgentProfile
+-> 不改 NavigationProfile
 -> 不改可通行性
 -> 不立即重寻路
 -> 只改变 advance_path 的 distance_mm
@@ -6898,7 +6893,7 @@ local function make_unit(source, index)
         base_move_speed_mm_per_sec = integer_between(
             source.base_move_speed_mm_per_sec,
             prefix .. ".base_move_speed_mm_per_sec", 1, 1000000),
-        agent_profile_id = source.agent_profile_id,
+        unit_id = source.unit_id,
         flight_height_mm = source.flight_height_mm,
         max_air_height_delta_mm = source.max_air_height_delta_mm,
         cooldowns = {},
@@ -6916,8 +6911,8 @@ local function make_unit(source, index)
     }
 
     if layer == "GROUND" then
-        unit.agent_profile_id = integer_between(
-            source.agent_profile_id, prefix .. ".agent_profile_id", 1, 0x7fffffff)
+        unit.unit_id = integer_between(
+            source.unit_id, prefix .. ".unit_id", 1, 0x7fffffff)
     else
         unit.flight_height_mm = integer_between(
             source.flight_height_mm, prefix .. ".flight_height_mm", 1, 1000000)
@@ -7023,14 +7018,14 @@ local function ensure_ground_path(state, context, unit)
     local path, err
     if unit.move_stop_range_mm > 0 then
         path, err = context:find_path_to_range(
-            unit.agent_profile_id,
+            unit.unit_id,
             unit.position,
             unit.move_target,
             unit.move_stop_range_mm,
             unit.id)
     else
         path, err = context:find_path(
-            unit.agent_profile_id,
+            unit.unit_id,
             unit.position,
             unit.move_target,
             unit.id)
@@ -7120,8 +7115,8 @@ local function advance_ground(state, context, unit)
     if unit.path == nil then return end
     local budget = movement_budget(unit, state.tick_ms)
     local result, err = context:advance_path({
-        profile_id = unit.agent_profile_id,
-        unit_id = unit.id,
+        unit_id = unit.unit_id,
+        unit_instance_id = unit.id,
         path = unit.path,
         from_world = unit.position,
         distance_mm = budget,
@@ -7570,7 +7565,7 @@ function M.create(snapshot, context, mode)
     for _, unit in ipairs(state.units) do
         if unit.movement_layer == "GROUND" then
             local normalized, err = context:place_unit(
-                unit.agent_profile_id, unit.id, unit.position)
+                unit.unit_id, unit.id, unit.position)
             if normalized == nil then
                 error("place ground unit failed unit=" .. unit.id ..
                     " code=" .. tostring(err and err.code))
@@ -7827,19 +7822,6 @@ server/lualib/battle/scenario_1001.lua
 -- 不负责：不接受客户端上传 HP/位置、不执行 AI/导航/技能、不读取 Unity Scene。
 local M = {}
 
-local function profiles()
-    return {
-        {
-            id = 1,
-            radius_mm = 200,
-            max_step_mm = 600,
-            max_slope_permille = 1000,
-            area_cost_permille = {
-                [0] = 1000, [1] = 3000, [2] = 1000, [3] = 1500,
-            },
-        },
-    }
-end
 
 -- 第三课交互场景：一个 Player、一个 GroundEnemy、一个 FlyingEnemy。
 function M.make_interactive_snapshot(battle_id)
@@ -7856,14 +7838,13 @@ function M.make_interactive_snapshot(battle_id)
         seed = 123456,
         tick_ms = 50,
         max_ticks = 2400,
-        profiles = profiles(),
         units = {
             {
                 id = 1001,
                 camp = 1,
                 control = "PLAYER",
                 movement_layer = "GROUND",
-                agent_profile_id = 1,
+                unit_id = 1,
                 position = { x_mm = -11000, y_mm = 0, z_mm = 4000 },
                 base_move_speed_mm_per_sec = 3000,
                 hp = 160,
@@ -7874,7 +7855,7 @@ function M.make_interactive_snapshot(battle_id)
                 control = "AI",
                 ai_kind = "GROUND_ENEMY",
                 movement_layer = "GROUND",
-                agent_profile_id = 1,
+                unit_id = 1,
                 position = { x_mm = 9000, y_mm = 0, z_mm = -3000 },
                 base_move_speed_mm_per_sec = 2200,
                 hp = 120,
@@ -7991,7 +7972,7 @@ Ground BMAP: map_id=1001, map_version=N
 Air AMAP:    map_id=1001, map_version=N
 ```
 
-`navigation.new_context(map_id, map_version)` 会用同一个 `map_id` 分别从 Ground Registry 与 Air Registry 取资产；因此 Snapshot 只需要额外保存 `air_map_version` 用于确定性身份和显式校验。
+`navigation.new_context(map_id)` 只按 `map_id` 固定当前 Ground/Air 地图资产；`map_version` 仍属于地图资产和协议校验信息，不作为 Registry 查找参数。
 
 上面的 `battle_core.create()` 完整累计版已经在创建任何 Unit/Occupancy 之前执行：
 
@@ -11953,6 +11934,8 @@ logic projectile 数
 AreaEffect 数
 Buff 数
 每 Tick p50/p95/p99 CPU cost
+
+P50/P95/P99 是耗时分位数：P50 是中位数，表示一半样本不高于这个耗时；P95、P99 分别表示 95%、99% 的样本不高于该值。它们描述单次耗时分布，不是平均值，也不是每秒处理量。
 Worker mailbox length
 Lua memory
 Native Context memory
@@ -12626,7 +12609,7 @@ skynet.timeout
 [ ] FrostBolt = Server Logic Projectile
 - [ ] 可选扩展：FireWall = persistent AreaEffect
 - [ ] 可选扩展：Haste / Slow / Burning 最小 Buff Runtime
-- [ ] 可选扩展：MoveSpeed Modifier 不修改 AgentProfile
+- [ ] 可选扩展：MoveSpeed Modifier 不修改 NavigationProfile
 - [ ] 可选扩展：FireWall Ground only
 [ ] Ground/Air TargetMask 生效
 [ ] 所有 Damage / Death 走统一函数
@@ -12893,7 +12876,7 @@ Battle Process address space
 |
 +-- C++ MapRegistry
 |     +-- shared_ptr<const GridMap 1001/v2>
-+-- C++ AgentProfileRegistry
++-- C++ NavigationProfileRegistry
 |     +-- immutable Profiles, loaded once at process startup
 |
 +-- C++ AirMapRegistry
@@ -12914,7 +12897,7 @@ Battle Process address space
 你需要能直接说出：
 
 ```text
-共享的是 immutable static asset 和只读 AgentProfile；
+共享的是 immutable static asset、NavigationProfile Registry 和只读 UnitProfile；
 隔离的是每场 Battle mutable Context/Core State；
 Lua State 隔离并不让 process-global C++ singleton 自动变成每 Service 一份；
 BattleWorker Shard 数也不是 OS thread 数。

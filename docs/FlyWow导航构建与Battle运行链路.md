@@ -262,7 +262,7 @@ query_logic.start(config)
 query_logic.start 调用：
 
 ~~~lua
-local loaded, err = battle_nav.load_map(config.map.bmap)
+local loaded, err = battle_nav.load_map(path)
 ~~~
 
 这一步才真正：
@@ -370,41 +370,37 @@ context:close()
 
 ## 10. Battle 如何重新寻路
 
-Battle Core 在需要重新规划路线时调用：
+Battle Core 在需要重新规划路线时调用单位接近查询：
 
 ~~~lua
-local path, err = context:find_path_to_range(
-    self.agent_profile_id,
+local path, err = context:find_path_to_unit_range(
+    self.unit_id,
     self.position,
+    target.unit_id,
     target.position,
-    self.attack_range_mm,
     self.id)
 ~~~
 
 参数：
 
-- agent_profile_id：单位的体型和通行规则；
-- self.position：当前权威位置，整数毫米；
-- target.position：目标位置；
-- attack_range_mm：允许停止的攻击距离；
-- self.id：当前单位的动态占位身份。
+- self.unit_id / target.unit_id：双方静态 Unit 类型 ID，用于读取 NavigationProfile；
+- self.position / target.position：双方当前权威位置，整数毫米；
+- self.id：当前移动实体的 unit_instance_id，占位查询时忽略自身。
+
+这个导航查询只用双方 NavigationProfile.radius_mm 计算不重叠的接近位置，不接收战斗射程。
+Battle Core 另从共享 UnitProfile.combat.attack_range_mm 读取中心距攻击范围；移动中的每个 Tick
+都独立检查是否进入攻击范围，进入后停止路径并执行攻击。
 
 Native 处理：
 
 ~~~text
-校验地图和 Profile
+读取双方 NavigationProfile
   ↓
-读取静态可行走信息
+以半径之和限制目标接近点，格子对角线误差只用于离散终点
   ↓
-检查动态 occupancy
+检查静态可行走信息与动态 occupancy
   ↓
-执行 A*
-  ↓
-路径平滑
-  ↓
-创建 Path userdata
-  ↓
-返回 Lua
+返回 Path；Battle 后续推进并独立判定攻击距离
 ~~~
 
 ## 11. Battle 如何推进单位
@@ -477,7 +473,7 @@ luaopen_flywow_navigation_native
   ↓
 query_logic.start()
   ↓
-battle_nav.load_map(config.map.bmap)
+battle_nav.load_map(path)
   ↓
 BMAP 进入 MapRegistry
   ↓

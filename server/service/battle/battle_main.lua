@@ -5,11 +5,20 @@
 -- 不负责：不解析 Protobuf、不执行 AI/A*、不保存客户端连接。
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
+local sharedata = require "skynet.sharedata"
+local battle_nav = require "flywow_navigation"
 local process = require "config.battle"
 
 -- 先等待地图和 Worker Pool 就绪，再向 Gateway 发布 cluster 入口。
 -- 无参数/返回；会创建 Service、执行本地 call/cluster I/O 并 yield。
 skynet.start(function()
+    sharedata.new("battle.unit_profiles", process.unit_profiles)
+    local profiles_loaded, profiles_error =
+        battle_nav.load_navigation_profiles(process.navigation_profiles)
+    assert(profiles_loaded,
+           profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
+               "load_navigation_profiles failed")
+
     local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     local mgr = skynet.newservice("battle/battle_mgr")

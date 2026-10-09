@@ -42,9 +42,7 @@ skynet.start(function()
     skynet.error(
         "NAV_QUERY_READY address=",
         skynet.address(skynet.self()),
-        " map=",
-        config.map.id,
-        " version=",
-        config.map.version
+        " map_count=",
+        #config.maps
     )
 end)

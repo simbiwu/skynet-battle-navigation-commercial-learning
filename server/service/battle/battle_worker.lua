@@ -4,17 +4,15 @@
 -- 生命周期：Service 长驻；NavigationContext 只覆盖一次 simulate，结束后 close。
 -- 不负责：不监听网络、不访问 DB、不在核心模拟中 skynet.call。
 local skynet = require "skynet"
+local sharedata = require "skynet.sharedata"
 local battle_nav = require "flywow_navigation"
 local battle_core = require "battle.battle_core"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 -- 为一次可序列化 snapshot 创建并独占 Context，然后连续模拟到结束。
 -- 成功返回 result；创建或核心失败返回 nil,error；核心阶段不 I/O、不 yield。
-local function simulate(snapshot)
-    local context, err = battle_nav.new_context(
-        snapshot.map_id,
-        snapshot.map_version,
-        snapshot.profiles)
+local function simulate(snapshot, unit_profiles)
+    local context, err = battle_nav.new_context(snapshot.map_id)
     if not context then
         return nil, {
             code = err and err.code or "CONTEXT_CREATE_FAILED",
@@ -27,7 +25,8 @@ local function simulate(snapshot)
         battle_core.simulate,
         debug.traceback,
         snapshot,
-        context)
+        context,
+        unit_profiles)
 
     context:close()
     if not ok then
@@ -37,6 +36,8 @@ local function simulate(snapshot)
 end
 
 skynet.start(function()
+    -- 入口已先发布全局配置；query 返回 sharedata 代理，读取值来自当前发布表。
+    local unit_profiles = sharedata.query("battle.unit_profiles")
     skynet.dispatch("lua", function(_, _, command, payload)
         if command == "debug_start" then
             assert(type(payload) == "number", "debug port is required")
@@ -44,7 +45,7 @@ skynet.start(function()
             return
         end
         if command == "simulate" then
-            skynet.retpack(simulate(assert(payload)))
+            skynet.retpack(simulate(assert(payload), unit_profiles))
             return
         end
         if command == "shutdown" then

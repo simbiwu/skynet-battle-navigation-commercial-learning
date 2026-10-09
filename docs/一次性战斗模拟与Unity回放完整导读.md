@@ -173,7 +173,7 @@ Unity ←TCP─ Gateway ←send─ Proxy ←cluster.send─ Battle Dispatch
 
 `battle_worker.lua` 收到 Snapshot 后：
 
-1. 用 `flywow_navigation.new_context(map_id, map_version)` 创建本场独占 Native Context。
+1. 用 `flywow_navigation.new_context(map_id)` 创建本场独占 Native Context。
 2. 调 `battle_core.simulate(snapshot, context)`，内部 `xpcall` 收敛异常。
 3. 无论模拟成功失败都关闭本次 Context。
 4. 成功时把纯数据 result/Event Log 通过 `skynet.retpack` 返回给 Manager。

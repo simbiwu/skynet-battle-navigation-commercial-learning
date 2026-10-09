@@ -4,8 +4,11 @@
 -- 生命周期：运行一次后可退出；不作为长期在线 Gateway。
 -- 不负责：不实现 AI/A*，不定义其他战斗子系统类型。
 local skynet = require "skynet"
+local sharedata = require "skynet.sharedata"
+local battle_nav = require "flywow_navigation"
 local replay_writer = require "battle.replay_writer"
 local scenario = require "battle.scenario_1001"
+local config = require "config.battle"
 
 -- 只比较逻辑字段，不用 tostring(table)；pairs/hash 地址顺序不能当 determinism 证据。
 local function assert_same_result(a, b)
@@ -52,6 +55,13 @@ local function assert_same_result(a, b)
 end
 
 skynet.start(function()
+    sharedata.new("battle.unit_profiles", config.unit_profiles)
+    local profiles_loaded, profiles_error =
+        battle_nav.load_navigation_profiles(config.navigation_profiles)
+    assert(profiles_loaded,
+           profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
+               "load_navigation_profiles failed")
+
     -- Query Service 在同一进程完成地图加载；ready 返回后才创建 Worker，
     -- 避免 new_context 在空 MapRegistry 上查询。批量入口不启动 Gateway。
     local query_service = skynet.newservice("battle/navigation_query")

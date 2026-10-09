@@ -35,40 +35,34 @@ local function result_error(code, message)
     }
 end
 
--- 加载并核对唯一静态 BMAP；options 是当前 Service 的只读 game config。
--- 本函数执行一次文件 I/O 和 Native 分配；失败抛错阻止 Service 对外就绪。
+-- 启动时先发布完整 Profile 表，再主动加载配置中的全部地图。
+-- 每张地图完成校验后进入进程 Registry；任一失败都会阻止 Service 就绪。
 function M.start(options)
     -- 参数/状态检查：Query Logic 只能初始化一次。
     assert(config == nil, "navigation query logic already started")
-
-    -- 数据准备：加载并校验 immutable BMAP。
     config = assert(options)
-    local loaded, err = battle_nav.load_map(config.map.bmap)
-    assert(loaded, err and (err.code .. ": " .. err.message) or "load_map failed")
-    assert(loaded.map_id == config.map.id, "BMAP map_id does not match config")
-    assert(loaded.map_version == config.map.version,
-           "BMAP map_version does not match config")
+    assert(type(config.maps) == "table" and #config.maps > 0,
+           "at least one navigation map must be configured")
 
-    -- 收尾：配置和地图加载完成后，Query Logic 才对外可用。
+    local loaded_map_ids = {}
+    for _, path in ipairs(config.maps) do
+        local loaded, err = battle_nav.load_map(path)
+        assert(loaded, err and (err.code .. ": " .. err.message) or "load_map failed")
+        assert(loaded_map_ids[loaded.map_id] == nil,
+               "duplicate map_id in startup navigation maps")
+        loaded_map_ids[loaded.map_id] = true
+    end
 end
 
--- 校验地图身份与 WorldPosition(mm)，随后同步查询 immutable GridMap。
--- 本函数不 yield、不执行文件 I/O、不修改共享地图；Native 异常收敛为响应错误。
+-- 由 Native Registry 按 map_id 查询当前地图，并校验请求的资产 map_version。
+-- 请求成功时响应仍回传协议中的 map_id/map_version，保持网络合同不变。
 function M.query(request)
-    -- 参数/状态检查：校验请求结构和地图版本。
     if type(request) ~= "table" or type(request.map_id) ~= "number" or
        type(request.map_version) ~= "number" or
        type(request.position) ~= "table" then
         return result_error("BAD_REQUEST", "missing map identity or position")
     end
-    if request.map_id ~= config.map.id then
-        return result_error("MAP_NOT_FOUND", "map is not loaded")
-    end
-    if request.map_version ~= config.map.version then
-        return result_error("MAP_VERSION_MISMATCH", "map version mismatch")
-    end
 
-    -- 核心计算：同步调用 Native 查询，并把异常收敛为稳定错误。
     local ok, value, err = pcall(
         battle_nav.query_cell,
         request.map_id,
@@ -82,7 +76,6 @@ function M.query(request)
         return result_error(err.code or "INTERNAL_ERROR", err.message)
     end
 
-    -- 收尾：把 Native 结果转换为新的协议 response table。
     return {
         result = RESULT.OK,
         message = "",

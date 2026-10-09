@@ -50,14 +50,12 @@ local function sorted_units(snapshot)
         units[i] = {
             id = integer_between(source.id, prefix .. ".id", 1, 0x7fffffff),
             camp = integer_between(source.camp, prefix .. ".camp", 1, 0x7fffffff),
-            agent_profile_id = integer_between(
-                source.agent_profile_id, prefix .. ".agent_profile_id", 1, 0x7fffffff),
+            unit_id = integer_between(
+                source.unit_id, prefix .. ".unit_id", 1, 0x7fffffff),
             position = checked_position(source.position, prefix .. ".position"),
             move_speed_mm_per_sec = integer_between(
                 source.move_speed_mm_per_sec,
                 prefix .. ".move_speed_mm_per_sec", 1, 1000000),
-            attack_range_mm = integer_between(
-                source.attack_range_mm, prefix .. ".attack_range_mm", 0, 1000000000),
             attack_damage = integer_between(
                 source.attack_damage, prefix .. ".attack_damage", 1, 0x7fffffff),
             attack_cooldown_ms = integer_between(
@@ -115,14 +113,20 @@ local function choose_target(state, self)
     return best
 end
 
--- 全部普通攻击从双方圆形体型边缘量射程；零射程复用 Grid 接近容差。
-local function in_attack_range(self, target)
-    local edge_range = self.attack_range_mm == 0 and self.zero_range_tolerance_mm or self.attack_range_mm
-    local range = self.radius_mm + target.radius_mm + edge_range
+-- 每个单位每 Tick 只从共享配置读取一次射程；不复制配置，也不读取导航半径。
+local function read_attack_range(unit_profiles, unit_id)
+    local profile = unit_profiles[unit_id]
+    local combat = profile and profile.combat
+    return integer_between(combat and combat.attack_range_mm,
+        "unit_profiles[" .. unit_id .. "].combat.attack_range_mm", 0, 1000000000)
+end
+
+-- 战斗射程只比较双方中心的 XZ 距离；不读取 NavigationProfile 或地图格子尺寸。
+local function in_attack_range(self, target, range_mm)
     local dx = math.abs(self.position.x_mm - target.position.x_mm)
     local dz = math.abs(self.position.z_mm - target.position.z_mm)
     -- 单轴先拒绝，避免极端配置把平方和加法推过 Lua 整数上限。
-    return dx <= range and dz <= range and dz * dz <= range * range - dx * dx
+    return dx <= range_mm and dz <= range_mm and dz * dz <= range_mm * range_mm - dx * dx
 end
 
 -- Path userdata 只在 replan 点读取一次，复制成 Lua 连续世界点供后续 Tick 使用。
@@ -155,8 +159,8 @@ local function stop_movement(state, self, reason)
 end
 
 -- 只在明确 trigger + cooldown 允许时重新寻路；NO_PATH 会退避而不是每 Tick 重试。
-local function ensure_attack_path(state, context, self, target)
-    if in_attack_range(self, target) then
+local function ensure_attack_path(state, context, self, target, attack_range_mm)
+    if in_attack_range(self, target, attack_range_mm) then
         stop_movement(state, self, "IN_ATTACK_RANGE")
         self.need_repath = false
         return true, false
@@ -170,11 +174,10 @@ local function ensure_attack_path(state, context, self, target)
     end
 
     local path, err = context:find_path_to_unit_range(
-        self.agent_profile_id,
+        self.unit_id,
         self.position,
-        target.agent_profile_id,
+        target.unit_id,
         target.position,
-        self.attack_range_mm,
         self.id)
     if not path then
         -- 动态拥堵或暂时 NO_PATH 不应该在 50ms 后再次全图 A*。
@@ -221,8 +224,8 @@ local function advance_move(state, context, self)
 
     local budget = movement_budget(self, state.tick_ms)
     local advanced, err = context:advance_path({
-        profile_id = self.agent_profile_id,
-        unit_id = self.id,
+        unit_id = self.unit_id,
+        unit_instance_id = self.id,
         path = self.path,
         from_world = self.position,
         distance_mm = budget,
@@ -252,8 +255,8 @@ local function advance_move(state, context, self)
 end
 
 -- 执行最小普通攻击；这是固定数值的 Battle rule，不是 Skill System。
-local function try_attack(state, context, self, target)
-    if not in_attack_range(self, target) then return false end
+local function try_attack(state, context, self, target, attack_range_mm)
+    if not in_attack_range(self, target, attack_range_mm) then return false end
     -- 无论 CD 是否已经结束，进入攻击范围后都先停止客户端正在播放的旧 Path。
     stop_movement(state, self, "IN_ATTACK_RANGE")
     self.need_repath = false
@@ -301,7 +304,7 @@ local function alive_camp_count(state)
 end
 
 -- 推进一个 fixed tick；函数内禁止调用任何可能 yield 的 Skynet/网络/DB API。
-function M.step(state, context)
+function M.step(state, context, unit_profiles)
     -- 参数/状态检查：已结束的 Battle 不允许继续推进。
     assert(state.final_result == nil, "cannot step a finished battle")
     assert(state.logic_ms < state.max_logic_ms, "cannot step past max_logic_ms")
@@ -331,15 +334,16 @@ function M.step(state, context)
             end
 
             if target ~= nil and target.hp > 0 then
-                if not try_attack(state, context, self, target) then
+                local attack_range_mm = read_attack_range(unit_profiles, self.unit_id)
+                if not try_attack(state, context, self, target, attack_range_mm) then
                     local _, new_path = ensure_attack_path(
-                        state, context, self, target)
+                        state, context, self, target, attack_range_mm)
                     if not new_path then
                         advance_move(state, context, self)
                     end
                     -- 移动后再次检查，进入攻击范围的同 Tick 可以立即攻击。
                     if target.hp > 0 then
-                        try_attack(state, context, self, target)
+                        try_attack(state, context, self, target, attack_range_mm)
                     end
                 end
             end
@@ -347,15 +351,14 @@ function M.step(state, context)
     end
 end
 
--- 从冻结 snapshot 创建模拟状态并完成初始占位；返回值由同一 Battle owner 持有。
+-- 从 snapshot 创建模拟状态并完成初始占位；UnitProfile 由 sharedata 提供，不复制进 Battle。
 -- 本函数不 yield。在线驱动创建一次后可分段调用 M.step；自动驱动交给 M.simulate。
-function M.create(snapshot, context)
+function M.create(snapshot, context, unit_profiles)
     -- 参数/状态检查：校验 Battle 标识、时间预算和单位数量。
     assert(type(snapshot) == "table", "snapshot must be table")
     integer_between(snapshot.battle_id, "battle_id", 1, 0x7fffffff)
     integer_between(snapshot.battle_version, "battle_version", 1, 0x7fffffff)
     integer_between(snapshot.map_id, "map_id", 1, 0x7fffffff)
-    integer_between(snapshot.map_version, "map_version", 1, 0x7fffffff)
     integer_between(snapshot.seed, "seed", -0x7fffffffffffffff, 0x7fffffffffffffff)
     integer_between(snapshot.tick_ms, "tick_ms", 1, 1000)
     integer_between(snapshot.max_logic_ms, "max_logic_ms", 1, 0x7fffffff)
@@ -371,27 +374,16 @@ function M.create(snapshot, context)
     local units = sorted_units(snapshot)
     local cell_size_mm = integer_between(
         context:cell_size_mm(), "cell_size_mm", 1, 1000000000)
-    local radius_by_profile = {}
-    for _, profile in ipairs(assert(snapshot.profiles, "profiles required")) do
-        assert(radius_by_profile[profile.id] == nil, "duplicate profile id")
-        radius_by_profile[profile.id] = integer_between(profile.radius_mm, "radius_mm", 0, 1000000000)
-    end
-    local tolerance = math.floor(math.sqrt(2) * cell_size_mm)
-    while tolerance * tolerance < 2 * cell_size_mm * cell_size_mm do
-        tolerance = tolerance + 1
-    end
+    -- Profile 由进程级 sharedata 按稳定 unit_id 索引；这里只验证存在，不把配置复制进 Battle。
     for _, unit in ipairs(units) do
-        unit.radius_mm = assert(radius_by_profile[unit.agent_profile_id], "unknown agent_profile_id")
-        unit.zero_range_tolerance_mm = tolerance
-        assert(unit.radius_mm + 1000000000 + math.max(unit.attack_range_mm, tolerance) <= 3037000499,
-            "attack radius exceeds integer squared-distance limit")
+        read_attack_range(unit_profiles, unit.unit_id)
     end
     -- 状态修改：创建本场 Battle 独占的可变状态。
     local state = {
         battle_id = assert(snapshot.battle_id),
         battle_version = snapshot.battle_version,
         map_id = snapshot.map_id,
-        map_version = snapshot.map_version,
+        map_version = integer_between(context:map_version(), "map_version", 1, 0x7fffffff),
         seed = snapshot.seed,
         tick_ms = snapshot.tick_ms,
         max_logic_ms = snapshot.max_logic_ms,
@@ -407,7 +399,7 @@ function M.create(snapshot, context)
     -- 核心计算：把每个单位放入动态占位索引并归一化位置。
     for _, unit in ipairs(units) do
         local normalized_position, err = context:place_unit(
-            unit.agent_profile_id,
+            unit.unit_id,
             unit.id,
             unit.position)
         assert(normalized_position, string.format(
@@ -465,11 +457,11 @@ function M.finish(state)
 end
 
 -- 自动战斗入口：不等待墙钟时间，CPU 连续 fixed-tick 推进直到结束或达到逻辑时限。
-function M.simulate(snapshot, context)
-    local state = M.create(snapshot, context)
+function M.simulate(snapshot, context, unit_profiles)
+    local state = M.create(snapshot, context, unit_profiles)
 
     while not M.is_finished(state) do
-        M.step(state, context)
+        M.step(state, context, unit_profiles)
     end
     return M.finish(state)
 end

@@ -5,6 +5,8 @@
 -- 不负责：不计算 AI/伤害，不编写 Replay，不做性能测试。
 local skynet = require "skynet"
 local battle_nav = require "flywow_navigation"
+local sharedata = require "skynet.sharedata"
+local config = require "config.battle"
 
 -- 把 Binding 的 nil,{code,message} 合同变成可读的 Smoke 失败日志。
 -- value/error 属于本次同步调用；成功返回原值，失败抛错终止此检查；不 I/O、不 yield。
@@ -16,27 +18,19 @@ end
 -- 等待同进程地图加载完成，然后在当前 Lua State 执行同步 Native 查询。
 -- 无参数；成功输出 marker；启动阶段可 yield，导航调用本身不 yield。
 skynet.start(function()
+    sharedata.new("battle.unit_profiles", config.unit_profiles)
+    local profiles_loaded, profiles_error =
+        battle_nav.load_navigation_profiles(config.navigation_profiles)
+    assert(profiles_loaded,
+           profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
+               "load_navigation_profiles failed")
+
     -- 数据准备：先启动并等待地图查询 Service。
     local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
 
-    local profiles = {
-        {
-            id = 1,
-            radius_mm = 200,
-            max_step_mm = 600,
-            max_slope_permille = 1000,
-            area_cost_permille = {
-                [0] = 1000,
-                [1] = 3000,
-                [2] = 1000,
-                [3] = 1500,
-            },
-        },
-    }
-
-    -- 参数/状态检查：创建本次 smoke 独占的 Native Context。
-    local context = require_nav(battle_nav.new_context(1001, 1, profiles))
+    -- Query Service 已在启动阶段加载共享 Profile；这里只创建本次 smoke 的 Context。
+    local context = require_nav(battle_nav.new_context(1001))
 
     local start = { x_mm = -11000, y_mm = 0, z_mm = 4000 }
     local target = { x_mm = 11000, y_mm = 0, z_mm = -4000 }
