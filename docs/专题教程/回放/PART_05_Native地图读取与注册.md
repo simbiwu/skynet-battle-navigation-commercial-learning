@@ -40,11 +40,11 @@ query_logic.start(config)
 | `server/service/battle/navigation_query.lua` | 启动 Query 并在地图加载后安装消息处理 | `query_logic.start(config)`、READY 输出顺序 | 调试器接线 |
 | `server/lualib/battle/navigation/query_logic.lua` | 把配置要求和 Native 实际资产身份核对起来 | `M.start`、`M.query` | 协议错误表的全部枚举 |
 | FlyWow `navigation/lualib/flywow_navigation.lua` | 提供 Lua 的公开入口和类型说明 | 最后的 Native `require`、地图身份与位置类型 | 本课尚未使用的 Path 类型 |
-| FlyWow `navigation/native/lua/src/lua_navigation.cpp` | 从 Lua 进入实际 Native 操作 | `l_load_map`、`l_query_cell`、`l_new_context` 中的 `Find` | metatable 注册和动态导航方法 |
+| FlyWow `navigation/native/navigation_binding.cpp` | 从 Lua 进入实际 Native 操作 | `l_load_map`、`l_query_cell`、`l_new_context` 中的 `Find` | metatable 注册和动态导航方法 |
 | FlyWow `navigation/native/grid_map/include/bmap_format.h` | 规定文件常量和内存数据字段 | Header/Cell 长度、Metadata、NavCell、WorldPosition | 无 |
-| FlyWow `navigation/native/grid_map/src/bmap_reader.cpp` | 验证文件并构造地图 | `BMapReader::Read` 按顺序完整阅读 | CRC 每一轮 bit 运算可先略读 |
-| FlyWow `navigation/native/grid_map/src/grid_map.cpp` | 管理内存地图与只读坐标查询 | 构造、`WorldToGrid`、`FloorDiv`、`IndexOf`、`QueryWorld` | 动态进入固定配置的查询方法 |
-| FlyWow `navigation/native/grid_map/src/map_registry.cpp` | 管理进程内地图目录与共享生命周期 | `Instance`、`Load`、`Find`、`Freeze` | 无 |
+| FlyWow `navigation/native/grid_map/bmap_reader.cpp` | 验证文件并构造地图 | `BMapReader::Read` 按顺序完整阅读 | CRC 每一轮 bit 运算可先略读 |
+| FlyWow `navigation/native/grid_map/grid_map.cpp` | 管理内存地图与只读坐标查询 | 构造、`WorldToGrid`、`FloorDiv`、`IndexOf`、`QueryWorld` | 动态进入固定配置的查询方法 |
+| FlyWow `navigation/native/grid_map/map_registry.cpp` | 管理进程内地图目录与共享生命周期 | `Instance`、`Load`、`Find`、`Freeze` | 无 |
 
 阅读顺序由调用链决定，先不用逐个通读所有头文件。
 
@@ -129,7 +129,7 @@ sequenceDiagram
 
 ## 5. Binding 这一层：传进去的是路径，返回的不是地图指针
 
-只读 FlyWow `navigation/native/lua/src/lua_navigation.cpp` 的 `l_load_map`。先抓住两行：
+只读 FlyWow `navigation/native/navigation_binding.cpp` 的 `l_load_map`。先抓住两行：
 
 ```cpp
 const char *path = luaL_checkstring(L, 1);
@@ -172,7 +172,7 @@ nil, { code = "稳定错误名", message = "具体诊断" }
 
 ## 6. Reader 第一步：先确认文件长度，再分配缓冲
 
-入口是 FlyWow `navigation/native/grid_map/src/bmap_reader.cpp`：
+入口是 FlyWow `navigation/native/grid_map/bmap_reader.cpp`：
 
 ```cpp
 NavResult<std::shared_ptr<const GridMap>> BMapReader::Read(const std::string &path)
@@ -572,7 +572,7 @@ Reader 用 `try/catch` 包住地图构造，把此阶段构造异常转换为 `B
 
 ### 12.1 Reader 返回后，`Load` 才进入登记阶段
 
-FlyWow `navigation/native/grid_map/src/map_registry.cpp` 的执行顺序：
+FlyWow `navigation/native/grid_map/map_registry.cpp` 的执行顺序：
 
 ```cpp
 NavResult<std::shared_ptr<const GridMap>> loaded = BMapReader::Read(path);

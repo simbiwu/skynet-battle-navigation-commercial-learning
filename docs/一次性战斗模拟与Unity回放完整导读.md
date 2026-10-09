@@ -64,8 +64,8 @@ Unity 解析 RunAutoBattleResponse
 | `server/service/battle/navigation_query.lua` | 看启动时如何加载地图，以及 QueryCell 内部查询入口。 |
 | `server/lualib/battle/navigation/query_logic.lua` | 看 map_id/version 校验和 Native 查询调用。 |
 | `server/third_party/skynet-flywow/navigation/lualib/flywow_navigation.lua` | Lua 对外入口；地图和 A* 实现在 Native，不在 Lua Wrapper 重写。 |
-| `server/third_party/skynet-flywow/navigation/native/lua/src/lua_navigation.cpp` | 看 Lua 参数、Context/Path userdata 与 C++ API 如何连接。 |
-| `server/third_party/skynet-flywow/navigation/native/grid_map/src/grid_pathfinder.cpp` | 看实际 A*、邻居扩展、启发式、路径重建与平滑。 |
+| `server/third_party/skynet-flywow/navigation/native/navigation_binding.cpp` | 看 Lua 参数、Context/Path userdata 与 C++ API 如何连接。 |
+| `server/third_party/skynet-flywow/navigation/native/grid_map/grid_pathfinder.cpp` | 看实际 A*、邻居扩展、启发式、路径重建与平滑。 |
 
 ## 二、Unity 发起一次请求：场景组件到 Protobuf
 
@@ -211,7 +211,7 @@ Event 是顺序追加的 append-only 列表：`seq` 递增，`logic_ms` 记录�
 - 搜索完成后回溯路线并做路径平滑；Path 以世界坐标点交还 Lua。A* 成本分数不等于移动毫米数或耗时。
 - `find_path_to_range()` 只规划路线；后续每个 Tick 的 `advance_path()` 才按毫米预算推进并重新检查动态占位。
 
-建议精读 `navigation/native/grid_map/src/grid_pathfinder.cpp` 中 `Heuristic`、`CanOccupyStaticCell`、`CanTraverse`、`SmoothGridPath`、`BuildPath` 以及实际搜索函数；再对照 `navigation/native/lua/src/lua_navigation.cpp` 中 `new_context`、`find_path_to_range`、`advance_path` 对 Lua 表与 Native 类型的转换。
+建议精读 `navigation/native/grid_map/grid_pathfinder.cpp` 中 `Heuristic`、`CanOccupyStaticCell`、`CanTraverse`、`SmoothGridPath`、`BuildPath` 以及实际搜索函数；再对照 `navigation/native/navigation_binding.cpp` 中 `new_context`、`find_path_to_range`、`advance_path` 对 Lua 表与 Native 类型的转换。
 
 最容易混淆的区别：
 
@@ -319,7 +319,7 @@ cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
 | 5 | `battle_main.lua`、`battle_dispatch.lua` | 请求如何跨 Cluster 到达 Battle？什么字段触发自动战斗？错误如何变成业务 ResultCode？ |
 | 6 | `scenario_1001.lua`、`battle_mgr.lua`、`battle_worker.lua` | Snapshot 谁创建？Manager 如何选 Worker？Native Context 谁拥有、何时释放？ |
 | 7 | `battle_core.lua` | 一个 fixed tick 做什么？何时 A*？何时推进 Path？Event 的 seq/logic_ms 如何产生？ |
-| 8 | `grid_pathfinder.cpp`、`lua_navigation.cpp` | A* 如何遵守地图/Profile/动态占位？Native 结果怎样变成 Lua Path？ |
+| 8 | `grid_pathfinder.cpp`、`navigation_binding.cpp` | A* 如何遵守地图/Profile/动态占位？Native 结果怎样变成 Lua Path？ |
 | 9 | `navigation_query.proto`、`battle_dispatch.lua` | 路径与伤害如何表示成有界、可序列化的 BattleEvent？ |
 | 10 | `gateway_proxy.lua`、FlyWow Gateway 回包函数 | Response 如何回到原连接？断线/迟到响应为何不能送给任意连接？ |
 | 11 | `BattleReplayRequester.cs`、`BattleReplayPlayer.cs` | Unity 如何校验事件次序、按逻辑时间播放，并避免重新寻路/结算？ |

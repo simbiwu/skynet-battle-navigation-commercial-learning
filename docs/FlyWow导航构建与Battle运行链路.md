@@ -203,7 +203,7 @@ Wrapper 使用 flywow_navigation，Native 使用 flywow_navigation_native，避�
 Native 入口：
 
 ~~~text
-navigation/native/lua/src/lua_navigation.cpp
+navigation/native/navigation_binding.cpp
 ~~~
 
 入口函数：

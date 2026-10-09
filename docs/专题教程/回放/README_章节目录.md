@@ -100,7 +100,7 @@ PART 1—8 建立运行所需的资产、服务和导航基础。PART 9—11 沿
 - 解释 Registry 持有的不可变地图、查找时返回的生命周期保证，以及同进程多 Service 与不同进程的区别。
 - 用一个 Cell 查询串起世界坐标转换、边界判断和只读字段访问。
 
-主要入口：课程仓库的 `server/lualib/battle/navigation/query_logic.lua`；FlyWow 的 `navigation/native/lua/src/lua_navigation.cpp`、`navigation/native/grid_map/src/bmap_reader.cpp`、`grid_map.cpp`、`map_registry.cpp`。
+主要入口：课程仓库的 `server/lualib/battle/navigation/query_logic.lua`；FlyWow 的 `navigation/native/navigation_binding.cpp`、`navigation/native/grid_map/bmap_reader.cpp`、`grid_map.cpp`、`map_registry.cpp`。
 
 完成标志：能说明 Worker 如何找到已加载地图，以及为什么创建 Context 无需重新读 BMAP。
 
