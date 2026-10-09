@@ -337,13 +337,12 @@ server/service/battle/battle_worker.lua
 
 执行。
 
-每次模拟开始：
+Battle 进程启动时，navigation_query 先从 config.battle.profiles 调用 load_profiles 一次，再加载静态地图。每次模拟开始只创建本场 Context：
 
 ~~~lua
 local context, err = battle_nav.new_context(
     snapshot.map_id,
-    snapshot.map_version,
-    snapshot.profiles)
+    snapshot.map_version)
 ~~~
 
 Context 持有本次 Battle 的可变状态：

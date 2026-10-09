@@ -20,14 +20,14 @@ Unity Battle_1001 Scene
                     ▼
 Gateway Process                         Battle Process
 FlyWow Gateway                           battle_main
-  解帧、解 Envelope、解 Request             ├─ navigation_query：启动时加载静态 BMAP
+  解帧、解 Envelope、解 Request             ├─ navigation_query：启动时加载共享 Profile 与静态 BMAP
         │                                   ├─ battle_mgr：选 Worker
         ▼                                   └─ battle_dispatch：业务分发
 gateway_proxy ── cluster.send ────────────────┘
                                                 │ skynet.call("simulate", Snapshot)
                                                 ▼
                                           battle_worker
-                                            ├─ new_context(map, profiles)
+                                            ├─ new_context(map)
                                             └─ battle_core.simulate()
                                                  ├─ fixed tick、目标选择、攻击结算
                                                  ├─ context:find_path_to_range() ──► Native A*
@@ -173,7 +173,7 @@ Unity ←TCP─ Gateway ←send─ Proxy ←cluster.send─ Battle Dispatch
 
 `battle_worker.lua` 收到 Snapshot 后：
 
-1. 用 `flywow_navigation.new_context(map_id, map_version, profiles)` 创建本场独占 Native Context。
+1. 用 `flywow_navigation.new_context(map_id, map_version)` 创建本场独占 Native Context。
 2. 调 `battle_core.simulate(snapshot, context)`，内部 `xpcall` 收敛异常。
 3. 无论模拟成功失败都关闭本次 Context。
 4. 成功时把纯数据 result/Event Log 通过 `skynet.retpack` 返回给 Manager。

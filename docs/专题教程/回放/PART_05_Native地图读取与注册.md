@@ -882,10 +882,10 @@ Native 返回高度 83 mm、Area 0、Clearance 5、walkable=true
 
 ```lua
 local battle_nav = require "flywow_navigation"
+-- Profile 已由 navigation_query 在进程启动时从 config.battle 加载。
 local context, err = battle_nav.new_context(
     snapshot.map_id,
-    snapshot.map_version,
-    snapshot.profiles)
+    snapshot.map_version)
 ```
 
 接着只读 Binding 的 `l_new_context`，本课只看地图取得这一段：

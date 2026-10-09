@@ -91,7 +91,8 @@ Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 
 零射程接近与攻击共用 ceil(sqrt(2)*cell_size_mm) 格子接近容差，不代表物理相切。
 已经重叠的单位仍能攻击；导航终点排除目标体型内部。
 Battle 不默认启用 allow_partial，保持现有 NO_PATH 退避策略。
-半径仅初始化时从 snapshot.profiles 复制，不新增协议或 Occupancy 反查。
+Battle Core 在 Lua 中从 snapshot.profiles 读取半径；Native AgentProfile 由 navigation_query 启动时从
+config.battle.profiles 加载一次，所有 Context 只通过 profile_id 查询共享只读配置。
 
 本轮验证：Native 构建与两个 CTest 通过；新增真实 Lua 单位范围/partial 用例通过；
 真实 Native + Battle 用例覆盖正射程边界、零射程容差、寻路迁移与两次模拟事件一致性。
