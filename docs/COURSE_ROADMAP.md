@@ -186,90 +186,16 @@ clearance、slope、area cost 和 dynamic occupancy 怎样组合；
 
 ---
 
-# Lesson 3：完成可交互的 Server 权威战斗
+# Lesson 3：分别掌握帧同步与状态同步
 
-第三课把前两课的地图、寻路和 BattleWorker 组合成一个可人工操作的战斗验证场景：
+第三课从第二课完成基线出发，按顺序完成两份独立实操：
 
-通信边界按 `docs/ENGINEERING_DECISIONS.md` D038 执行：第二课已经完成 Gateway Proxy 与 Battle Dispatch 之间的双向异步转发，双方分别用 `cluster.send` 发送请求与结果，并用 route token 关联回包；Gateway 透明转发 Battle 生成的有界响应。第三课复用这条进程边界加入在线命令流，由 Battle 持有玩家归属、Battle/Worker 路由和命令可靠性。第二课自动模拟的客户端仍等待单个最终响应，但不让 Gateway 用 `cluster.call` 同步占住跨进程调用。第三课新增范围见 `codex/LESSON_03_SPEC.md`；Cluster 与 Harbor 的机制参考见 [独立专题文档](SKYNET_CLUSTER_AND_HARBOR.md)。
+1. [帧同步版实操](Skynet_BattleNavigation第三课_帧同步版_实操.md)：以确定性逻辑帧输入为主，学习输入确认、预测、回滚重演、分歧恢复和帧输入回放。
+2. [状态同步版实操](Skynet_BattleNavigation第三课_状态同步版_实操.md)：以 Server 权威状态复制为主，学习命令确认、BattleEvent、周期 Snapshot/Delta、本地预测校正、远端插值和断线恢复。
 
-```text
-Player       地面单位，人工输入移动和施法意图
-GroundEnemy  地面单位，Server AI 控制
-FlyingEnemy  空中单位，Server AI 控制
-```
+两版允许采用不同玩法和战斗模拟实现，不为共用而建立统一 Battle Core。它们都保留商业实时战斗的核心边界：客户端快速响应，Server 决定正式位置、寻路、技能、命中、伤害、HP、死亡和结果；版本、资源上限、错误路径、恢复行为与真实 Unity/Server 验证都属于课程内容。具体玩法和施工阶段以 `codex/LESSON_03_SPEC.md` 及对应实操为准。
 
-“人工控制”只表示命令来自 Unity。位置、路径、技能合法性、命中、伤害和死亡仍由 Server 决定。
-
-### 空中导航
-
-本课使用适合 SLG 的简化模型：
-
-```text
-二维 Air Grid 负责 XZ 路径
-NoFly Cell 表示禁止飞入区域
-worldY = groundHeight + flightHeight
-```
-
-FlyingEnemy 可以飞越普通地面障碍，但必须绕开 NoFly，并受地图边界、最大爬升/下降速度和技能目标类型约束。本课不实现完整三维体素导航，也不表达同一 XZ 的多层空中空间。
-
-### 技能执行模型
-
-按真实需求逐步引入：
-
-```text
-瞬发技能
--> Server 立即结算，Client 播放表现
-
-表现型弹丸
--> Server 固定 launch/impact time 和结果，Client 插值轨迹
-
-逻辑型弹丸
--> Server 权威推进或解析计算轨迹，碰撞会改变结果
-```
-
-最小技能组合：
-
-```text
-Player：地面近战 + 对空火球
-GroundEnemy：近战攻击
-FlyingEnemy：空中火球
-```
-
-### 同步与显示
-
-```text
-Unity PlayerCommand
--> Skynet Gateway
--> BattleWorker fixed tick / no-yield simulate
--> BattleSnapshot + BattleEvent
--> Unity interpolation + 简单特效
-```
-
-客户端至少能完整观察三者的移动、施法、弹丸、受伤、HP 和死亡。模型与特效可以使用基础几何体，验证重点是权威边界和执行链。
-
-### 第三课验收核心
-
-```text
-人工移动 Player，Server 返回权威位置；
-GroundEnemy 自动接近并攻击；
-FlyingEnemy 保持固定离地高度并绕开 NoFly；
-地面技能不能错误命中空中目标；
-三类技能模型都有可运行案例；
-Unity 完整显示移动、施法、命中、伤害和死亡；
-相同 battle/map/skill/input/seed 得到相同逻辑事件。
-```
-
-### 第三课面试输出
-
-```text
-为什么客户端只提交意图，不能提交权威位置和伤害；
-为什么表现型弹丸不需要 Server 每 Tick 更新；
-什么时候轨迹必须由 Server 权威计算；
-Air Grid、NoFly 和固定离地高度怎样协作；
-Snapshot 与 Event 分别解决什么问题；
-BattleWorker 的 no-yield 和确定性怎样延伸到技能系统；
-如何证明地面 AI、空中 AI 与人工输入走同一条结算链。
-```
+Lesson 2 的离线批量模拟与 Replay 保持独立，不要求帧同步版、状态同步版和批量模拟共用战斗核心。旧版第三课实操仅作为知识点参考，不再作为实施基线。
 
 ---
 

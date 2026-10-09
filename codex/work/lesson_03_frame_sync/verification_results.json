@@ -1,0 +1,23 @@
+{
+  "date": "2026-10-10",
+  "source": "从实操Markdown代码块提取并与隔离源码逐文件核对",
+  "linux": "GCC 15.2.0 / C++17 / CMake Release",
+  "windows": "MSVC 19.51 / x64 / Release",
+  "native_linux_ctest": "passed",
+  "native_windows_ctest": "passed",
+  "gateway_unit": "passed",
+  "gateway_old_condition_red": "旧条件使target push must not broadcast断言失败；修复仅应用于隔离副本",
+  "lua_binding": "FRAME_BINDING_OK",
+  "lua_runtime": "FRAME_RUNTIME_OK",
+  "real_skynet_integration": "FRAME_INTEGRATION_OK frames=17 generation=2",
+  "cross_platform_golden": "238行逐行一致；237个正式帧后结束，另含FRAME_NATIVE_OK行",
+  "windows_csharp_compile": "现有Unity模块/FlyWow.Gateway.dll/Google.Protobuf.dll引用，0警告0错误",
+  "windows_csharp_real_network": "FRAME_CSHARP_WINDOWS_OK frames=30；Windows Native逐帧核对Linux权威hash",
+  "not_run": [
+    "Unity Editor完整Play及场景表现",
+    "长期容量压力与所有网络故障",
+    "其它目标平台"
+  ],
+  "gateway_user_worktree": "未修改",
+  "state_sync_document": "未修改，仍为蓝图"
+}

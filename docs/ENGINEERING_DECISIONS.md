@@ -4,7 +4,7 @@
 
 Lesson 1 / 2 完成 2.5D Grid、A*、动态占位和确定性 BattleWorker。
 
-Lesson 3 完成人工控制 Player、Server AI GroundEnemy/FlyingEnemy、固定离地空中导航、三类技能、状态/事件同步和 Unity 表现闭环。
+Lesson 3 最终版由帧同步与状态同步两份独立实操组成，分别从第二课完成基线学习实时输入预测/回滚和 Server 权威状态复制；两版玩法与战斗模拟可不同，不要求共用 Battle Core。
 
 Recast / Detour Polygon NavMesh 移到 Lesson 4 可选高级专题。典型单层 SLG 可以长期使用 Grid；技能和空中 Air Grid 不依赖 Detour。
 
@@ -533,7 +533,7 @@ Unity BMAP 和 H5/Tiled/JSON 等输入属于离线资产生产链，不能让 Se
 
 ## D037 - 第三课完成后将已验证能力抽入 FlyWow，不增设课程
 
-FlyWow 的目标是面向 MMO/SLG 的 Skynet Server 框架，并提供配套的客户端接入能力。第三课完成 Server 权威在线战斗与自动战斗闭环后，再集中评估和抽取课程中已运行、已验证的通用能力；抽取不设第 3.5 课，也不作为第三课验收条件。可选第四课仍讲 Recast/Detour，不以完成 FlyWow 抽取或 H5 2D 接入为前置条件。
+FlyWow 的目标是面向 MMO/SLG 的 Skynet Server 框架，并提供配套的客户端接入能力。第三课的帧同步版与状态同步版都完成并验证后，再集中评估和抽取课程中已运行、已验证的通用能力；抽取不设第 3.5 课，也不作为第三课验收条件。可选第四课仍讲 Recast/Detour，不以完成 FlyWow 抽取或 H5 2D 接入为前置条件。
 
 抽取目标是一套可分别接入、可配套使用的模块：Unity Package 同时包含地图 Bake、BMAP 导出/校验/发布等 Editor 能力，以及服务端地图、路径和战斗事件的客户端 Runtime 适配；Server 提供地图加载与版本校验、Native Grid 导航、Lua/Skynet 接入、Battle 运行机制和已验证的通用技能能力。未来 H5 俯视角 2D 客户端按同一版本化业务合同接入，其具体实现需要真实 H5 消费者验证。游戏项目保留实际地图资产、AgentProfile 数值、单位/技能规则、表现资源与项目协议配置；客户端不能覆盖 Server 权威结果。
 
@@ -584,3 +584,10 @@ FlyWow Gateway 与客户端 SDK 在连接进入 ready 前完成 P-256 ECDH、32 
 FlyWow 的 C++ 模块以及本项目所有 Native C++ 模块统一使用 C++17，构建文件必须显式设置 "CMAKE_CXX_STANDARD 17"、"CMAKE_CXX_STANDARD_REQUIRED ON" 和 "CMAKE_CXX_EXTENSIONS OFF"；直接编译入口同样必须传递 "-std=c++17"。Skynet v1.8.0 与其自带 Lua 5.4.7 运行时保持原有 C/Lua 构建，不把 C++17 要求扩展到它们。
 
 C++17 是 FlyWow 与项目 Native 层的可复现构建合同，不允许单个模块降回更早标准或依赖编译器默认标准。使用 if constexpr、类型特征 _v 等 C++17 语言/库能力时，保持 Lua ABI、C 接口、userdata ownership 和现有运行时边界不变。 FlyWow 子模块先完成自身构建与测试，再由主仓库更新 gitlink。
+
+
+## D042 - Lesson 3 分别实现帧同步与状态同步
+
+Lesson 3 最终版由独立的帧同步和状态同步实操组成，学习顺序为帧同步在前、状态同步在后。两版允许玩法和战斗模拟不同，不为代码复用建立统一模拟内核；Lesson 2 的离线批量战斗/Replay 继续作为独立基线。两版均保留商业实时战斗的必要核心边界：Server 权威、客户端快速响应、明确命令/状态合同、版本与内容 hash、资源和生命周期上限、错误与恢复路径、真实双端验证。
+
+本决策取代旧 D031 对 Lesson 3 使用同一 Battle Core 同时承载在线与批量回放的要求；旧第三课实操只作为知识点参考，不作为新实现基线。实时数据通道属于 FlyWow Gateway 接入能力，若现有合同不足，由实际课程调用者按 `docs/FLYWOW_EXTRACTION_POLICY.md` 扩展；战斗层仍分别定义自身的同步可靠性合同。课程入口见 `codex/LESSON_03_SPEC.md`。

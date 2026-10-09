@@ -1,0 +1,94 @@
+{
+  "server/native/frame_sync/frame_core.h": {
+    "language": "cpp",
+    "why": "把本场逻辑状态、单步输入和可恢复ABI固定下来。"
+  },
+  "server/native/frame_sync/frame_core.cpp": {
+    "language": "cpp",
+    "why": "让按键意图按固定阶段产生位置、技能和伤害；两端编译同一份实现。"
+  },
+  "server/native/frame_sync/frame_binding.cpp": {
+    "language": "cpp",
+    "why": "让一个Skynet Worker Lua State拥有Native模拟，关闭时明确释放。"
+  },
+  "server/native/frame_sync/frame_test.cpp": {
+    "language": "cpp",
+    "why": "在接网络之前锁住重复运行、回滚恢复、损坏状态和异常不提交的合同。"
+  },
+  "server/native/frame_sync/CMakeLists.txt": {
+    "language": "cmake",
+    "why": "把同一核心编译为Linux Lua模块与Windows Unity DLL，不下载或复制FlyWow源码。"
+  },
+  "shared/protocol/frame_sync_messages.proto.inc": {
+    "language": "proto",
+    "why": "在唯一协议源内增加帧同步消息；本节inc只表示待追加正文，不是第二份运行协议文件。"
+  },
+  "server/config/frame_sync.lua": {
+    "language": "lua",
+    "why": "为本版Worker给出实际持有状态的上限和固定时间合同，不覆盖第二课config.battle。"
+  },
+  "server/lualib/battle/frame_sync/runtime.lua": {
+    "language": "lua",
+    "why": "把输入窗口、缺输入规则和Replay归到一个Battle实例；先用纯Lua驱动验证。"
+  },
+  "server/service/battle/frame_sync/worker.lua": {
+    "language": "lua",
+    "why": "把纯Runtime放入长驻Worker；一个心跳按稳定Battle ID推进多场战斗。"
+  },
+  "server/service/battle/frame_sync/dispatch.lua": {
+    "language": "lua",
+    "why": "由Battle进程选择Worker并回推控制响应/权威帧；Gateway不拥有玩家归属。"
+  },
+  "server/service/battle/frame_sync/main.lua": {
+    "language": "lua",
+    "why": "组装独立Battle进程入口，保持第二课入口可用。"
+  },
+  "server/service/gateway/frame_sync/proxy.lua": {
+    "language": "lua",
+    "why": "接入第二课已建立的双向异步边界，只转发传输record。"
+  },
+  "server/service/gateway/frame_sync/main.lua": {
+    "language": "lua",
+    "why": "先完成跨进程ready再监听客户端；复用现有FlyWow握手、framing与codec。"
+  },
+  "server/config/frame_battle_process.lua": {
+    "language": "lua",
+    "why": "独立进程配置消费新增Native产物，不覆盖第二课启动配置。"
+  },
+  "server/config/frame_gateway_process.lua": {
+    "language": "lua",
+    "why": "Gateway启动时只消费接入模块和共享Proto生成物。"
+  },
+  "server/scripts/lessons/prepare_frame_sync.py": {
+    "language": "python",
+    "why": "在启动前验证已发布地图hash并生成资产身份配置；规则hash由Native构建绑定。"
+  },
+  "unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs": {
+    "language": "csharp",
+    "why": "Unity只通过稳定C ABI推进与恢复本地模拟；不把Transform写回Server。"
+  },
+  "unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs": {
+    "language": "csharp",
+    "why": "让实时连接同时持续收推帧和发输入；沿用FlyWow握手与两字节framing。"
+  },
+  "unity/BattleNavigation/Assets/BattleNavigation/client/FrameBattleController.cs": {
+    "language": "csharp",
+    "why": "让实际按键在本地预测，并根据Server确认帧恢复重演；最终可在场景里观察。"
+  },
+  "server/third_party/skynet-flywow/gateway/tests/gateway_async_test.lua": {
+    "language": "lua",
+    "why": "审计定向主动消息，同时保持原异步合同回归。"
+  },
+  "server/tests/frame_runtime_test.lua": {
+    "language": "lua",
+    "why": "把输入窗口与缺输入规则独立于网络验证。"
+  },
+  "server/tests/frame_binding_test.lua": {
+    "language": "lua",
+    "why": "验证真实userdata加载、返回错误和幂等关闭。"
+  },
+  "server/tests/frame_sync_integration.py": {
+    "language": "python",
+    "why": "用真实握手、TCP、Gateway、Cluster、Worker与Native证明输入日志能够重演。"
+  }
+}
