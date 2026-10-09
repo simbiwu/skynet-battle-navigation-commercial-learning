@@ -72,10 +72,14 @@ FireWall、Haste/Slow/Burning 和 BRPL 文件封装在本文中作为可选扩�
 
 ## 0. 第二课完成后，我们已经有什么
 
+> 当前基线补充（以 WSL 主工作区为准）：Ground Navigation 与 Unity Authoring 已迁入 FlyWow navigation 模块。Lua 入口是 require flywow_navigation，Native 产物是 flywow_navigation_native.so。Profile 在 navigation_query.start() 中通过 load_profiles(config.profiles) 一次加载到进程级只读 Registry；BattleWorker 只用 new_context(map_id, map_version) 创建 Battle-local scratch/occupancy。课程 Unity 工程通过离线 UPM .tgz 消费 FlyWow 包；修改包源码后需重新打包并在 Windows Unity 更新包，再执行对应 Editor 测试。
+
+> server/config/battle.lua、Battle 源码和 FlyWow 子模块可能已有你的未提交修改。每个完整替换步骤前先核对 diff，把仍有效的改动并入目标版本；教程步骤不得覆盖用户已有内容。
+
 第三课禁止重新创建第二课已经建立的概念。第二课最终稳定调用面至少包括：
 
 ```lua
-battle_nav.new_context(map_id, map_version, profiles)
+navigation.new_context(map_id, map_version)
 
 context:find_path(profile_id, start_world, end_world, self_unit_id)
 context:find_path_to_range(
@@ -294,7 +298,7 @@ BattleWorker#1   BattleWorker#2   BattleWorker#3   BattleWorker#4
            |       |       +-- AreaEffect / FireWall
            |       |       +-- Buff
            v       v
-              battle_nav.so
+              navigation.so
                    |
                    v
       immutable GridMap / AirMap
@@ -562,21 +566,21 @@ sync read        不 yield
 
 ## 7. 新增 Battle Runtime 配置
 
-[新建文件]
+[局部修改]
 
 ```text
 server/config/battle.lua
 ```
 
-为什么需要：第二课 `battle_worker_count` 只服务一次性 round-robin；第三课需要固定 Worker 数、在线 Tick、事件缓存和资源上限。配置属于进程启动期只读数据，不属于某一场 Battle。
+该文件已包含 map、profiles、cluster。保留现有字段，只在返回 table 顶层追加本节的 Battle Runtime 字段；不要用示例替换整个文件。当前启动链先执行 navigation.load_profiles(config.profiles)，再加载 BMAP；Worker 用 navigation.new_context(map_id, map_version) 创建私有查询状态。配置属于进程启动期只读数据，不属于某一场 Battle。
 
 ```lua
--- 职责：声明第三课 Battle Runtime 的固定 Worker、Tick 和资源预算。
+-- 将以下字段追加到现有返回 table 顶层；保留 map/profiles/cluster。
 -- 边界：Server Runtime Config；由 BattleMgr/BattleWorker 启动时只读加载。
 -- 输入/输出：无运行时输入 -> 固定配置 table。
 -- 生命周期：Battle Process 启动时读取；存在在线 Battle 时不得热改 worker_count。
 -- 不负责：不创建 Service、不持有 Battle 状态、不决定技能数值。
-return {
+-- 追加到现有 table：
     worker_count = 4,             -- 固定 BattleWorker Service 数；不是 OS Thread 数。
     tick_ms = 50,                 -- Battle 逻辑 Tick，必须是 10ms 的整数倍。
     heartbeat_cs = 5,             -- Skynet timeout 单位 1/100 秒；5 = 50ms。
@@ -589,7 +593,6 @@ return {
     finished_retention_cs = 3000, -- 已结束在线 Battle 保留 30 秒供最终 Sync；只影响生命周期。
     max_finished_retained = 128,  -- 每 Worker 最多保留多少个已结束结果，防止缓存无界增长。
     debug_console_port = 8001,    -- 仅开发环境；0 表示不启动。
-}
 ```
 
 ### 7.1 为什么 worker_count 不能在线随便改
@@ -793,7 +796,7 @@ local function stats()
 end
 
 -- 启动固定 Worker Pool；每个 newservice 都创建独立 Service/Lua State。
--- Worker 数量是 Shard 数，不与 config/skynet_battle.lua 的 thread 数建立 1:1 假设。
+-- Worker 数量是 Shard 数，不与 config/battle_process.lua 的 thread 数建立 1:1 假设。
 skynet.start(function()
     assert(battle_config.worker_count >= 1, "worker_count must be positive")
     assert(battle_config.tick_ms >= 10 and battle_config.tick_ms % 10 == 0,
@@ -1006,7 +1009,7 @@ server/service/battle/battle_worker.lua
 -- 生命周期：Service 随 Battle Process 长驻；每场 Context 从 create 到 finish/stop 独占。
 -- 不负责：不监听网络、不解析 Protobuf、不访问 DB、不让 Battle Core 调 Skynet。
 local skynet = require "skynet"
-local battle_nav = require "battle_nav"
+local navigation = require "flywow_navigation"
 local battle_core = require "battle.battle_core"
 local battle_config = require "config.battle"
 
@@ -1275,10 +1278,9 @@ local function create_online(request)
     end
 
     local snapshot = assert(request.snapshot)
-    local context, nav_error = battle_nav.new_context(
+    local context, nav_error = navigation.new_context(
         snapshot.map_id,
-        snapshot.map_version,
-        snapshot.profiles)
+        snapshot.map_version)
     if context == nil then
         return nil, {
             code = nav_error and nav_error.code or "CONTEXT_CREATE_FAILED",
@@ -1441,10 +1443,9 @@ local function simulate(snapshot)
     assert(type(snapshot) == "table", "simulate snapshot must be table")
     assert_shard(assert(snapshot.battle_id))
 
-    local context, nav_error = battle_nav.new_context(
+    local context, nav_error = navigation.new_context(
         snapshot.map_id,
-        snapshot.map_version,
-        snapshot.profiles)
+        snapshot.map_version)
     if context == nil then
         return nil, {
             code = nav_error and nav_error.code or "CONTEXT_CREATE_FAILED",
@@ -2024,7 +2025,7 @@ BMAP V1 已经是第一课冻结的 Ground Asset Contract。
 新增 sidecar：
 
 ```text
-shared/navigation/battle_1001/battle_1001.amap
+shared/navigation/<已验证候选目录>/map.amap
 ```
 
 身份仍然绑定：
@@ -2100,8 +2101,8 @@ truncated
 新增两个最小脚本：
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Runtime/NoFlyVolume.cs
-unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapExporter.cs
+server/third_party/skynet-flywow/navigation/unity/Runtime/NoFlyVolume.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/AirMapExporter.cs
 ```
 
 `NoFlyVolume` 只表示 Authoring 语义：
@@ -2114,7 +2115,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapExporter.cs
 // 不负责：不控制 FlyingEnemy、不参与 Unity NavMesh Agent。
 using UnityEngine;
 
-namespace BattleNavigation.Authoring
+namespace FlyWow.Navigation
 {
     /// <summary>编辑期 NoFly 盒形区域；Server Runtime 不读取本组件。</summary>
     [RequireComponent(typeof(BoxCollider))]
@@ -2161,77 +2162,21 @@ nofly flag
 
 不要只输出二进制后靠 Server 猜 Bake 是否正确。
 
-### 20.2 第二个真实导出器出现后，才提取仓库路径解析
+### 20.2 复用已抽取的 FlyWow Navigation Authoring 与资产发布入口
 
-第一课只有 `BattleMapExporter` 一个调用者，因此 `ResolveRepositoryRoot()` 留在类内是合理的。第三课增加 `AirMapExporter` 后，才出现第二个真实调用者。现在再提取一个很小的公共 Editor helper，符合本项目“有第二个真实消费者后再抽稳定边界”的规则。
+地图 Authoring 已在 FlyWow UPM 包中。第三课不再从课程 Unity 工程复制 BattleMapExporter，也不新增 RepositoryPathResolver；使用 FlyWow.Navigation.NavigationMapRoot、NavigationMapExporter 和 NavigationAssetPublisher。AirMap 源码归 server/third_party/skynet-flywow/navigation/unity/；Battle 场景、出生点校验和 Interactive Client 仍归课程 Unity 工程。
 
-[新建文件]
+Unity 工程通过内容寻址的 .tgz 消费该包，不直接引用 WSL 子模块目录。修改 FlyWow 包源码后，按 WORKSPACE_WORKFLOW.md 完成 FlyWow 提交、主仓库 gitlink 同步，再让 Windows 工作区获取对应版本。每个新增 Package 文件都要一并提供稳定唯一的 .meta；package_unity.py 会拒绝缺少 .meta 的文件。
 
-```text
-unity/BattleNavigation/Assets/BattleNavigation/Editor/RepositoryPathResolver.cs
+在 Windows 仓库根目录运行下面命令，生成离线包并更新 Unity manifest；之后打开 Unity，等待 Package Manager 刷新并更新 packages-lock.json：
+
+```powershell
+python server/third_party/skynet-flywow/navigation/tools/package_unity.py --output .tmp/navigation-packages --manifest unity/BattleNavigation/Packages/manifest.json
 ```
 
-学习导航：精读“普通 clone 与 Git worktree 的 `.git` 都要识别”；可以略读 `DirectoryInfo` 向上遍历。输入是 Unity `Application.dataPath` 隐含的工程位置，输出仓库根绝对路径；只读文件系统，不修改 Git，不访问网络。
+不要把包源码复制进 unity/BattleNavigation/Assets，也不要把 .tgz 当作第二份可编辑源码。
 
-```csharp
-// 职责：从当前 Unity 工程位置向上找到课程仓库根目录，供多个 Editor 导出器复用。
-// 边界：Unity Editor Build/Asset Helper；只读文件系统，不参与 Player Runtime。
-// 输入/输出：Application.dataPath -> 包含 .git 的仓库根绝对路径。
-// 生命周期：纯静态 helper；每次调用即时计算，不缓存开发机绝对路径。
-// 不负责：不执行 Git 命令、不创建目录、不决定具体资产输出文件名。
-using System;
-using System.IO;
-using UnityEngine;
-
-namespace BattleNavigation.Editor
-{
-    /// <summary>解析当前 Unity 工程所属 Git 仓库根目录。</summary>
-    public static class RepositoryPathResolver
-    {
-        /// <summary>
-        /// 从 Unity 工程根向父目录查找 .git；普通 clone 的 .git 是目录，
-        /// Git worktree 的 .git 是文本文件，两种形式都接受。
-        /// </summary>
-        /// <returns>规范化仓库根绝对路径。</returns>
-        /// <exception cref="InvalidOperationException">找不到 Git 根时抛出。</exception>
-        public static string ResolveRoot()
-        {
-            DirectoryInfo directory = new DirectoryInfo(Path.GetFullPath(Path.Combine(
-                Application.dataPath,
-                "..")));
-
-            while (directory != null)
-            {
-                string marker = Path.Combine(directory.FullName, ".git");
-                if (Directory.Exists(marker) || File.Exists(marker))
-                {
-                    return directory.FullName;
-                }
-                directory = directory.Parent;
-            }
-
-            throw new InvalidOperationException(
-                "REPOSITORY_ROOT_NOT_FOUND Unity 工程必须位于课程 Git 仓库中");
-        }
-    }
-}
-```
-
-[局部修改] `BattleMapExporter.cs`：把第一课私有 `ResolveRepositoryRoot()` 删除，并把：
-
-```csharp
-string repositoryRoot = ResolveRepositoryRoot();
-```
-
-改成：
-
-```csharp
-string repositoryRoot = RepositoryPathResolver.ResolveRoot();
-```
-
-这一改动不改变 BMAP 格式、输出路径或第一课行为，只去掉第二个真实调用者出现以后才暴露出来的重复基础设施。
-
----
+NavigationMapRoot.exportDirectory 是候选资产输出根。BMAP、AMAP 和 Manifest 必须由同一个候选发布流程写入 staging，校验通过后原子发布；不能由两个导出器分别覆盖正式文件。
 
 ### 20.3 `AirMapSnapshot`：Authoring 结果先冻结成纯数据，再写磁盘
 
@@ -2240,7 +2185,7 @@ string repositoryRoot = RepositoryPathResolver.ResolveRoot();
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapSnapshot.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/AirMapSnapshot.cs
 ```
 
 ```csharp
@@ -2251,7 +2196,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapSnapshot.cs
 // 不负责：不查 Scene、不计算 Bounds、不执行文件 I/O。
 using System;
 
-namespace BattleNavigation.Editor
+namespace FlyWow.Navigation.Editor
 {
     /// <summary>一次 AirMap 导出的内存快照；NoFly 使用 0/1 byte，索引为 z*width+x。</summary>
     public sealed class AirMapSnapshot
@@ -2279,7 +2224,7 @@ namespace BattleNavigation.Editor
 }
 ```
 
-为什么这里没有 `origin/cell_size`：AMAP V1 明确依赖同 `map_id/map_version` 的 BMAP 空间合同，不维护第二份可能漂移的空间元数据。Exporter 仍然通过同一个 `BattleMapRoot` 计算 Cell Center，所以 Authoring 过程中不会失去坐标信息。
+为什么这里没有 `origin/cell_size`：AMAP V1 明确依赖同 `map_id/map_version` 的 BMAP 空间合同，不维护第二份可能漂移的空间元数据。Exporter 仍然通过同一个 `NavigationMapRoot` 计算 Cell Center，所以 Authoring 过程中不会失去坐标信息。
 
 ---
 
@@ -2288,7 +2233,7 @@ namespace BattleNavigation.Editor
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapFormat.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/AirMapFormat.cs
 ```
 
 ```csharp
@@ -2297,7 +2242,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapFormat.cs
 // 输入/输出：无运行时输入；为 Writer/Test 提供固定 offset 和版本。
 // 生命周期：编译期常量；修改属于资产格式变更，不能静默替换。
 // 不负责：不执行采样、CRC、文件 I/O 或 Server 查询。
-namespace BattleNavigation.Editor
+namespace FlyWow.Navigation.Editor
 {
     public static class AirMapFormat
     {
@@ -2321,7 +2266,7 @@ AMAP 当前没有 Header CRC。原因不是 Header 不重要，而是 Header 只
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapWriter.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/AirMapWriter.cs
 ```
 
 学习导航：精读 Header offset、Payload 长度、CRC 和临时文件替换；可以略读目录创建。输入是已经校验的 `AirMapSnapshot`，输出正式 `.amap`；失败时不得留下半个正式资产。
@@ -2335,7 +2280,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapWriter.cs
 using System;
 using System.IO;
 
-namespace BattleNavigation.Editor
+namespace FlyWow.Navigation.Editor
 {
     public static class AirMapWriter
     {
@@ -2436,171 +2381,27 @@ namespace BattleNavigation.Editor
 
 ---
 
-### 20.6 `AirMapExporter.cs`：完整 Authoring → Snapshot → AMAP
+### 20.6 AirMap 进入同一候选资产发布流程
 
-前面的 `NoFlyVolume` 保留最小职责，但正式导出器要补齐唯一 `BattleMapRoot`、Bounds 采样、同版本目录、Manifest 和可观察日志。
-
-[完整替换前文简化示例为以下最终实现]
+[局部修改]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Editor/AirMapExporter.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/NavigationMapExporter.cs
+server/third_party/skynet-flywow/navigation/unity/Editor/NavigationAssetPublisher.cs
 ```
 
-```csharp
-// 职责：把当前 Battle Scene 的 NoFlyVolume 烘焙成与 BMAP 同身份的 AMAP V1。
-// 边界：Unity Editor Authoring/Asset；只在菜单命令中运行，不进入 Player Runtime。
-// 输入/输出：唯一 BattleMapRoot + NoFlyVolume[] -> shared/navigation/battle_<id>/battle_<id>.amap。
-// 生命周期：开发者显式执行；成功输出是待测试/提交的发布候选资产。
-// 不负责：不修改 BMAP、不运行 Server A*、不自动 Git 提交或热更新线上进程。
-using System;
-using System.IO;
-using UnityEditor;
-using UnityEngine;
-using BattleNavigation.Authoring;
+AirMapExporter 不再提供独立菜单，也不直接写 shared/navigation 下的正式文件。它只负责从当前唯一 NavigationMapRoot 和 NoFlyVolume[] 生成 AirMapSnapshot。NavigationMapExporter 在现有 Sample → Clearance → Validate 流程中取得这份快照，并与 BMAP Snapshot 一起检查 mapId、mapVersion、width、height。
 
-namespace BattleNavigation.Editor
-{
-    public static class AirMapExporter
-    {
-        // 最近一次成功 Bake 的内存快照，仅供当前 Editor Session Overlay/Test 使用。
-        public static AirMapSnapshot LastSnapshot { get; private set; }
+扩展 NavigationAssetPublisher，使其在一个私有 staging 目录中写出 map.bmap、map.amap 和同一份 Manifest。Manifest 的内容身份覆盖两份资产，并记录各自格式版本及校验信息；全部回读验证通过后，使用同文件系统目录 rename 提交候选。失败时清理 staging，不能留下只更新 BMAP 或只更新 AMAP 的半成品。为成功发布、损坏 AMAP、身份不匹配和写入失败分别补 Editor Test。
 
-        /// <summary>采样当前 Scene 的 NoFly Volume 并写出 AMAP；任一步失败均不替换正式资产。</summary>
-        [MenuItem("Tools/战斗导航/04 导出当前场景 AMAP", false, 104)]
-        public static void Export()
-        {
-            try
-            {
-                BattleMapRoot[] roots = UnityEngine.Object.FindObjectsByType<BattleMapRoot>(
-                    FindObjectsSortMode.None);
-                if (roots.Length != 1)
-                    throw new InvalidOperationException(
-                        "BATTLE_MAP_ROOT_COUNT expected=1 actual=" + roots.Length);
-
-                BattleMapRoot root = roots[0];
-                root.ValidateOrThrow();
-                NoFlyVolume[] volumes = UnityEngine.Object.FindObjectsByType<NoFlyVolume>(
-                    FindObjectsSortMode.None);
-
-                var snapshot = new AirMapSnapshot
-                {
-                    mapId = root.mapId,
-                    mapVersion = root.mapVersion,
-                    width = root.Width,
-                    height = root.Height,
-                    noFly = new byte[checked(root.Width * root.Height)],
-                };
-
-                // 每个 Cell 只采样 XZ。NoFlyVolume 的 Y 范围不代表 3D 体素；
-                // 本课模型明确是“这个 XZ 列是否允许飞入”。
-                for (int z = 0; z < snapshot.height; ++z)
-                {
-                    for (int x = 0; x < snapshot.width; ++x)
-                    {
-                        Vector3 center = root.GridToWorldCenter(x, z);
-                        snapshot.noFly[snapshot.IndexOf(x, z)] =
-                            IsNoFly(center, volumes) ? (byte)1 : (byte)0;
-                    }
-                }
-
-                string repositoryRoot = RepositoryPathResolver.ResolveRoot();
-                string outputDirectory = Path.Combine(
-                    repositoryRoot,
-                    "shared",
-                    "navigation",
-                    $"battle_{snapshot.mapId}");
-                string amapPath = Path.Combine(
-                    outputDirectory,
-                    $"battle_{snapshot.mapId}.amap");
-
-                AirMapWriter.Write(snapshot, amapPath);
-                WriteManifest(snapshot, amapPath);
-                LastSnapshot = snapshot;
-                SceneView.RepaintAll();
-
-                Debug.Log(
-                    $"AMAP_EXPORT_OK path={amapPath} map={snapshot.mapId} " +
-                    $"version={snapshot.mapVersion} size={snapshot.width}x{snapshot.height} " +
-                    $"nofly={CountNoFly(snapshot)}");
-            }
-            catch (Exception exception)
-            {
-                Debug.LogError("AMAP_EXPORT_FAILED " + exception);
-                throw;
-            }
-        }
-
-        /// <summary>
-        /// 判断 Cell Center 的 XZ 是否落入任意 NoFly Volume 的世界 Bounds。
-        /// Y 被故意忽略，因为本课不是 3D Voxel Navigation。
-        /// </summary>
-        private static bool IsNoFly(Vector3 center, NoFlyVolume[] volumes)
-        {
-            foreach (NoFlyVolume volume in volumes)
-            {
-                Bounds bounds = volume.WorldBounds;
-                if (center.x >= bounds.min.x && center.x <= bounds.max.x &&
-                    center.z >= bounds.min.z && center.z <= bounds.max.z)
-                    return true;
-            }
-            return false;
-        }
-
-        /// <summary>统计 NoFly Cell 数，仅用于 Manifest/日志；O(cell_count)，不修改 Snapshot。</summary>
-        private static int CountNoFly(AirMapSnapshot snapshot)
-        {
-            int count = 0;
-            foreach (byte value in snapshot.noFly)
-                if (value == 1) ++count;
-            return count;
-        }
-
-        /// <summary>写人类/CI 可读摘要；Server Runtime 不依赖该 JSON 做规则判断。</summary>
-        private static void WriteManifest(AirMapSnapshot snapshot, string amapPath)
-        {
-            byte[] file = File.ReadAllBytes(amapPath);
-            var manifest = new AirMapManifest
-            {
-                format_version = AirMapFormat.FormatVersion,
-                map_id = snapshot.mapId,
-                map_version = snapshot.mapVersion,
-                width = snapshot.width,
-                height = snapshot.height,
-                payload_crc32 = BMapLittleEndian.ReadU32(file, 28).ToString("X8"),
-                no_fly_cells = CountNoFly(snapshot),
-                flyable_cells = snapshot.CellCount - CountNoFly(snapshot),
-            };
-            File.WriteAllText(
-                amapPath + ".manifest.json",
-                JsonUtility.ToJson(manifest, true) + "\n");
-        }
-
-        [Serializable]
-        private sealed class AirMapManifest
-        {
-            public uint format_version;
-            public uint map_id;
-            public uint map_version;
-            public int width;
-            public int height;
-            public string payload_crc32 = string.Empty;
-            public int no_fly_cells;
-            public int flyable_cells;
-        }
-    }
-}
-```
-
-这里有一个刻意的限制：`NoFlyVolume` 的 Y 只用于 Scene 里方便美术/程序看盒子，导出时并不形成高度区间。这正是在资产层面把“2D Air Grid”边界写死，避免后续有人看到 BoxCollider 就误以为 Server 已支持 3D 空域。
-
----
+Server 配置只指向已验证并提交的候选目录中的 BMAP/AMAP；更新地图语义时递增共同 mapVersion，并重新生成整包，不覆盖正在使用的已发布目录。
 
 ### 20.7 Unity 侧 AMAP EditMode Test
 
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Tests/EditMode/AirMapBinaryTests.cs
+server/third_party/skynet-flywow/navigation/unity/Tests/Editor/AirMapBinaryTests.cs
 ```
 
 课程不需要测试 Unity 菜单 UI，本测试直接验证 Writer 的二进制合同和损坏路径。
@@ -2615,7 +2416,7 @@ using System;
 using System.IO;
 using NUnit.Framework;
 
-namespace BattleNavigation.Editor.Tests
+namespace FlyWow.Navigation.Tests
 {
     public sealed class AirMapBinaryTests
     {
@@ -2714,8 +2515,8 @@ namespace BattleNavigation.Editor.Tests
 [新建文件]
 
 ```text
-server/native/grid_map/include/air_map.h
-server/native/grid_map/src/air_map.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map.cpp
 ```
 
 公开合同保持很小：
@@ -2769,10 +2570,10 @@ Unity .amap 文件
 
 ```text
 AirMapExporter
-  -> battle_1001.amap
+  -> <已验证候选目录>/map.amap
   -> AirMapReader
   -> AirMapRegistry（进程级 immutable asset registry）
-  -> battle_nav.new_context()
+  -> navigation.new_context(map_id, map_version)
   -> Battle-local NavigationContext
   -> AirGridPathfinder
 ```
@@ -2780,16 +2581,16 @@ AirMapExporter
 新增文件控制在：
 
 ```text
-server/native/grid_map/include/air_map_format.h
-server/native/grid_map/include/air_map.h
-server/native/grid_map/include/air_map_reader.h
-server/native/grid_map/include/air_map_registry.h
-server/native/grid_map/include/air_grid_pathfinder.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_format.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_registry.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.h
 
-server/native/grid_map/src/air_map.cpp
-server/native/grid_map/src/air_map_reader.cpp
-server/native/grid_map/src/air_map_registry.cpp
-server/native/grid_map/src/air_grid_pathfinder.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_registry.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.cpp
 ```
 
 没有创建新的 Skynet `AirMapService`。静态地图仍然是 Native immutable asset，不需要把每次 Air Query 代理成 Service RPC。
@@ -2837,8 +2638,8 @@ height
 [新建文件]
 
 ```text
-server/native/grid_map/include/air_map_reader.h
-server/native/grid_map/src/air_map_reader.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.cpp
 ```
 
 公开接口只需要：
@@ -2933,18 +2734,18 @@ AirMap 自己 immutable
 这里真正需要理解的 Skynet/Native 关系是：
 
 ```text
-BattleWorker #1 Lua State -> require battle_nav
-BattleWorker #2 Lua State -> require battle_nav
-BattleWorker #3 Lua State -> require battle_nav
+BattleWorker #1 Lua State -> require flywow_navigation
+BattleWorker #2 Lua State -> require flywow_navigation
+BattleWorker #3 Lua State -> require flywow_navigation
 
                  ↓ 同一个 Battle Process
 
-         lua_battle_nav.so process image
+         flywow_navigation_native.so process image
                  ↓
-        C++ static AirMapRegistry
+        C++ static MapRegistry / AirMapRegistry / AgentProfileRegistry
 ```
 
-每个 Skynet Service 有独立 Lua State，不代表同一个进程里动态库的 C++ process-global static 会自动复制一份。于是 Registry 必须线程安全，而其中返回的地图必须 immutable。
+每个 Skynet Service 有独立 Lua State，不代表同一个进程里动态库的 C++ process-global static 会自动复制一份。Map、AirMap 和 Profile Registry 都是进程级只读资产；启动时完成注册，运行期只读。Registry 的注册与查找必须线程安全，返回的资产必须 immutable。`load_profiles(config.profiles)` 在 `navigation_query.start()` 执行一次；各 BattleWorker 只用 `new_context(map_id, map_version)` 创建自己的 Context 和 scratch，不再重复传入 Profile 表。
 
 这正好和每场 Battle 私有的：
 
@@ -2962,8 +2763,8 @@ DynamicOccupancy
 [局部修改]
 
 ```text
-server/native/grid_map/include/navigation_context.h
-server/native/grid_map/src/navigation_context.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/navigation_context.h
+server/third_party/skynet-flywow/navigation/native/grid_map/navigation_context.cpp
 ```
 
 保持第二课构造调用兼容，可以增加 optional AirMap：
@@ -3003,13 +2804,13 @@ Air Query    -> Air Scratch
 [局部修改]
 
 ```text
-server/native/lua_battle_nav/src/lua_battle_nav.cpp
+server/third_party/skynet-flywow/navigation/native/navigation_binding.cpp
 ```
 
 模块增加：
 
 ```lua
-battle_nav.load_air_map(path)
+navigation.load_air_map(path)
 ```
 
 合同和 `load_map(path)` 一致：
@@ -3023,7 +2824,7 @@ battle_nav.load_air_map(path)
 `l_new_context()` 仍然保持第二课公开 Lua 调用：
 
 ```lua
-battle_nav.new_context(map_id, map_version, profiles)
+navigation.new_context(map_id, map_version)
 ```
 
 内部改成：
@@ -3051,17 +2852,17 @@ advance_air_path
 [局部修改]
 
 ```text
-server/config/game.lua
+server/config/battle.lua
 ```
 
-地图配置扩展：
+在现有 config.battle 的 map table 中追加 AMAP 路径；保留 profiles、cluster 和 Runtime 字段。发布新 AMAP 时，先生成并验证一套新的 BMAP/AMAP/Manifest 候选包，再把 map table 一次切换到该候选；不要将新 AMAP 与当前旧版 BMAP 混用：
 
 ```lua
 map = {
     id = 1001,
-    version = 1,
-    bmap = "../shared/navigation/battle_1001/battle_1001.bmap",
-    amap = "../shared/navigation/battle_1001/battle_1001.amap",
+    version = 2, -- 示例：新候选的 BMAP 和 AMAP 必须使用同一 map_version。
+    bmap = "../shared/navigation/<已验证候选目录>/map.bmap",
+    amap = "../shared/navigation/<已验证候选目录>/map.amap",
 },
 ```
 
@@ -3074,10 +2875,13 @@ server/lualib/battle/navigation/query_logic.lua
 启动顺序：
 
 ```lua
-local ground, ground_error = battle_nav.load_map(config.map.bmap)
+local profiles_loaded, profiles_error = navigation.load_profiles(config.profiles)
+assert(profiles_loaded, profiles_error and profiles_error.message or "load_profiles failed")
+
+local ground, ground_error = navigation.load_map(config.map.bmap)
 assert(ground, ground_error and ground_error.message or "load BMAP failed")
 
-local air, air_error = battle_nav.load_air_map(config.map.amap)
+local air, air_error = navigation.load_air_map(config.map.amap)
 assert(air, air_error and air_error.message or "load AMAP failed")
 
 assert(ground.map_id == air.map_id and
@@ -3113,8 +2917,8 @@ Battle create
 第一课 `bmap_reader.cpp` 内部有私有 Little Endian 与 CRC helper。第三课 `AirMapReader` 成为第二个真实二进制读取者，此时复制一套会增加格式漂移风险，因此现在才提取：
 
 ```text
-server/native/grid_map/include/binary_asset_codec.h
-server/native/grid_map/src/binary_asset_codec.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/binary_asset_codec.h
+server/third_party/skynet-flywow/navigation/native/grid_map/binary_asset_codec.cpp
 ```
 
 它不是“通用序列化框架”，只包含当前两个 Reader 都真实需要的：
@@ -3140,7 +2944,7 @@ Crc32IsoHdlc
 #include <cstddef>
 #include <cstdint>
 
-namespace battle_nav {
+namespace flywow_navigation {
 namespace binary_asset {
 
 std::uint16_t ReadU16Le(const std::uint8_t* bytes) noexcept;
@@ -3152,7 +2956,7 @@ std::uint32_t Crc32IsoHdlc(
     std::size_t size) noexcept;
 
 } // namespace binary_asset
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 [新建文件] `binary_asset_codec.cpp`
@@ -3165,7 +2969,7 @@ std::uint32_t Crc32IsoHdlc(
 // 不负责：不处理文件、错误码、地图身份或业务规则。
 #include "binary_asset_codec.h"
 
-namespace battle_nav {
+namespace flywow_navigation {
 namespace binary_asset {
 
 std::uint16_t ReadU16Le(const std::uint8_t* bytes) noexcept {
@@ -3207,7 +3011,7 @@ std::uint32_t Crc32IsoHdlc(
 }
 
 } // namespace binary_asset
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 [局部修改] `bmap_reader.cpp`：删除文件内重复的 `ReadU16Le/ReadU32Le/ReadI32Le/WriteU32Le/Crc32`，include `binary_asset_codec.h`，其余 BMAP 流程不改。这个重构必须先跑第一课 BMAP corruption regression，证明第三课没有破坏旧资产读取。
@@ -3216,7 +3020,7 @@ std::uint32_t Crc32IsoHdlc(
 
 ### 21.3.2 `air_map_format.h` 与 `air_map.h/.cpp` 完整代码
 
-[新建文件] `server/native/grid_map/include/air_map_format.h`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map_format.h`
 
 ```cpp
 // 职责：声明 AMAP V1 的固定二进制格式常量。
@@ -3229,16 +3033,16 @@ std::uint32_t Crc32IsoHdlc(
 #include <cstddef>
 #include <cstdint>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 constexpr std::uint16_t kAirMapFormatVersion = 1;
 constexpr std::size_t kAirMapHeaderSize = 32;
 constexpr std::size_t kAirMapPayloadCrcOffset = 28;
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
-[新建文件] `server/native/grid_map/include/air_map.h`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map.h`
 
 ```cpp
 // 职责：保存一张与 Ground Grid 同尺寸的 immutable NoFly overlay。
@@ -3254,7 +3058,7 @@ constexpr std::size_t kAirMapPayloadCrcOffset = 28;
 #include <cstdint>
 #include <vector>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 class AirMap final {
 public:
@@ -3286,10 +3090,10 @@ private:
     const std::vector<std::uint8_t> no_fly_;
 };
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
-[新建文件] `server/native/grid_map/src/air_map.cpp`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map.cpp`
 
 ```cpp
 // 职责：实现 AirMap 构造不变量和 O(1) NoFly 查询。
@@ -3302,7 +3106,7 @@ private:
 #include <stdexcept>
 #include <utility>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 AirMap::AirMap(
     std::uint32_t map_id,
@@ -3348,14 +3152,14 @@ std::size_t AirMap::IndexOf(const GridPos& grid) const noexcept {
         static_cast<std::size_t>(grid.x);
 }
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 ---
 
 ### 21.3.3 `AirMapReader` 完整实现
 
-[新建文件] `server/native/grid_map/include/air_map_reader.h`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.h`
 
 ```cpp
 // 职责：读取并完整校验 AMAP V1，成功后创建 immutable AirMap。
@@ -3371,7 +3175,7 @@ std::size_t AirMap::IndexOf(const GridPos& grid) const noexcept {
 #include <memory>
 #include <string>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 class AirMapReader final {
 public:
@@ -3379,10 +3183,10 @@ public:
         const std::string& path);
 };
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
-[新建文件] `server/native/grid_map/src/air_map_reader.cpp`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map_reader.cpp`
 
 ```cpp
 // 职责：逐字段读取 AMAP V1，验证尺寸/CRC/Cell 值后创建 AirMap。
@@ -3401,7 +3205,7 @@ public:
 #include <utility>
 #include <vector>
 
-namespace battle_nav {
+namespace flywow_navigation {
 namespace {
 
 std::string SizeDetail(std::uint64_t expected, std::uint64_t actual) {
@@ -3529,14 +3333,14 @@ NavResult<std::shared_ptr<const AirMap>> AirMapReader::Read(
     }
 }
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 ---
 
 ### 21.4.1 `AirMapRegistry` 完整代码
 
-[新建文件] `server/native/grid_map/include/air_map_registry.h`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map_registry.h`
 
 ```cpp
 // 职责：按 map_id/map_version 注册和查找已经校验的 immutable AirMap。
@@ -3556,7 +3360,7 @@ NavResult<std::shared_ptr<const AirMap>> AirMapReader::Read(
 #include <string>
 #include <unordered_map>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 class AirMapRegistry final {
 public:
@@ -3589,10 +3393,10 @@ private:
     std::unordered_map<Key, std::shared_ptr<const AirMap>, KeyHash> maps_;
 };
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
-[新建文件] `server/native/grid_map/src/air_map_registry.cpp`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_map_registry.cpp`
 
 ```cpp
 // 职责：实现 AirMap 的加载、重复键拒绝、冻结和线程安全查找。
@@ -3605,7 +3409,7 @@ private:
 #include <sstream>
 #include <utility>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 AirMapRegistry& AirMapRegistry::Instance() {
     static AirMapRegistry registry;
@@ -3657,7 +3461,7 @@ std::size_t AirMapRegistry::map_count() const {
     return maps_.size();
 }
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 注意：Ground/AMAP 使用相同 `kDuplicateMap/kMapNotFound` 稳定错误码是可以的，调用边界通过 detail 和调用 API 知道是哪种资产。这里不为了一个课程 sidecar 把 NavError 扩成几十个“AirXXX”枚举；真正需要跨协议区分时再增加稳定码。
@@ -3770,8 +3574,8 @@ NavigationContext::NodeScratch& NavigationContext::TouchAirNode(
 [新建文件]
 
 ```text
-server/native/grid_map/include/air_grid_pathfinder.h
-server/native/grid_map/src/air_grid_pathfinder.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.cpp
 ```
 
 它解决：
@@ -3881,7 +3685,7 @@ Air advance 不提交 Ground DynamicOccupancy，只验证下一 XZ 子步没有�
 在现有统一：
 
 ```text
-server/native/grid_map/tests/navigation_test.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/tests/navigation_test.cpp
 ```
 
 增加：
@@ -3908,7 +3712,7 @@ ALL_TESTS_OK
 
 ### 22.5 `AirGridPathfinder` 的完整公开合同
 
-[新建文件] `server/native/grid_map/include/air_grid_pathfinder.h`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.h`
 
 ```cpp
 // 职责：在 AMAP NoFly 约束下执行二维 Air Grid A*，返回业务 WorldPosition Path。
@@ -3924,7 +3728,7 @@ ALL_TESTS_OK
 
 #include <cstdint>
 
-namespace battle_nav {
+namespace flywow_navigation {
 
 struct AirMoveProfile {
     std::int32_t flight_height_mm = 2500;      // 相对 BMAP 地表的目标离地高度。
@@ -3943,7 +3747,7 @@ public:
         const AirMoveProfile& profile);
 };
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 `max_height_delta_mm` 是当前课程对“爬升/下降限制”的最小表达：它限制相邻 XZ Cell 所需跟随的地表高度变化。如果以后要做真实飞行速度学，才把垂直速度、加速度、独立 Y 轨迹提升为完整运动系统；本课不把 2D Air Grid 偷偷升级成 3D Navigation。
@@ -3964,7 +3768,7 @@ InterpolateAxis
 [新建文件]
 
 ```text
-server/native/grid_map/include/navigation_math.h
+server/third_party/skynet-flywow/navigation/native/grid_map/navigation_math.h
 ```
 
 ```cpp
@@ -3980,7 +3784,7 @@ server/native/grid_map/include/navigation_math.h
 #include <cstdint>
 #include <limits>
 
-namespace battle_nav {
+namespace flywow_navigation {
 namespace navigation_math {
 
 // 返回非负 uint64 的整数平方根，结果向下取整。
@@ -4062,8 +3866,8 @@ inline bool InterpolateAxis(
     return true;
 }
 
-} // namespace navigation_math
-} // namespace battle_nav
+} // namespace flywow_navigation_math
+} // namespace flywow_navigation
 ```
 
 [局部修改] 第二课已有 `grid_pathfinder.cpp`：删除它匿名 namespace 中重复的 `InterpolateAxis/SegmentLengthMm` 私有实现，加入：
@@ -4094,7 +3898,7 @@ Air `air_grid_pathfinder.cpp` 同样加入 `navigation_math.h`，后面的 Build
 
 这段代码故意和第二课 Ground A* 的工程纪律一致：Binary Heap、generation stamp、稳定 tie-break、禁止 corner cutting。算法概念不重复讲，但完整代码必须落地，否则“Air Grid”只是架构图。
 
-[新建文件] `server/native/grid_map/src/air_grid_pathfinder.cpp`
+[新建文件] `server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.cpp`
 
 ```cpp
 // 职责：实现 NoFly + 高度差约束的 8-way Air Grid A*。
@@ -4111,7 +3915,7 @@ Air `air_grid_pathfinder.cpp` 同样加入 `navigation_math.h`，后面的 Build
 #include <limits>
 #include <vector>
 
-namespace battle_nav {
+namespace flywow_navigation {
 namespace {
 
 constexpr std::uint64_t kStraightCost = 1000;
@@ -4418,194 +4222,86 @@ NavResult<Path> AirGridPathfinder::FindPath(
         NavError::kNoPath, "No Air path under current NoFly/height rules");
 }
 
-} // namespace battle_nav
+} // namespace flywow_navigation
 ```
 
 这里没有 path smoothing。原因是第三课 Air Grid 的目标是先验证 NoFly/高度/Server 权威链；Ground smoothing 已在第二课完整学习。等 Air Path 在 benchmark 中证明路点过多确实值得优化时，可以复用相同 Supercover 思路增加 Air line-of-sight，但必须重新验证所有跨过 Cell 的 NoFly 与高度约束，不能简单删中间点。
 
 ---
 
-### 22.7 Lua Binding：把 Air 资产和查询真正接到现有 `battle_nav` 模块
+### 22.7 Lua Binding：把 Air 资产和查询接到现有 flywow_navigation 模块
 
-不要新建 `battle_air_nav.so`。Ground/Air 都属于同一 Battle Navigation Native 模块，且共享相同 GridMap/WorldPosition/Path 合同。
+[局部修改]
 
-在 `lua_battle_nav.cpp` 增加 include：
-
-```cpp
-#include "air_grid_pathfinder.h"
-#include "air_map_registry.h"
+```text
+server/third_party/skynet-flywow/navigation/native/navigation_binding.cpp
+server/third_party/skynet-flywow/navigation/lualib/flywow_navigation.lua
 ```
 
-新增启动阶段 loader：
+Lua 调用方继续使用 FlyWow 公开入口：
 
-```cpp
-// Lua battle_nav.load_air_map(path)：启动阶段读取/校验并注册一份 AMAP。
-// 成功返回 {map_id,map_version,width,height}；失败返回 nil,error；执行文件 I/O，不 yield。
-int l_load_air_map(lua_State* L) {
-    const char* path = luaL_checkstring(L, 1);
-    const auto loaded = battle_nav::AirMapRegistry::Instance().Load(path);
-    if (!loaded.ok()) {
-        push_error(L, battle_nav::NavErrorName(loaded.error), loaded.detail);
-        return 2;
-    }
-    lua_newtable(L);
-    lua_pushinteger(L, loaded.value->map_id()); lua_setfield(L, -2, "map_id");
-    lua_pushinteger(L, loaded.value->map_version()); lua_setfield(L, -2, "map_version");
-    lua_pushinteger(L, loaded.value->width()); lua_setfield(L, -2, "width");
-    lua_pushinteger(L, loaded.value->height()); lua_setfield(L, -2, "height");
-    return 1;
-}
+```lua
+local navigation = require "flywow_navigation"
 ```
 
-`l_new_context()` 在找到 Ground map 后尝试同 key AirMap：
+Native 在同一模块中扩展 load_air_map(path)、new_context(map_id, map_version) 和 Context 的 Air 查询方法。沿用现有 LuaBinding/LuaTable 约定：参数读取失败及领域错误统一返回 nil, { code = ..., message = ... }；公开 Binding API 不新增 luaL_check* 或 luaL_error。
 
-```cpp
-const auto air_found = battle_nav::AirMapRegistry::Instance().Find(map_id, map_version);
-std::shared_ptr<const battle_nav::AirMap> air_map;
-if (air_found.ok()) {
-    air_map = air_found.value;
-} else if (air_found.error != battle_nav::NavError::kMapNotFound) {
-    return push_nav_failure(L, air_found.error, air_found.detail);
-}
+load_air_map 在 Battle Process 启动阶段读取并注册 immutable AMAP，返回实际 map_id、map_version、width、height。new_context 通过进程级 MapRegistry 与 AirMapRegistry 查找资产：找不到 AMAP 时允许 Ground-only Context；找到时校验身份和尺寸，再把 shared_ptr<const AirMap> 传入 Context。Ground/Air scratch 仍由每个 Context 独占。
 
-try {
-    owner->context.reset(new battle_nav::NavigationContext(
-        found.value,
-        std::move(air_map)));
-} catch (const std::exception& exception) {
-    return push_nav_failure(
-        L, battle_nav::NavError::kInvalidArgument, exception.what());
-}
-```
-
-`find_air_path` Binding：
-
-```cpp
-// Lua context:find_air_path(start_world,end_world,flight_height_mm,max_height_delta_mm)
-// 返回与 Ground 完全相同的 Path userdata；同步 Native 调用，不 I/O、不 yield。
-int l_context_find_air_path(lua_State* L) {
-    LuaNavigationContext* owner = check_context(L, 1);
-    if (owner == nullptr) {
-        return push_nav_failure(
-            L, battle_nav::NavError::kContextClosed, "context is closed");
-    }
-    const auto start = world_position(L, 2);
-    const auto end = world_position(L, 3);
-    const lua_Integer raw_height = luaL_checkinteger(L, 4);
-    const lua_Integer raw_delta = luaL_checkinteger(L, 5);
-    if (raw_height <= 0 || raw_height > std::numeric_limits<std::int32_t>::max() ||
-        raw_delta < 0 || raw_delta > std::numeric_limits<std::int32_t>::max()) {
-        return luaL_error(L, "invalid air movement profile");
-    }
-
-    const battle_nav::AirMoveProfile profile{
-        static_cast<std::int32_t>(raw_height),
-        static_cast<std::int32_t>(raw_delta),
-    };
-    try {
-        auto path = battle_nav::AirGridPathfinder::FindPath(
-            *owner->context, start, end, profile);
-        if (!path.ok()) return push_nav_failure(L, path.error, path.detail);
-        push_path(L, std::move(path.value));
-        return 1;
-    } catch (const std::exception& exception) {
-        return push_nav_failure(
-            L, battle_nav::NavError::kInternalError, exception.what());
-    }
-}
-```
-
-`normalize_ground_position`：
-
-```cpp
-// Lua context:normalize_ground_position(world)：只做 XZ 归格和权威地表 Y 查询。
-// 不检查 walkable/occupancy，不移动任何 Unit；用于 FireWall 等地面落点规范化。
-int l_context_normalize_ground_position(lua_State* L) {
-    LuaNavigationContext* owner = check_context(L, 1);
-    if (owner == nullptr) {
-        return push_nav_failure(
-            L, battle_nav::NavError::kContextClosed, "context is closed");
-    }
-    const auto input = world_position(L, 2);
-    const auto grid = owner->context->map()->WorldToGrid(input);
-    if (!grid.ok()) return push_nav_failure(L, grid.error, grid.detail);
-    auto world = owner->context->map()->GridToWorldCenter(grid.value);
-    if (!world.ok()) return push_nav_failure(L, world.error, world.detail);
-    world.value.x_mm = input.x_mm;
-    world.value.z_mm = input.z_mm;
-    push_world_position(L, world.value);
-    return 1;
-}
-```
-
-注册：
-
-```cpp
-lua_pushcfunction(L, l_context_find_air_path);
-lua_setfield(L, -2, "find_air_path");
-lua_pushcfunction(L, l_context_normalize_ground_position);
-lua_setfield(L, -2, "normalize_ground_position");
-```
-
-模块 table：
-
-```cpp
-lua_pushcfunction(L, l_load_air_map);
-lua_setfield(L, -2, "load_air_map");
-```
-
-注意：本节先把 **Air Path 查询**完整跑通，`advance_air_path` 的按 Tick 跟随可以在第 37 节 FlyingEnemy 真实需要移动时再加。不要在没有 Battle 调用者之前把所有未来 API 一次性塞进 Binding。
-
----
+注册入口时沿用 module.setFunction(...) 与 registerContext(...) 模式；闭包捕获进程级 Registry 地址，不捕获 Lua State 私有 Context。同步更新 FlyWow Wrapper 的 LuaDoc，说明失败 record、ownership 和同步不 yield 合同。
 
 ### 22.8 Server 启动时怎样保证 BMAP/AMAP 是同一个发布版本
 
-[局部修改] `server/config/game.lua`：
+[局部修改] server/config/battle.lua：该文件已有 map、profiles、cluster 和 Battle Runtime 配置。只在现有 map table 中同步更新版本和 BMAP/AMAP 路径；下方是 map 字段片段，不要替换整个 return table。
 
 ```lua
-return {
-    map = {
-        id = 1001,
-        version = 2, -- 本次加入 NoFly 后，如果发布资产语义变化应显式递增。
-        bmap = "../shared/navigation/battle_1001/battle_1001.bmap",
-        amap = "../shared/navigation/battle_1001/battle_1001.amap",
-    },
-}
+map = {
+    id = 1001,
+    version = 2, -- 本次发布将 BMAP 与 AMAP 统一到版本 2；先重导出整包并校验 Manifest。
+    bmap = "../shared/navigation/<已验证候选目录>/map.bmap",
+    amap = "../shared/navigation/<已验证候选目录>/map.amap",
+},
 ```
 
-[局部修改] `server/lualib/battle/navigation/query_logic.lua` 的 `start(options)`：BMAP 仍由现有 `load_map` 加载，随后加载 AMAP，并逐字段核对身份：
+只有当 BMAP、AMAP、Manifest 都通过验证并进入同一个已提交候选目录后，才把配置切到该目录。旧版 battle_1001.bmap 不能与新版本 AMAP 混用。
+
+[局部修改] server/lualib/battle/navigation/query_logic.lua 的 start(options)：先加载 Profile，再加载 BMAP 和 AMAP，并逐字段核对身份：
 
 ```lua
-local loaded_air, air_error = battle_nav.load_air_map(config.map.amap)
+local profiles_loaded, profiles_error = navigation.load_profiles(config.profiles)
+assert(profiles_loaded,
+       profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
+       "load_profiles failed")
+
+local ground, ground_error = navigation.load_map(config.map.bmap)
+assert(ground,
+       ground_error and (ground_error.code .. ": " .. ground_error.message) or
+       "load_map failed")
+assert(ground.map_id == config.map.id, "BMAP map_id does not match config")
+assert(ground.map_version == config.map.version,
+       "BMAP map_version does not match config")
+
+local loaded_air, air_error = navigation.load_air_map(config.map.amap)
 assert(loaded_air,
        air_error and (air_error.code .. ": " .. air_error.message) or
        "load_air_map failed")
 assert(loaded_air.map_id == config.map.id, "AMAP map_id does not match config")
 assert(loaded_air.map_version == config.map.version,
        "AMAP map_version does not match config")
+assert(ground.width == loaded_air.width and ground.height == loaded_air.height,
+       "BMAP/AMAP dimensions mismatch")
 ```
 
-为什么仍然让 `navigation_query` 在启动阶段负责加载两份 static asset：当前 Battle Process 已经有这个真实启动链，它加载后写入的是 **进程级 Native Registry**。BattleWorker 自己不重新读磁盘；后续 `new_context()` 只是取得 shared_ptr 并分配 battle-local scratch。
+navigation_query 在启动阶段加载 Profile 与两份静态资产；Worker 不重新读磁盘。进程级 Native Registry 持有不可变资产，new_context(map_id, map_version) 取得共享资产并创建 Battle-local scratch/occupancy。
 
-故障注入必须实际做：
-
-```text
-把 AMAP map_version 改成旧值 -> Battle Process 启动失败
-删掉 AMAP -> 启动失败
-破坏 AMAP payload -> CRC 失败
-只替换 BMAP 不替换 AMAP -> 版本/尺寸不一致时拒绝
-```
-
-这才证明“BMAP + AMAP 同版本发布”不是文档口号。
-
----
+故障检查覆盖：AMAP 缺失、payload CRC 错、map_id/map_version 不匹配、宽高不一致，以及 BMAP/AMAP 只更新一份。每种情况都应在 Battle Process ready 前明确失败。
 
 ### 22.9 Native AirMap/A* 回归测试：在现有 navigation_test 中补齐关键 Case
 
 继续放进现有：
 
 ```text
-server/native/grid_map/tests/navigation_test.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/tests/navigation_test.cpp
 ```
 
 不要另造 `air_test.cpp`。下面给出建议 helper 和关键 case，具体测试宏继续使用仓库现有风格。
@@ -4613,7 +4309,7 @@ server/native/grid_map/tests/navigation_test.cpp
 ```cpp
 // 构造一个与现有 Golden Grid 同尺寸的 AirMap；nofly_cells 使用 z*width+x 下标。
 // 返回 immutable shared_ptr，测试拥有 shared_ptr 生命周期；不执行 I/O。
-std::shared_ptr<const battle_nav::AirMap> MakeAirMap(
+std::shared_ptr<const flywow_navigation::AirMap> MakeAirMap(
     std::uint32_t map_id,
     std::uint32_t map_version,
     std::uint32_t width,
@@ -4625,7 +4321,7 @@ std::shared_ptr<const battle_nav::AirMap> MakeAirMap(
         if (index >= values.size()) throw std::runtime_error("test nofly index out of range");
         values[index] = 1;
     }
-    return std::make_shared<const battle_nav::AirMap>(
+    return std::make_shared<const flywow_navigation::AirMap>(
         map_id, map_version, width, height, std::move(values));
 }
 
@@ -4638,9 +4334,9 @@ void TestAirFliesAcrossGroundBlocked() {
         ground->metadata().width,
         ground->metadata().height,
         {});
-    battle_nav::NavigationContext context(ground, air);
-    battle_nav::AirMoveProfile profile{2500, 5000};
-    auto path = battle_nav::AirGridPathfinder::FindPath(
+    flywow_navigation::NavigationContext context(ground, air);
+    flywow_navigation::AirMoveProfile profile{2500, 5000};
+    auto path = flywow_navigation::AirGridPathfinder::FindPath(
         context,
         WorldAt(*ground, 1, 1),
         WorldAt(*ground, 6, 1),
@@ -4655,13 +4351,13 @@ void TestAirNoFlyCornerCutting() {
     auto air = MakeAirMap(ground->metadata().map_id,
                           ground->metadata().map_version, 4, 4,
                           {1, 4}); // (1,0) 和 (0,1) blocked。
-    battle_nav::NavigationContext context(ground, air);
-    battle_nav::AirMoveProfile profile{2500, 5000};
-    auto path = battle_nav::AirGridPathfinder::FindPath(
+    flywow_navigation::NavigationContext context(ground, air);
+    flywow_navigation::AirMoveProfile profile{2500, 5000};
+    auto path = flywow_navigation::AirGridPathfinder::FindPath(
         context, WorldAt(*ground, 0, 0), WorldAt(*ground, 1, 1), profile);
     CHECK(!path.ok());
-    CHECK(path.error == battle_nav::NavError::kNoPath ||
-          path.error == battle_nav::NavError::kEndNotNavigable);
+    CHECK(path.error == flywow_navigation::NavError::kNoPath ||
+          path.error == flywow_navigation::NavError::kEndNotNavigable);
 }
 
 // Ground/Air 使用独立 generation/heap；交替查询不能污染结果。
@@ -4672,7 +4368,7 @@ void TestGroundAirScratchIsolation() {
                           ground->metadata().width,
                           ground->metadata().height,
                           {});
-    battle_nav::NavigationContext context(ground, air);
+    flywow_navigation::NavigationContext context(ground, air);
     const auto ground_before = RunKnownGroundPath(context);
     const auto air_path = RunKnownAirPath(context);
     const auto ground_after = RunKnownGroundPath(context);
@@ -6353,9 +6049,9 @@ AI 仍然遵守：
 [局部修改]
 
 ```text
-server/native/grid_map/include/air_grid_pathfinder.h
-server/native/grid_map/src/air_grid_pathfinder.cpp
-server/native/lua_battle_nav/src/lua_battle_nav.cpp
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.h
+server/third_party/skynet-flywow/navigation/native/grid_map/air_grid_pathfinder.cpp
+server/third_party/skynet-flywow/navigation/native/navigation_binding.cpp
 ```
 
 在 `AirGridPathfinder` 增加：
@@ -8295,7 +7991,7 @@ Ground BMAP: map_id=1001, map_version=N
 Air AMAP:    map_id=1001, map_version=N
 ```
 
-`battle_nav.new_context(map_id, map_version, profiles)` 会用同一个 `map_id` 分别从 Ground Registry 与 Air Registry 取资产；因此 Snapshot 只需要额外保存 `air_map_version` 用于确定性身份和显式校验。
+`navigation.new_context(map_id, map_version)` 会用同一个 `map_id` 分别从 Ground Registry 与 Air Registry 取资产；因此 Snapshot 只需要额外保存 `air_map_version` 用于确定性身份和显式校验。
 
 上面的 `battle_core.create()` 完整累计版已经在创建任何 Unit/Occupancy 之前执行：
 
@@ -8349,18 +8045,7 @@ Gateway 仍只承载传输和协议；Battle Worker 产生权威 Event/Snapshot�
 
 Gateway 回包关联遵守 D039：请求携带由可信 Gateway 提供的 `gateway_epoch`、数字 `connection_id`、`command_id` 和 `request_id`；Proxy 保留有限期的返回路由，Battle 回包仍是独立消息。`gateway_epoch + connection_id` 标识当前传输连接，`command_id + request_id` 关联一次协议请求。它们都不是玩家身份或 Battle 身份；不要把连接号改成拼接字符串，也不要让 Battle 保存 Gateway fd。
 
-[局部修改] `server/service/gateway/gateway_proxy.lua` 转发请求时，保留并校验 D039 的四个传输字段；不要创建 `route_token`、等待协程或同步业务调用。
-
-```lua
--- [历史示例：不要复制] 本段采用旧 route_epoch/route_token 方案，现已被 D039 取代。
--- 这里仅封装传输身份，不解释 battle_id、玩家归属或技能。
-assert(math.type(payload.connection_id) == "integer" and payload.connection_id > 0,
-       "FlyWow connection_id is required")
-forwarded.connection_id = route_epoch .. ":" .. tostring(payload.connection_id)
-assert(#forwarded.connection_id <= 128, "transport session identity too long")
-```
-
-> **注意：上方的 `route_epoch/route_token` 代码片段是旧方案，不能照抄，现已由 D039 合同取代。**当前应透传 `gateway_epoch`、数字 `connection_id`、`command_id`、`request_id`，并由 Proxy 以有限返回路由关联独立响应消息；不等待原请求协程，也不把传输字段当作 Battle 身份。`resume_token`（若启用恢复）是 Battle 短期凭据，不能与传输字段混用。
+[局部修改] `server/service/gateway/gateway_proxy.lua`：沿用当前 D039 Proxy 合同。保留并校验 Gateway 提供的 gateway_epoch、数字 connection_id、command_id、request_id，由 Proxy 的有限返回路由关联独立响应消息；不创建旧版 route_epoch/route_token，不等待原请求协程。
 
 当前请求转发只需保留 Gateway 已提供的关联字段（`forwarded` 是 Proxy 构造的请求 record）：
 
@@ -9610,7 +9295,7 @@ WorldPosition
 [局部修改]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Client/BattleReplayPlayer.cs
+unity/BattleNavigation/Assets/BattleNavigation/client/BattleReplayPlayer.cs
 ```
 
 核心改法不是重写表现逻辑，而是把“输入 DTO”换成生成的 Proto：
@@ -10780,7 +10465,7 @@ namespace BattleNavigation.Client
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Client/InteractiveBattleController.cs
+unity/BattleNavigation/Assets/BattleNavigation/client/InteractiveBattleController.cs
 ```
 
 第三课不要在 `Update()` 里直接同步 Socket I/O。最小结构是：
@@ -11223,7 +10908,7 @@ finished 后最多保留 finished_retention_cs -> Runtime 自动回收
 [新建文件]
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Client/InteractiveBattleView.cs
+unity/BattleNavigation/Assets/BattleNavigation/client/InteractiveBattleView.cs
 ```
 
 ```csharp
@@ -11502,7 +11187,7 @@ BATTLE_END
 建议新建：
 
 ```text
-unity/BattleNavigation/Assets/BattleNavigation/Client/InteractiveBattleView.cs
+unity/BattleNavigation/Assets/BattleNavigation/client/InteractiveBattleView.cs
 ```
 
 它只保存：
@@ -12464,54 +12149,35 @@ focused test
 
 ## 65. Native 构建
 
-第二课已有：
-
-```bash
-cd server/native/grid_map
-./make_test.sh
-```
-
-第三课 AirMap/AirPathfinder 加进同一个 CMake target 和 `navigation_test`。
-
-期望：
+Navigation Native 源码位于：
 
 ```text
-ALL_TESTS_OK
+server/third_party/skynet-flywow/navigation/native/
 ```
 
-再：
+不要在课程仓库创建 server/native 副本。新增 AirMap/AirPathfinder 文件时，更新 FlyWow Navigation 的 CMake：
+
+```text
+server/third_party/skynet-flywow/navigation/native/grid_map/CMakeLists.txt
+server/third_party/skynet-flywow/navigation/native/CMakeLists.txt
+```
+
+从 server/ 唯一公开构建入口运行：
 
 ```bash
-cd server/native/lua_battle_nav
-./make.sh
+./scripts/linux/run_server.sh build
 ```
 
-### 65.1 CMake 最终要增加哪些 Native 文件
+该入口调用 FlyWow 统一构建脚本，构建 Navigation Native、运行对应 CTest，并检查 third_party/skynet-flywow/build/native/flywow_navigation_native.so。不要运行旧的 server/native/grid_map/make_test.sh、server/native/lua_battle_nav/make.sh，也不要把 battle_nav.so 当作产物。
 
-在现有 `grid_map_core` target 中加入：
-
-```cmake
-src/binary_asset_codec.cpp
-src/air_map.cpp
-src/air_map_reader.cpp
-src/air_map_registry.cpp
-src/air_grid_pathfinder.cpp
-```
-
-对应 public headers 放 `include/`，继续使用当前 include directory；不要为 AirMap 新建第二个静态库，当前代码与 Ground Grid 共享 `GridMap/NavigationContext/Path/NavResult`，拆库只会增加链接边界而没有真实复用收益。
-
-`lua_battle_nav` target 继续链接同一个 `grid_map_core`，因为 Binding 新增的 `load_air_map/find_air_path/advance_air_path` 都来自该 core。
-
-构建后用：
+需要检查导出符号时，可在 WSL 运行：
 
 ```bash
-nm -C server/build/lua_battle_nav/battle_nav.so | grep -E 'AirMap|AirGridPathfinder'
+nm -C third_party/skynet-flywow/build/native/flywow_navigation_native.so |
+  grep -E 'AirMap|AirGridPathfinder'
 ```
 
-只作为本地诊断，不能把 `nm` 输出当成功测试。真正成功仍以 CTest + Lua smoke 为准。
-
----
-
+nm 只用于诊断；CTest 和 Skynet Lua Smoke 分别验证 Native 行为与真实 Lua ABI 加载。
 
 ## 66. 协议生成
 
@@ -12546,7 +12212,7 @@ Windows：
 BATTLE_DETERMINISM_OK
 BATTLE_SKILL_REGRESSION_OK
 AIR_NAVIGATION_OK
-BUFF_RUNTIME_OK
+ALL_TESTS_OK
 ```
 
 这些输出名字是第三课验收标记，不应成为运行时代码分支条件。
@@ -12594,9 +12260,9 @@ BATTLE_GATEWAY_INTERACTIVE_OK
 
 ```bash
 cd server
-./scripts/lessons/run_lesson_02_processes.sh doctor
-./scripts/lessons/run_lesson_02_processes.sh start
-./scripts/lessons/run_lesson_02_processes.sh status
+./scripts/linux/run_server.sh doctor
+./scripts/linux/run_server.sh start
+./scripts/linux/run_server.sh status
 ```
 
 脚本文件名虽然仍叫 `lesson2_processes.sh`，运行拓扑已经是课程公共双进程基线。第三课不要为了名字好看复制一份功能相同的 `run_lesson3_processes.sh`。
@@ -12621,9 +12287,7 @@ GroundEnemy 追击
 FlyingEnemy 绕 NoFly
 Slash
 Fireball
-FrostBolt + Slow
-Haste 改变移动速度
-FireWall pulse + Burning
+FrostBolt（Server 权威轨迹/碰撞）
 HP / Death
 Event/Snapshot Sync
 Battle End
@@ -12637,7 +12301,7 @@ event_gap=true
 -> 继续消费后续 Event
 ```
 
-这一步非常重要，因为它真正证明 Snapshot 不是“为了字段齐全而存在”。
+这一步非常重要，因为它真正证明 Snapshot 不是“为了字段齐全而存在”。FireWall、AreaEffect、Buff/Slow/Haste 属于可选扩展，不作为第三课主线验收门槛。
 
 ### 69.1 Unity 最终人工验收脚本
 
@@ -12681,24 +12345,12 @@ H. 按 3 FrostBolt
    -> 命中后 Slow
    -> Player/Enemy 有 Slow 时移动速度改变但旧 Path 不重算
 
-I. 按 4 FireWall
-   -> AREA_CREATED
-   -> 周期 AREA_PULSE/DAMAGE
-   -> Ground Unit Burning
-   -> FlyingEnemy 不受 FireWall
-   -> expire 后 AREA_EXPIRED
-
-J. 按 5 Haste
-   -> BUFF_ADDED
-   -> EffectiveMoveSpeed 上升
-   -> expire 后恢复基础速度
-
-K. 暂停 Sync 足够久让 Event ring 溢出
+I. 暂停 Sync 足够久让 Event ring 溢出
    -> event_gap=true
    -> Snapshot 校正
    -> 之后 Event seq 连续
 
-L. 让一方全部死亡
+J. 让一方全部死亡
    -> UNIT_DEAD
    -> BATTLE_END
    -> 最终 Sync 可拿到结果
@@ -13195,7 +12847,7 @@ Unity Replay / Regression
 ```text
 1. BattleMgr 分配 battle_id
 2. battle_id % worker_count -> 固定 Worker
-3. Worker new_context(map/version/profiles)
+3. Worker new_context(map_id/map_version)
 4. battle_core.create(snapshot, context, "online")
 5. Context place Ground Units
 6. 创建 Ground/Air Unit Runtime
@@ -13220,7 +12872,6 @@ NavigationContext 包含：
 ```text
 A* scratch
 DynamicOccupancy
-profiles
 map refs
 ```
 
@@ -13242,6 +12893,8 @@ Battle Process address space
 |
 +-- C++ MapRegistry
 |     +-- shared_ptr<const GridMap 1001/v2>
++-- C++ AgentProfileRegistry
+|     +-- immutable Profiles, loaded once at process startup
 |
 +-- C++ AirMapRegistry
 |     +-- shared_ptr<const AirMap 1001/v2>
@@ -13261,7 +12914,7 @@ Battle Process address space
 你需要能直接说出：
 
 ```text
-共享的是 immutable static asset；
+共享的是 immutable static asset 和只读 AgentProfile；
 隔离的是每场 Battle mutable Context/Core State；
 Lua State 隔离并不让 process-global C++ singleton 自动变成每 Service 一份；
 BattleWorker Shard 数也不是 OS thread 数。
@@ -13437,7 +13090,7 @@ grep -R -nE "Assets/|Library/|[A-Za-z]:\\\\" server || true
 
 # 不应提前引入可选 Lesson 4 Backend/Recast。
 grep -R -nE "INavigationBackend|Detour|Recast|PolyRef" \
-  server/service server/lualib server/native/grid_map || true
+  server/service server/lualib server/third_party/skynet-flywow/navigation/native/grid_map || true
 ```
 
 这些 grep 只能帮助发现可疑文本，不替代 build/test。最终报告要明确区分：
