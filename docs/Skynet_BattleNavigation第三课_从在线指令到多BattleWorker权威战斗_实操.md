@@ -4,6 +4,10 @@
 >
 > 本课前置条件固定为：第二课实操已经全部完成并通过第二课验收。第三课只继承第二课文档定义的最终状态，不把任何中间实现状态当作课程基线。开始第 7 节前，先按第二课第 27 节重新运行 Native 测试、Batch Regression 和 Gateway/Battle 双进程验收；任一项未通过，先完成第二课，不把第三课代码用于修补第二课基线。
 
+> **使用方式：**本文是分阶段实操手册，不是一次性复制全部代码的脚本。每次只推进一个阶段；先核对该阶段的真实基线，再读文件职责、实现、失败路径和验收。第三课正式验收以 `codex/LESSON_03_SPEC.md` 为准；本文中明确标为扩展的 FireWall、Buff 和 BRPL 文件封装不作为主课通过条件。
+>
+> **当前基线提醒：**第二课结束时 BattleMgr 仍是一次性自动战斗的 round-robin 分发；固定 Shard、在线 Battle Runtime、PlayerCommand 和 Air Grid 都是第三课要逐步新增的内容，不能当作仓库已经存在的实现。开始第三课前，先实际跑完第二课验收，不以文档描述替代运行结果。
+
 本课不是“做一个大而全的商业 SLG”。目标是用一个足够小、但边界真实的战斗 Runtime，把以下知识真正串起来：
 
 ```text
@@ -12,8 +16,7 @@ Skynet Service / Lua State / coroutine / yield
 -> 多场 Battle 的 ownership
 -> PlayerCommand
 -> Ground / Air Navigation
--> Skill / Projectile / AreaEffect
--> 最小 Buff Runtime
+-> 三类 Skill：瞬发 / 表现型弹丸 / Server 权威逻辑弹丸
 -> BattleEvent / BattleSnapshot
 -> 在线 fixed-tick + 自动快速 simulate 共用同一个 Core
 -> Unity 只负责输入和表现
@@ -27,7 +30,7 @@ Service、Lua State、协程、消息和 OS Worker Thread 到底是什么关系�
 哪里可以 yield，哪里必须 no-yield；
 多个 Battle 怎样稳定分片到固定 BattleWorker；
 Native Navigation 怎样被多个 Service 并发安全调用；
-地图、技能、Buff、AreaEffect 怎样进入同一个确定性 Battle Core。
+地图、技能和战斗事件怎样进入同一个确定性 Battle Core。
 ```
 
 ---
@@ -52,8 +55,6 @@ Player / AI 使用 Skill Runtime
 瞬发技能
 表现型弹丸
 Server 权威逻辑弹丸
-FireWall 持续区域效果
-Haste / Slow / Burning 最小 Buff
 HP / Cooldown / TargetMask / Death
 Server Event / Snapshot
 Unity 在线表现
@@ -62,6 +63,8 @@ Unity 在线表现
 ```
 
 本课完成后，不要求拥有完整 RPG 技能框架，也不要求拥有完整 SLG 世界系统。
+
+FireWall、Haste/Slow/Burning 和 BRPL 文件封装在本文中作为可选扩展材料保留。先完成 Spec 列出的主课闭环和验收；若它们没有服务当前验收目标，可以跳过，不要让扩展内容阻塞主线。
 
 ---
 
@@ -259,13 +262,13 @@ FlyWow Gateway Service
   v
 Gateway Proxy
   |
-  | cluster.send(request + route_token)
+  | cluster.send(request record)
   v
 Battle Process
   |
   v
 battle_dispatch
-  | cluster.send(battle_result + route_token) 回推 Gateway Proxy
+  | cluster.send(response record)
   |
   v
 BattleMgr Service
@@ -309,7 +312,7 @@ BattleWorker#1   BattleWorker#2   BattleWorker#3   BattleWorker#4
 | `BattleRuntime` | 某个 BattleWorker | 一场在线 Battle | 不能直接传 table 引用，只通过消息访问 |
 | `NavigationContext` userdata | 某个 BattleRuntime | 一场 Battle | 不能跨 Lua State / Service |
 | `Path` userdata | 某个单位 | 路线有效期 | 不能跨 Service |
-| Projectile / AreaEffect / Buff | BattleRuntime | 当前 Battle | 不能跨 Service |
+| Projectile / AreaEffect / Buff | BattleRuntime | 当前 Battle；后两者属于可选扩展 | 不能跨 Service |
 | `PlayerCommand` | 纯值 | 一次消息 | 可以跨 Service / cluster |
 | `BattleEvent` | 纯值 | Event Buffer / Replay | 可以跨 Service / cluster |
 | `BattleSnapshot` | 纯值 | 同步点 | 可以跨 Service / cluster |
@@ -4701,6 +4704,8 @@ cell value=2
 
 ## 23. 技能列表先固定，不继续膨胀
 
+主课必须完成的是 Spec 规定的三类执行模型：瞬发、表现型弹丸、Server 权威逻辑弹丸，以及最小 Player/AI 技能组合。FireWall AreaEffect 与本课 Buff 示例是可选扩展；不影响主课验收，建议先跳过，等核心链路通过后再单独学习。
+
 本课使用：
 
 ```text
@@ -4943,6 +4948,8 @@ trigger on hit/on kill
 
 # 第十部分：最小 Buff Runtime
 
+> 可选扩展：本部分的 Haste、Slow、Burning 不属于 Lesson 3 Spec 的主课验收。先完成三类技能、Ground/Air 目标约束、命中/伤害/死亡和确定性验收；需要练习状态效果时再回来。
+
 ## 26. Buff 的 owner 是 Unit，不是 Skynet Timer
 
 错误做法：
@@ -5172,6 +5179,8 @@ Haste / Slow
 才可能使 Navigation Profile 或 Path 合法性变化。
 
 # 第十一部分：SkillRuntime、Projectile 与 FireWall
+
+> 本部分中瞬发技能、两类弹丸和统一 Server 结算属于主线；FireWall AreaEffect 是可选扩展，不是第三课通过条件。
 
 ## 28. Runtime 数据不做成 Service
 
@@ -8338,12 +8347,12 @@ Unity 以固定频率调用 `SyncBattle` 拉取增量 Event。
 
 Gateway 仍只承载传输和协议；Battle Worker 产生权威 Event/Snapshot，Battle 侧决定投递对象与顺序。异步传输不可用时，按本课定义的确认、序号、Snapshot 恢复合同处理，不能把 `cluster.send` 本身视为可靠送达。
 
-FlyWow 固定版本的 `gateway/service/gateway/flywow_gateway.lua` 已把当前真实连接的数字 `connection_id` 放进 handler payload；第二课 `gateway_proxy.lua` 复制 payload 时会保留该字段。数字 ID 只在当前 Gateway Service 生命周期内唯一。第三课在 Proxy 转发前给它加进程作用域，避免 Gateway 重启后数字 ID 从 1 重新开始而误认旧 Battle 控制者。
+Gateway 回包关联遵守 D039：请求携带由可信 Gateway 提供的 `gateway_epoch`、数字 `connection_id`、`command_id` 和 `request_id`；Proxy 保留有限期的返回路由，Battle 回包仍是独立消息。`gateway_epoch + connection_id` 标识当前传输连接，`command_id + request_id` 关联一次协议请求。它们都不是玩家身份或 Battle 身份；不要把连接号改成拼接字符串，也不要让 Battle 保存 Gateway fd。
 
-[局部修改] `server/service/gateway/gateway_proxy.lua` 的 `dispatch_remote(payload)`：在创建 `forwarded` 后、设置 `route_token` 前加入以下校验和赋值，替换复制来的数字 `connection_id`；Proxy 的其余 `cluster.send`/等待/回推代码保持第二课原样。
+[局部修改] `server/service/gateway/gateway_proxy.lua` 转发请求时，保留并校验 D039 的四个传输字段；不要创建 `route_token`、等待协程或同步业务调用。
 
 ```lua
--- FlyWow 附加的连接号只在本次 Gateway Service 生命期唯一；route_epoch 把重启前后隔开。
+-- [历史示例：不要复制] 本段采用旧 route_epoch/route_token 方案，现已被 D039 取代。
 -- 这里仅封装传输身份，不解释 battle_id、玩家归属或技能。
 assert(math.type(payload.connection_id) == "integer" and payload.connection_id > 0,
        "FlyWow connection_id is required")
@@ -8351,7 +8360,16 @@ forwarded.connection_id = route_epoch .. ":" .. tostring(payload.connection_id)
 assert(#forwarded.connection_id <= 128, "transport session identity too long")
 ```
 
-`route_token` 仍只关联一次请求；`connection_id` 关联当前 TCP 连接；`resume_token` 是 Battle 签发并只由持有者提交的短期恢复凭据。三者不能互相替代。这个临时凭据不写日志、不放 URL，也不进入 Snapshot/Replay；正式远程部署须让 Gateway 连接使用保密传输。
+> **注意：上方的 `route_epoch/route_token` 代码片段是旧方案，不能照抄，现已由 D039 合同取代。**当前应透传 `gateway_epoch`、数字 `connection_id`、`command_id`、`request_id`，并由 Proxy 以有限返回路由关联独立响应消息；不等待原请求协程，也不把传输字段当作 Battle 身份。`resume_token`（若启用恢复）是 Battle 短期凭据，不能与传输字段混用。
+
+当前请求转发只需保留 Gateway 已提供的关联字段（`forwarded` 是 Proxy 构造的请求 record）：
+
+```lua
+forwarded.gateway_epoch = payload.gateway_epoch
+forwarded.connection_id = payload.connection_id
+forwarded.command_id = payload.command_id
+forwarded.request_id = payload.request_id
+```
 
 ## 41. 修改 Protobuf
 
@@ -8949,6 +8967,8 @@ BattleReplay C# generated type
 ---
 
 ### 41.5 为什么文件不直接裸写 Protobuf bytes：增加一个极薄的 BRPL V1 Header
+
+> 可选扩展：Lesson 3 要求完整模拟与 Replay，但 BRPL 自定义文件 Header 和 Protobuf 文件封装不是主课前置条件。先使用第二课已有 Replay 链路完成主课，再单独验证该文件格式。
 
 Protobuf 解决：
 
@@ -10290,9 +10310,9 @@ local function dispatch_gateway(payload)
     } }
 end
 
--- 第二课已经把两个单向 cluster.send 组合成可关联响应；第三课必须保留同一反向回推。
--- route_token 只用于 Gateway 本地等待表，不能用作 Battle/玩家身份。
--- dispatch_gateway 内的 Manager/Query call 可能 yield；失败返回稳定包装错误。
+-- D039 使用独立响应消息及显式传输关联字段，不等待 Gateway 原请求协程。
+-- Gateway Proxy 的有限返回路由只关联协议响应，不代表 Battle/玩家身份。
+-- 下面的旧版 route_token 回包实现仅作历史对照，不能照抄；应按 D039 构造独立 send_data 响应 record。
 local function forward_result(payload)
     assert(type(payload) == "table" and type(payload.route_token) == "string" and
            #payload.route_token > 0 and #payload.route_token <= 128,
@@ -12425,10 +12445,10 @@ Stage 5  AirMap / Air A*
 Stage 6  Ground/Flying AI
 Stage 7  Skill Runtime
 Stage 8  Logic Projectile
-Stage 9  FireWall
-Stage 10 Buff
+Stage 9  FireWall（可选扩展；主课验收后再做）
+Stage 10 Buff（可选扩展；主课验收后再做）
 Stage 11 Proto / battle_dispatch
-Stage 12 BRPL + Protobuf Replay migration
+Stage 12 BRPL + Protobuf Replay migration（可选扩展；主课可沿用第二课 Replay）
 Stage 13 Unity Interactive Client / Replay Player
 Stage 14 Determinism / Replay Corruption / Concurrency / Benchmark
 ```
@@ -12816,7 +12836,7 @@ cluster.register
 
 ```text
 cluster.call 用于启动期 ready 检查，内部等待 skynet.call 响应，会 yield
-在线 data-plane 使用两个单向 cluster.send 与 route_token/超时表关联
+在线 data-plane 用独立 cluster.send 回包消息，并用 D039 传输字段关联
 ```
 
 跨进程失败不能当成本地函数返回 nil 那么简单；本课由 Proxy/Dispatch/Manager 边界转换成结构化失败。
@@ -12923,7 +12943,7 @@ skynet.timeout
 [ ] 理解 fork 不是线程
 [ ] 理解 queue 能解决什么，以及本课为什么不依赖它保护 Core
 [ ] 启动期 cluster.call ready 失败会阻止对外监听
-[ ] 在线 cluster.send/反向结果丢失按 route_token 超时返回稳定错误
+[ ] 在线回包使用 D039 的传输字段和有限返回路由；超时/迟到响应不会投递到错误连接
 [ ] Worker Service crash 不被伪装成业务成功
 [ ] debug_console 能观察 Service / task / mem / stat
 ```
@@ -12952,10 +12972,10 @@ skynet.timeout
 [ ] Slash = Instant
 [ ] Fireball = Presentation Projectile
 [ ] FrostBolt = Server Logic Projectile
-[ ] FireWall = persistent AreaEffect
-[ ] Haste / Slow / Burning 最小 Buff Runtime
-[ ] MoveSpeed Modifier 不修改 AgentProfile
-[ ] FireWall Ground only
+- [ ] 可选扩展：FireWall = persistent AreaEffect
+- [ ] 可选扩展：Haste / Slow / Burning 最小 Buff Runtime
+- [ ] 可选扩展：MoveSpeed Modifier 不修改 AgentProfile
+- [ ] 可选扩展：FireWall Ground only
 [ ] Ground/Air TargetMask 生效
 [ ] 所有 Damage / Death 走统一函数
 ```
@@ -13088,12 +13108,12 @@ FlyWow Gateway
 Gateway Proxy
         |
         v
-cluster.send(request + route_token)
+cluster.send(request + gateway_epoch + connection_id + command_id + request_id)
         |
         v
 battle_dispatch
         |
-        +-- cluster.send(battle_result + route_token) --> Gateway Proxy 原请求协程
+        +-- cluster.send(response record) --> Gateway Proxy -> Gateway 独立 send_data 消息
         |
         v
 BattleMgr
@@ -13258,9 +13278,9 @@ Unity
 -> SubmitBattleCommand
 -> FlyWow decode
 -> gateway_proxy
--> cluster.send(request + route_token)
+-> cluster.send(request record)
 -> battle_dispatch
--> cluster.send(result + route_token) 回推 Gateway Proxy 原请求协程
+-> cluster.send(response record)，以 D039 字段关联有限返回路由
 -> BattleMgr.submit_command
 -> worker_for(battle_id)
 -> skynet.call(BattleWorker)
