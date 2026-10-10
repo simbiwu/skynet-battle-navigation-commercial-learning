@@ -107,7 +107,7 @@ flowchart LR
 
 Server 必须运行这套 Core，才能决定正式战斗结果、拒绝过期或冲突输入，并独立计算 AI、移动、技能、命中、HP 和胜负。客户端也运行同一套 Core，以便及时响应操作并复现正式帧。双方都持有模拟状态，但权威责任不同：**Server 的状态和结果是正式依据；客户端的模拟用于快速反馈，收到确认后必须服从 Server 采用的输入和检查结果。**
 
-本课中，Server 控制的地面敌人与飞行敌人不会逐帧把“敌人移动命令”发给客户端。双方 Core 都根据该帧开始时的状态、固定 AI 规则和相同地图/规则版本，派生敌人的目标、移动和施法。因此敌方 AI 结果也能从输入记录重演。地图版本、地图 hash 和规则 hash 用来确保双方使用相同基础数据与规则；版本不一致时，继续模拟就没有可靠意义。
+本课中，Server 控制的地面敌人与飞行敌人不会逐帧把“敌人移动命令”发给客户端。双方 Core 都根据该帧开始时的状态、固定 AI 规则和相同地图资产与兼容的客户端、Server程序版本，派生敌人的目标、移动和施法。因此敌方 AI 结果也能从输入记录重演。地图ID、地图版本和地图资产hash用于确认双方加载了相同地图。战斗规则随客户端与Server程序版本发布，不通过源码字节hash协商；版本兼容由发行包和匹配服务的程序版本合同负责。
 
 #### 用第 41 帧走一遍
 
@@ -145,7 +145,9 @@ Server 必须运行这套 Core，才能决定正式战斗结果、拒绝过期�
 
 初始预测提前两帧，Server 创建后给两个 Tick 的准备时间。提前量是明确的调度参数，不是用 `Time.deltaTime` 推断正式帧号。最多允许比确认帧前进 8 帧；网络停顿超过窗口时停止继续猜测，并通过恢复入口获取新的正式状态。
 
-这两个数是本课可复现的演示配置，不是公网部署建议。真实部署必须用测得的单向延迟、抖动分布、Server 调度余量和可接受的操作延迟来选择输入提前量，并在会话开始时协商；可以按连接质量在有界范围内调整，但不能超过协议窗口。提前量的作用是让输入在目标帧截止前到达 Server，不是让玩家等 Server 回包后才看到操作。客户端仍立即本地预测，之后以 Server 正式帧重演校正。若实际延迟超出协商窗口，系统要报告持续迟到/恢复状态，不能把演示用的两帧说成能覆盖任意 RTT。
+本课固定使用 2 tick 作为输入提前量基准；每 tick 为 50ms，因此样例提前量为 100ms。这个选择参考 Unity Netcode for Entities 的默认 `TargetCommandSlack`（2 ticks）：客户端把模拟时间保持在 Server 前方，让输入有时间到达。两套实现细节不同，所以这是可复用的起始值，不是适用于所有游戏和网络的通用保证。Photon Quantum 的 Server 缺输入等待容忍值、输入延迟偏移和回滚窗口分别是不同参数，不能把它们当成同一个“提前量”。
+
+课程不要求测量每个玩家的单向延迟，也不要求按连接动态协商这个值。客户端仍立即本地预测以响应操作，Server 按目标帧截止时间确认正式输入。若输入超过截止时间，仍按本课的迟到规则处理；预测和提前量降低迟到概率，不会让迟到输入自动改写 Server 历史。客户端预测最多比确认帧前进 8 tick；这不是输入提前量，也不是 Server 等待缺失输入的时间。实际延迟与丢包验证用于确认这些边界和恢复行为，不用于推导一个能保证所有网络条件的数字。参考：[Unity Netcode for Entities 的 prediction/command slack](https://docs.unity.cn/Packages/com.unity.netcode%401.5/manual/intro-to-prediction.html)、[Photon Quantum 的独立输入与回滚参数](https://doc-api.photonengine.com/en/quantum/current/class_photon_1_1_deterministic_1_1_deterministic_session_config.html)。
 
 ### 1.3 缺输入、迟到与批量到达
 
@@ -164,14 +166,14 @@ Server 必须运行这套 Core，才能决定正式战斗结果、拒绝过期�
 
 #### 截止、定稿与“迟到输入是否还能生效”
 
-本课采用**有界输入提前量 + 截止后定稿**，Server 不回滚已执行帧。输入帧号必须预留足够的传输时间：客户端采样后立即在本地预测以保持操作响应，同时把带目标帧号的命令提前发送；Server 在目标帧截止前收集并确认输入。提前量应按会话的网络延迟/抖动与调度余量配置，且受 8 帧窗口约束。样例里的两帧只是本地演示默认值，不能作为公网可靠性承诺。
+本课采用**2 tick 固定输入提前量 + 截止后定稿**，Server 不回滚已执行帧。50ms 的逻辑帧下，2 tick 等于 100ms。它参考 Unity Netcode for Entities 的 2 tick `TargetCommandSlack` 默认值；这里只借用相近的输入提前概念，不声称两套合同完全相同，也不保证 100ms 足以覆盖每条公网路径。客户端采样后立即本地预测，同时把带目标帧号的命令提前发送；Server 在目标帧截止前收集并确认输入。
 
 用 41、42、43 帧看两种结果：
 
 - **41 帧输入在截止前到达**：Server 将它记为 `supplied=true`，随后依次执行 41、42、43。客户端收到正式记录后，对照 Server 输入；如有预测差异，从最近确认状态恢复并重演未确认帧。
 - **41 帧输入在截止后才到达**：Server 已用补缺输入执行 41，随后可能已执行 42、43。该命令返回 `LATE` 并丢弃，不顺延到 42，也不触发 Server 重算 41–43。客户端收到 41 的正式记录后，用正式输入重演自己的预测历史；这只能校正客户端，不能让被拒绝的迟到意图改变 Server 结果。
 
-因此，**本课里的回滚是客户端预测校正，不是 Server 权威模拟回滚**。`supplied=false` 的影响会传递到 42、43 的权威状态；客户端必须接受 Server 的输入记录和 hash。若迟到过多导致手感或战斗结果不可接受，应先调整并验证会话输入提前量、传输方式和断线/恢复体验。若产品要求已截止的 41 帧仍能改变正式战斗，就必须另行设计 Server 有界回滚：保存回滚窗口内完整逻辑状态和输入历史，对 41 的修正重演 41 至当前帧，并规定哪些事件/伤害/死亡等副作用在提交边界前不得对外不可逆发布。本课 Runtime 不保存这段 Server 历史，不能声称具备该能力；这也是另一套需要单独实现与验证的合同。
+因此，**本课里的回滚是客户端预测校正，不是 Server 权威模拟回滚**。`supplied=false` 的影响会传递到 42、43 的权威状态；客户端必须接受 Server 的输入记录和 hash。若输入频繁迟到，按本课既定的 LATE、预测窗口耗尽和恢复合同处理；本课不按单个玩家动态测量或调整提前量。生产系统若要改用其他固定配置，应作为独立产品决策，不能默认为每个连接自动调参。若产品要求已截止的 41 帧仍能改变正式战斗，就必须另行设计 Server 有界回滚：保存回滚窗口内完整逻辑状态和输入历史，对 41 的修正重演 41 至当前帧，并规定哪些事件/伤害/死亡等副作用在提交边界前不得对外不可逆发布。本课 Runtime 不保存这段 Server 历史，不能声称具备该能力；这也是另一套需要单独实现与验证的合同。
 
 帧同步可以通过客户端预测降低本地操作反馈延迟，但它不能保证每个迟到输入都被权威 Server 接纳。若玩法需要公网环境下稳定的即时操作响应和 Server 校正，状态同步版采用的本地预测/权威状态校正是独立方案；不能把这两种模型的输入与结果合同混写。帧同步版适合在其确定性、输入提前量和回滚边界都明确的前提下教学和评估。
 
@@ -249,7 +251,7 @@ Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部�
 |弹丸数|4|uint32|
 |每弹丸|44|id/caster/target/expires/damage各4字节；XYZ各int64|
 
-最大 `20 + 64×52 + 4 + 128×44 = 8984 bytes`，ABI 缓冲预算为16384 bytes。restore 先读候选值、验证版本/数量/范围/排序/引用，再唯一发布；坏状态不能留下半个新世界。每步异常也恢复旧 State。FNV32 用于逐帧分歧诊断，不用于抗作弊、安全身份或资产完整性；地图 SHA256 与规则源码 hash 独立校验。
+最大 `20 + 64×52 + 4 + 128×44 = 8984 bytes`，ABI 缓冲预算为16384 bytes。restore 先读候选值、验证版本/数量/范围/排序/引用，再唯一发布；坏状态不能留下半个新世界。每步异常也恢复旧 State。FNV32 仅用于逐帧分歧诊断，不用于抗作弊、安全身份或资产完整性；地图内容身份由已发布地图的版本与 SHA256 校验。
 
 ### 2.4 新建 Native 文件
 
@@ -262,12 +264,15 @@ Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部�
 学习导航：精读 State全部字段、step/save/restore以及handle的open/close配对。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
 
 ```cpp
-// 职责：定义帧同步整数模拟及稳定 C ABI；属于宿主 Battle，不属于 FlyWow。
-// 输入/输出：已发布地图、帧输入 -> 新状态；逻辑不读取网络或墙钟。
-// ownership：每个 Engine 独占 State，GridMap 只读；C handle 必须成对 open/close。
+// 职责：定义帧同步整数模拟、可恢复状态与稳定 C ABI；属于宿主 Battle，不属于 FlyWow。
+// 输入/输出：已发布只读地图与单帧玩家意图 -> 逻辑状态；不读取网络、墙钟或 Unity 表现状态。
+// ownership：Engine 共享持有不可变 GridMap，并独占 NavigationContext 与 State；C handle 由调用方成对 open/close。
 #pragma once
+
 #include "grid_map.h"
 #include "navigation_context.h"
+
+#include <cstddef>
 #include <cstdint>
 #include <memory>
 #include <string>
@@ -275,109 +280,160 @@ Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部�
 
 namespace lesson_frame
 {
-constexpr std::size_t kMaxUnits = 64;       // 每场实际持有的单位上限。
-constexpr std::size_t kMaxBolts = 128;      // 在途逻辑弹丸上限；施法超限拒绝。
-constexpr std::uint32_t kMaxFrames = 3600;  // 180秒；到期判平局。
-constexpr std::uint32_t kTickMs = 50;       // 一逻辑帧50ms，渲染不使用此周期。
+constexpr std::size_t   kMaxUnits  = 64;   // 每场允许持有的单位总数；超限时拒绝初始化或恢复。
+constexpr std::size_t   kMaxBolts  = 128;  // 每场在途逻辑弹丸上限；满槽时拒绝逻辑弹丸施法。
+constexpr std::uint32_t kMaxFrames = 3600; // 50ms/tick 下为 180 秒；到期时以平局结束。
+constexpr std::uint32_t kTickMs    = 50;   // 固定逻辑步长；渲染帧率不改变它。
 
-/// 单个玩家当前帧的按键意图；x/z 为 -1/0/1，skill 为0/1/2/3。
+/// 单帧玩家意图；方向分量取 -1、0、1，skill 使用下方固定业务编号。
 struct Input
 {
-    std::int32_t x = 0; // 方向，无单位；不会提交正式位置。
-    std::int32_t z = 0;
-    std::int32_t y = 0; // -1下降，0保持高度，1上升；地面单位忽略。
-    std::int32_t skill = 0; // 0不施法，1近战，2表现弹丸，3逻辑火球。
+    std::int32_t x     = 0; // 世界 X 方向；-1/0/1 表示负向/不动/正向，不是坐标。
+    std::int32_t z     = 0; // 世界 Z 方向；-1/0/1 表示负向/不动/正向，不是坐标。
+    std::int32_t y     = 0; // 飞行高度意图：-1 下降、0 保持、1 上升；地面单位忽略。
+    std::int32_t skill = 0; // 0 不施法；1 近战；2 表现弹丸；3 逻辑火球。
 };
-/// 单位运行状态；三轴坐标均为有符号64位毫米。
+
+/// Battle 单位的权威逻辑状态；位置为带符号 64 位世界毫米。
 struct Unit
 {
-    std::uint32_t id = 0; // 稳定实例ID，按ID排序推进。
-    std::uint32_t camp = 0;
-    std::uint32_t move_mode = 1; // 1地面，2可主动升降的空中单位。
-    std::int64_t x = 0;
-    std::int64_t y = 0;
-    std::int64_t z = 0;
-    std::int32_t hp = 100;
-    std::uint32_t ready[3] = {}; // 各技能允许再次施放的帧号。
+    std::uint32_t id        = 0;   // Battle 内稳定且唯一的实例 ID；单位按 ID 排序推进。
+    std::uint32_t camp      = 0;   // 阵营编号：1 为玩家方，2 为敌方。
+    std::uint32_t move_mode = 1;   // 移动规则：1 受地表约束，2 可主动升降的空中单位。
+    std::int64_t  x         = 0;   // 世界 X 坐标，单位 mm。
+    std::int64_t  y         = 0;   // 世界高度，单位 mm；地面单位由地图采样确定。
+    std::int64_t  z         = 0;   // 世界 Z 坐标，单位 mm。
+    std::int32_t  hp        = 100; // 当前生命值；0 表示死亡。
+    std::uint32_t ready[3]  = {};  // 技能 1/2/3 最早可再次施放的逻辑帧号。
 };
-/// 在途逻辑弹丸；ID生成器和到期帧均属于可恢复状态。
+
+/// 在途逻辑弹丸；其 ID、位置和到期时间都是可恢复的 Battle 状态。
 struct Bolt
 {
-    std::uint32_t id = 0;
-    std::uint32_t caster = 0;
-    std::uint32_t target = 0;
-    std::uint32_t expires = 0;
-    std::int32_t damage = 0; // 0仅表现；20到达目标才结算。
-    std::int64_t x = 0;
-    std::int64_t y = 0;
-    std::int64_t z = 0;
+    std::uint32_t id      = 0; // 本场单调递增的弹丸实例 ID。
+    std::uint32_t caster  = 0; // 发射单位 ID；必须引用现存 Unit。
+    std::uint32_t target  = 0; // 目标单位 ID；必须引用现存 Unit。
+    std::uint32_t expires = 0; // 到期逻辑帧；到期或目标死亡后移除。
+    std::int32_t  damage  = 0; // 0 仅供表现；20 在到达目标时提交逻辑伤害。
+    std::int64_t  x       = 0; // 世界 X 坐标，单位 mm。
+    std::int64_t  y       = 0; // 世界高度，单位 mm。
+    std::int64_t  z       = 0; // 世界 Z 坐标，单位 mm。
 };
-/// 完整逻辑状态；不含指针、表现对象、墙钟或Socket。
+
+/// 完整可恢复逻辑状态；不包含指针、渲染对象、墙钟、随机全局状态或 Socket。
 struct State
 {
-    std::uint32_t frame = 0;
-    std::uint32_t winner = 0; // 0进行中，1/2胜方阵营，3平局。
-    std::uint32_t next_bolt = 1;
-    std::vector<Unit> units;
-    std::vector<Bolt> bolts;
+    std::uint32_t     frame     = 0; // 已完成的逻辑帧；初始 Checkpoint 为 0。
+    std::uint32_t     winner    = 0; // 0 进行中；1/2 对应胜方阵营；3 表示平局。
+    std::uint32_t     next_bolt = 1; // 下一个弹丸 ID；恢复后继续单调递增。
+    std::vector<Unit> units;         // 按稳定 ID 严格升序；数量不超过 kMaxUnits。
+    std::vector<Bolt> bolts;         // 按实例 ID 严格升序；数量不超过 kMaxBolts。
 };
-/// 无锁、无yield的单实例模拟；调用方保证同一实例顺序调用。
+
+/// 单场无锁、无 yield 的模拟 Engine；调用方必须串行调用其可变方法。
 class Engine
 {
-public:
+  public:
+    /// 创建本场模拟并共享持有不可变地图；地图无效或出生点不可用时抛出异常。
+    /// @param map 已验证的只读地图；Engine 与调用方共同持有其生命周期。
     explicit Engine(std::shared_ptr<const flywow_navigation::GridMap> map);
-    /// 初始化指定玩法；地图拒绝出生点时抛异常，由ABI入口转换。
+
+    /// 按课程玩法初始化单位；失败时保留调用前状态并抛出异常。
     void reset();
-    /// 推进一帧；非法输入/已结束状态失败，不产生半步提交。
+
+    /// 推进一个固定逻辑帧；非法输入、结束状态或导航失败时不提交半帧状态。
+    /// @param input 当前帧玩家意图；方向分量为 -1/0/1，skill 为 0..3。
     void step(Input input);
-    /// 显式小端规范化序列化；可用于Checkpoint与确定性校验。
+
+    /// 生成显式小端的规范化状态副本，可用于 Checkpoint 与确定性比较。
+    /// @return 调用方拥有的序列化字节串。
     std::string save() const;
-    /// 校验候选状态后原子替换；失败不改变旧状态。
-    void restore(const std::string& bytes);
-    const State& state() const noexcept { return state_; }
-    std::uint32_t mapId() const noexcept { return map_->metadata().map_id; }
-    std::uint32_t mapVersion() const noexcept { return map_->metadata().map_version; }
-private:
+
+    /// 验证完整候选状态后一次性替换当前状态。
+    /// @param bytes 借用的规范化状态字节；函数返回后不保留其引用。
+    /// @throws 状态格式、版本或业务约束不合法时抛出异常，旧状态保持不变。
+    void restore(const std::string &bytes);
+
+    /// 只读借用当前状态；引用在 Engine 下一次成功变更或析构前有效。
+    const State &state() const noexcept
+    {
+        return state_;
+    }
+
+    /// 返回当前地图身份；不执行 I/O。
+    std::uint32_t mapId() const noexcept
+    {
+        return map_->metadata().map_id;
+    }
+    std::uint32_t mapVersion() const noexcept
+    {
+        return map_->metadata().map_version;
+    }
+
+  private:
     std::shared_ptr<const flywow_navigation::GridMap> map_;
-    flywow_navigation::NavigationContext context_; // 当前Engine独占A* scratch；不写入State。
+    flywow_navigation::NavigationContext
+          context_; // 当前 Engine 独占 A* scratch；不属于可恢复 State。
     State state_;
-    void stepUnchecked(Input input);
-    void chaseAir(const Unit& unit,const Unit& other,Input& input) const;
-    void chaseGround(const Unit& unit,const Unit& other,Input& input);
-    bool sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t& y) const;
-    void move(Unit& unit, Input input);
-    bool sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y, std::int64_t& y) const;
-    Input ai(const Unit& unit);
-    void cast(Unit& unit, std::int32_t skill, std::vector<std::int32_t>& damage);
-    void projectiles(std::vector<std::int32_t>& damage);
-    std::size_t target(const Unit& unit, std::uint32_t target_modes=3) const;
-    void finish(const std::vector<std::int32_t>& damage);
+
+    void  stepUnchecked(Input input);
+    void  chaseAir(const Unit &unit, const Unit &other, Input &input) const;
+    void  chaseGround(const Unit &unit, const Unit &other, Input &input);
+    bool  sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t &y) const;
+    void  move(Unit &unit, Input input);
+    bool  sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y, std::int64_t &y) const;
+    Input ai(const Unit &unit);
+    void  cast(Unit &unit, std::int32_t skill, std::vector<std::int32_t> &damage);
+    void  projectiles(std::vector<std::int32_t> &damage);
+    std::size_t target(const Unit &unit, std::uint32_t target_modes = 3) const;
+    void        finish(const std::vector<std::int32_t> &damage);
 };
-}
+} // namespace lesson_frame
 
 #if defined(_WIN32)
-#define LESSON_FRAME_API __declspec(dllexport)
+#define SKYNET_BATTLE_NAV_FRAME_API __declspec(dllexport)
 #else
-#define LESSON_FRAME_API __attribute__((visibility("default")))
+#define SKYNET_BATTLE_NAV_FRAME_API __attribute__((visibility("default")))
 #endif
+
 extern "C"
 {
-/// open执行资产I/O；成功返回独占handle，失败返回nullptr。path为UTF-8。
-LESSON_FRAME_API void* fs_open(const char* path);
-/// close释放handle；nullptr允许，重复释放同一非空handle属于调用方错误。
-LESSON_FRAME_API void fs_close(void* handle);
-/// 返回1成功、0失败；调用方只在成功后使用输出。
-LESSON_FRAME_API int fs_step(void* handle, int x, int z, int skill);
-/// 缓冲不够返回0；最大状态长度16384 bytes，返回实际长度。
-LESSON_FRAME_API int fs_save(void* handle, unsigned char* out, int capacity);
-/// restore失败返回0并保留旧状态。
-LESSON_FRAME_API int fs_restore(void* handle, const unsigned char* bytes, int count);
-/// map版本用于跨端一致性；空handle返回0。
-LESSON_FRAME_API std::uint32_t fs_map_version(void* handle);
-}
+    /// 加载已发布地图并创建独占 Engine；不保存调用方传入的路径指针。
+    /// @param path UTF-8 BMAP 文件路径；必须以 NUL 结尾。
+    /// @return 成功时返回调用方独占的 handle；失败时返回 nullptr。
+    SKYNET_BATTLE_NAV_FRAME_API void *fs_open(const char *path);
 
-extern "C" LESSON_FRAME_API std::uint32_t fs_map_id(void* handle);
-extern "C" LESSON_FRAME_API const char* fs_rules_hash();
+    /// 释放由 fs_open 返回的 Engine handle；空指针可安全传入。
+    /// @param handle fs_open 返回且尚未关闭的 handle；重复关闭非空 handle 属于调用方错误。
+    SKYNET_BATTLE_NAV_FRAME_API void fs_close(void *handle);
+
+    /// 校验意图并推进一帧；不成功时返回 0 且不提交半帧结果。
+    /// @param handle 当前 Battle 独占的 Engine handle。
+    /// @param x 世界 X 方向分量，取 -1、0、1。
+    /// @param z 世界 Z 方向分量，取 -1、0、1。
+    /// @param skill 0 不施法、1 近战、2 表现弹丸、3 逻辑火球。
+    /// @return 成功返回 1；参数、状态或领域操作失败返回 0。
+    SKYNET_BATTLE_NAV_FRAME_API int fs_step(void *handle, int x, int z, int skill);
+
+    /// 将当前状态写入调用方缓冲；不会保存缓冲指针。
+    /// @param handle 当前 Battle 独占的 Engine handle。
+    /// @param out 调用方提供的输出缓冲区。
+    /// @param capacity out 的字节容量；小于完整状态长度时失败。
+    /// @return 成功返回写入字节数；失败返回 0。
+    SKYNET_BATTLE_NAV_FRAME_API int fs_save(void *handle, unsigned char *out, int capacity);
+
+    /// 验证候选 Checkpoint 后恢复 Engine；失败时保留旧状态。
+    /// @param handle 当前 Battle 独占的 Engine handle。
+    /// @param bytes 借用的规范化状态字节，仅在本次调用期间读取。
+    /// @param count bytes 的有效字节数。
+    /// @return 成功返回 1；无效 handle、长度或状态返回 0。
+    SKYNET_BATTLE_NAV_FRAME_API int fs_restore(void *handle, const unsigned char *bytes, int count);
+
+    /// 返回地图身份；空 handle 返回 0。该值不是运行时版本握手。
+    /// @param handle 当前 Battle 的 Engine handle。
+    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_version(void *handle);
+    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_id(void *handle);
+} // extern "C"
 ```
 
 ### server/native/frame_sync/frame_core.cpp
@@ -402,38 +458,60 @@ namespace lesson_frame
 {
 namespace
 {
-// 技能定义是静态值；运行态只保存ready与Bolts。所有距离单位为毫米。
-enum class SkillEffect { kInstant, kVisualBolt, kLogicalBolt };
-struct Skill { std::int64_t range; std::uint32_t cooldown; std::int32_t damage; SkillEffect effect; std::uint32_t target_modes; };
-constexpr Skill kSkills[] = {{900, 12, 14, SkillEffect::kInstant, 1}, {9000, 24, 12, SkillEffect::kVisualBolt, 3}, {9000, 24, 20, SkillEffect::kLogicalBolt, 3}};
-constexpr std::int64_t kPositionLimit = 500000000; // 三轴差值平方和<=3e18，避免int64溢出。
-std::int32_t sign(std::int64_t value) { return (value > 0) - (value < 0); }
+// 静态技能定义不进入可变运行状态；Unit 只保存各技能下次可施放的帧号。
+enum class SkillEffect
+{
+    kInstant,     // 当前帧直接提交伤害。
+    kVisualBolt,  // 当前帧提交伤害；弹丸只负责表现，不再次结算。
+    kLogicalBolt, // 弹丸到达目标时提交伤害。
+};
+struct Skill
+{
+    std::int64_t  range;        // 施法最大距离，单位 mm，按三轴距离判定。
+    std::uint32_t cooldown;     // 冷却时长，单位逻辑帧。
+    std::int32_t  damage;       // 正式伤害点数；只由 Engine 提交。
+    SkillEffect   effect;       // 命中/弹丸的逻辑生效时机。
+    std::uint32_t target_modes; // 可选目标移动类型位标记：1 地面、2 空中、3 两者。
+};
+// 数组下标对应 skill 编号减一；射程用 mm，冷却用固定逻辑帧。
+constexpr Skill        kSkills[]      = {{900, 12, 14, SkillEffect::kInstant, 1},
+                                         {9000, 24, 12, SkillEffect::kVisualBolt, 3},
+                                         {9000, 24, 20, SkillEffect::kLogicalBolt, 3}};
+// 每轴绝对坐标不超过 500,000,000mm，最大轴差为 1,000,000,000mm；
+// 三轴平方和最多为 3e18，小于 int64 上限，保证 distance2 的乘加不溢出。
+constexpr std::int64_t kPositionLimit = 500000000;
+std::int32_t           sign(std::int64_t value)
+{
+    return (value > 0) - (value < 0);
+}
 // 先限制单轴，平方和在int64范围内；positions经过输入/restore边界验证。
-std::int64_t distance2(const Unit& a, const Unit& b)
+std::int64_t distance2(const Unit &a, const Unit &b)
 {
     const auto dx = a.x - b.x;
     const auto dz = a.z - b.z;
     const auto dy = a.y - b.y;
     return dx * dx + dy * dy + dz * dz;
 }
-void put(std::string& out, std::uint64_t value, unsigned count)
+void put(std::string &out, std::uint64_t value, unsigned count)
 {
-    for (unsigned i = 0; i < count; ++i) out.push_back(static_cast<char>((value >> (8*i)) & 255));
+    for (unsigned i = 0; i < count; ++i)
+        out.push_back(static_cast<char>((value >> (8 * i)) & 255));
 }
-std::uint64_t get(const std::string& in, std::size_t& offset, unsigned count)
+std::uint64_t get(const std::string &in, std::size_t &offset, unsigned count)
 {
-    if (offset + count > in.size()) throw std::runtime_error("STATE_TRUNCATED");
+    if (offset + count > in.size())
+        throw std::runtime_error("STATE_TRUNCATED");
     std::uint64_t value = 0;
     for (unsigned i = 0; i < count; ++i)
-        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(in[offset++])) << (8*i);
+        value |= static_cast<std::uint64_t>(static_cast<unsigned char>(in[offset++])) << (8 * i);
     return value;
 }
 std::int64_t signedValue(std::uint64_t bits)
 {
     // 不依赖无符号大值转有符号的实现定义行为；显式还原二补数。
     return bits <= static_cast<std::uint64_t>(INT64_MAX)
-        ? static_cast<std::int64_t>(bits)
-        : -1 - static_cast<std::int64_t>(UINT64_MAX - bits);
+               ? static_cast<std::int64_t>(bits)
+               : -1 - static_cast<std::int64_t>(UINT64_MAX - bits);
 }
 void checkPosition(std::int64_t value)
 {
@@ -441,345 +519,448 @@ void checkPosition(std::int64_t value)
         throw std::runtime_error("POSITION_RANGE");
 }
 
-std::size_t readStateHeader(const std::string& bytes,std::size_t& offset,State& candidate)
+std::size_t readStateHeader(const std::string &bytes, std::size_t &offset, State &candidate)
 {
-    if (get(bytes,offset,4)!=1) throw std::runtime_error("STATE_VERSION");
-    candidate.frame = static_cast<std::uint32_t>(get(bytes,offset,4));
-    candidate.winner = static_cast<std::uint32_t>(get(bytes,offset,4));
-    candidate.next_bolt = static_cast<std::uint32_t>(get(bytes,offset,4));
-    const auto count = get(bytes,offset,4);
-    if (count<1 || count>kMaxUnits || candidate.frame>kMaxFrames || candidate.winner>3 ||
-        candidate.next_bolt==0 || candidate.next_bolt>kMaxFrames*kMaxUnits+1) throw std::runtime_error("STATE_RANGE");
+    if (get(bytes, offset, 4) != 1)
+        throw std::runtime_error("STATE_VERSION");
+    candidate.frame     = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    candidate.winner    = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    candidate.next_bolt = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    const auto count    = get(bytes, offset, 4);
+    if (count < 1 || count > kMaxUnits || candidate.frame > kMaxFrames || candidate.winner > 3 ||
+        candidate.next_bolt == 0 || candidate.next_bolt > kMaxFrames * kMaxUnits + 1)
+        throw std::runtime_error("STATE_RANGE");
     return static_cast<std::size_t>(count);
 }
-Unit readUnit(const std::string& bytes,std::size_t& offset,const State& candidate)
+Unit readUnit(const std::string &bytes, std::size_t &offset, const State &candidate)
 {
-        Unit unit;
-        unit.id = static_cast<std::uint32_t>(get(bytes,offset,4));
-        unit.camp = static_cast<std::uint32_t>(get(bytes,offset,4));
-        unit.move_mode = static_cast<std::uint32_t>(get(bytes,offset,4));
-        unit.x = signedValue(get(bytes,offset,8));
-        unit.y = signedValue(get(bytes,offset,8));
-        unit.z = signedValue(get(bytes,offset,8));
-        const auto hp=get(bytes,offset,4);
-        if (hp>100) throw std::runtime_error("STATE_HP");
-        unit.hp = static_cast<std::int32_t>(hp);
-        unit.ready[0] = static_cast<std::uint32_t>(get(bytes,offset,4));
-        unit.ready[1] = static_cast<std::uint32_t>(get(bytes,offset,4));
-        unit.ready[2] = static_cast<std::uint32_t>(get(bytes,offset,4));
-        checkPosition(unit.x); checkPosition(unit.y); checkPosition(unit.z);
-        if (unit.ready[0]>candidate.frame+24 || unit.ready[1]>candidate.frame+24 || unit.ready[2]>candidate.frame+24 ||
-            (unit.move_mode!=1 && unit.move_mode!=2) || unit.id==0 || (unit.camp!=1 && unit.camp!=2) || unit.hp<0 || unit.hp>100 ||
-            (!candidate.units.empty() && candidate.units.back().id>=unit.id))
-            throw std::runtime_error("STATE_UNIT");
-        return unit;
+    Unit unit;
+    unit.id        = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    unit.camp      = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    unit.move_mode = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    unit.x         = signedValue(get(bytes, offset, 8));
+    unit.y         = signedValue(get(bytes, offset, 8));
+    unit.z         = signedValue(get(bytes, offset, 8));
+    const auto hp  = get(bytes, offset, 4);
+    if (hp > 100)
+        throw std::runtime_error("STATE_HP");
+    unit.hp       = static_cast<std::int32_t>(hp);
+    unit.ready[0] = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    unit.ready[1] = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    unit.ready[2] = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    checkPosition(unit.x);
+    checkPosition(unit.y);
+    checkPosition(unit.z);
+    if (unit.ready[0] > candidate.frame + 24 || unit.ready[1] > candidate.frame + 24 ||
+        unit.ready[2] > candidate.frame + 24 || (unit.move_mode != 1 && unit.move_mode != 2) ||
+        unit.id == 0 || (unit.camp != 1 && unit.camp != 2) || unit.hp < 0 || unit.hp > 100 ||
+        (!candidate.units.empty() && candidate.units.back().id >= unit.id))
+        throw std::runtime_error("STATE_UNIT");
+    return unit;
 }
-Bolt readBolt(const std::string& bytes,std::size_t& offset,const State& candidate)
+Bolt readBolt(const std::string &bytes, std::size_t &offset, const State &candidate)
 {
-        Bolt bolt;
-        bolt.id=static_cast<std::uint32_t>(get(bytes,offset,4));
-        bolt.caster=static_cast<std::uint32_t>(get(bytes,offset,4));
-        bolt.target=static_cast<std::uint32_t>(get(bytes,offset,4));
-        bolt.expires=static_cast<std::uint32_t>(get(bytes,offset,4));
-        bolt.damage=static_cast<std::int32_t>(get(bytes,offset,4));
-        bolt.x=signedValue(get(bytes,offset,8));
-        bolt.y=signedValue(get(bytes,offset,8));
-        bolt.z=signedValue(get(bytes,offset,8));
-        checkPosition(bolt.x); checkPosition(bolt.y); checkPosition(bolt.z);
-        const auto exists = [&](std::uint32_t id)
-        {
-            return std::any_of(candidate.units.begin(),candidate.units.end(),
-                [&](const Unit& unit){ return unit.id==id; });
-        };
-        if ((bolt.damage!=0 && bolt.damage!=20) || !exists(bolt.caster) || !exists(bolt.target) || bolt.expires<=candidate.frame ||
-            bolt.expires>candidate.frame+60 || bolt.id==0 || bolt.id>=candidate.next_bolt ||
-            (!candidate.bolts.empty() && candidate.bolts.back().id>=bolt.id))
-            throw std::runtime_error("STATE_BOLT");
-        return bolt;
+    Bolt bolt;
+    bolt.id      = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    bolt.caster  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    bolt.target  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    bolt.expires = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    bolt.damage  = static_cast<std::int32_t>(get(bytes, offset, 4));
+    bolt.x       = signedValue(get(bytes, offset, 8));
+    bolt.y       = signedValue(get(bytes, offset, 8));
+    bolt.z       = signedValue(get(bytes, offset, 8));
+    checkPosition(bolt.x);
+    checkPosition(bolt.y);
+    checkPosition(bolt.z);
+    const auto exists = [&](std::uint32_t id)
+    {
+        return std::any_of(candidate.units.begin(), candidate.units.end(),
+                           [&](const Unit &unit) { return unit.id == id; });
+    };
+    if ((bolt.damage != 0 && bolt.damage != 20) || !exists(bolt.caster) || !exists(bolt.target) ||
+        bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 || bolt.id == 0 ||
+        bolt.id >= candidate.next_bolt ||
+        (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
+        throw std::runtime_error("STATE_BOLT");
+    return bolt;
 }
-}
+} // namespace
 
-Engine::Engine(std::shared_ptr<const flywow_navigation::GridMap> map) : map_(std::move(map)), context_(map_)
+Engine::Engine(std::shared_ptr<const flywow_navigation::GridMap> map)
+    : map_(std::move(map)), context_(map_)
 {
-    if (!map_ || map_->metadata().cell_size_mm < 100) throw std::runtime_error("MAP_CELL_SIZE");
+    if (!map_ || map_->metadata().cell_size_mm < 100)
+        throw std::runtime_error("MAP_CELL_SIZE");
     reset();
 }
-bool Engine::sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t& y) const
+bool Engine::sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t &y) const
 {
     const auto result = map_->QueryWorld({x, from_y, z});
-    if (!result.ok() || !result.value.IsWalkable()) return false;
-    const auto radius_cells = (200u + map_->metadata().cell_size_mm - 1) / map_->metadata().cell_size_mm;
-    if (result.value.clearance_cells < radius_cells) return false;
+    if (!result.ok() || !result.value.IsWalkable())
+        return false;
+    const auto radius_cells =
+        (200u + map_->metadata().cell_size_mm - 1) / map_->metadata().cell_size_mm;
+    if (result.value.clearance_cells < radius_cells)
+        return false;
     y = result.value.height_mm;
     return std::abs(y - from_y) <= 600;
 }
-bool Engine::sampleAir(std::int64_t x,std::int64_t z,std::int64_t desired_y,std::int64_t& y) const
+bool Engine::sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y,
+                       std::int64_t &y) const
 {
-    const auto result=map_->QueryWorld({x,0,z});
-    if (!result.ok()) return false;
-    if (desired_y<static_cast<std::int64_t>(result.value.height_mm)+200 || desired_y>10000) return false;
-    y=desired_y;
+    const auto result = map_->QueryWorld({x, 0, z});
+    if (!result.ok())
+        return false;
+    if (desired_y < static_cast<std::int64_t>(result.value.height_mm) + 200 || desired_y > 10000)
+        return false;
+    y = desired_y;
     return true; // 不读取IsWalkable/clearance；该地图尚无空域禁飞与天花板资产。
 }
 void Engine::reset()
 {
     State candidate;
-    candidate.units = {{1001,1,1,-11000,0,4000,100,{}}, {2001,2,2,11000,2000,-4000,100,{}}, {2002,2,1,11000,0,-4000,100,{}}};
-    for (auto& unit : candidate.units)
-        if (!(unit.move_mode==2 ? sampleAir(unit.x,unit.z,unit.y,unit.y) : sample(unit.x, unit.z, unit.y, unit.y))) throw std::runtime_error("SPAWN_BLOCKED");
+    candidate.units = {{1001, 1, 1, -11000, 0, 4000, 100, {}},
+                       {2001, 2, 2, 11000, 2000, -4000, 100, {}},
+                       {2002, 2, 1, 11000, 0, -4000, 100, {}}};
+    for (auto &unit : candidate.units)
+        if (!(unit.move_mode == 2 ? sampleAir(unit.x, unit.z, unit.y, unit.y)
+                                  : sample(unit.x, unit.z, unit.y, unit.y)))
+            throw std::runtime_error("SPAWN_BLOCKED");
     state_ = std::move(candidate);
 }
-std::size_t Engine::target(const Unit& unit,std::uint32_t target_modes) const
+std::size_t Engine::target(const Unit &unit, std::uint32_t target_modes) const
 {
-    std::size_t best = state_.units.size();
+    std::size_t  best          = state_.units.size();
     std::int64_t best_distance = INT64_MAX;
     for (std::size_t i = 0; i < state_.units.size(); ++i)
     {
-        const auto& other = state_.units[i];
-        if (other.hp <= 0 || other.camp == unit.camp || (other.move_mode & target_modes)==0) continue;
+        const auto &other = state_.units[i];
+        if (other.hp <= 0 || other.camp == unit.camp || (other.move_mode & target_modes) == 0)
+            continue;
         const auto d = distance2(unit, other);
-        if (d < best_distance) { best = i; best_distance = d; }
+        if (d < best_distance)
+        {
+            best          = i;
+            best_distance = d;
+        }
     }
     return best; // ID排序保证等距时优先较小ID。
 }
-void Engine::chaseAir(const Unit& unit,const Unit& other,Input& input) const
+void Engine::chaseAir(const Unit &unit, const Unit &other, Input &input) const
 {
-        input.x=sign(other.x-unit.x);
-        input.z=sign(other.z-unit.z);
-        // 水平距离越大，追击高度越高；接近目标时下俯，目标移动后重新计算。
-        const auto horizontal=std::max(std::abs(other.x-unit.x),std::abs(other.z-unit.z));
-        const auto desired_y=other.y+400+std::min<std::int64_t>(2400,horizontal/2);
-        input.y=std::abs(desired_y-unit.y)>=150 ? sign(desired_y-unit.y) : 0;
-        std::int64_t probe_y=unit.y;
-        if (!sampleAir(unit.x+input.x*150,unit.z+input.z*150,unit.y,probe_y)) input.y=1;
-        if (distance2(unit,other)<=800*800) input.x=input.z=0;
+    input.x               = sign(other.x - unit.x);
+    input.z               = sign(other.z - unit.z);
+    // 水平距离越大，追击高度越高；接近目标时下俯，目标移动后重新计算。
+    const auto horizontal = std::max(std::abs(other.x - unit.x), std::abs(other.z - unit.z));
+    const auto desired_y  = other.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
+    input.y               = std::abs(desired_y - unit.y) >= 150 ? sign(desired_y - unit.y) : 0;
+    std::int64_t probe_y  = unit.y;
+    if (!sampleAir(unit.x + input.x * 150, unit.z + input.z * 150, unit.y, probe_y))
+        input.y = 1;
+    if (distance2(unit, other) <= 800 * 800)
+        input.x = input.z = 0;
 }
-void Engine::chaseGround(const Unit& unit,const Unit& other,Input& input)
+void Engine::chaseGround(const Unit &unit, const Unit &other, Input &input)
 {
-        auto profile = flywow_navigation::MakeDefaultNavigationProfile(unit.id);
-        profile.radius_mm = 200;
-        profile.max_step_mm = 600;
-        profile.max_slope_permille = 1500;
-        const auto path = flywow_navigation::GridPathfinder::FindPathStatic(context_,profile,
-            {unit.x,unit.y,unit.z},{other.x,other.y,other.z});
-        // 路线不存入逻辑事实：相同当前State重新查询得到相同结果；不可达停住。
-        if (path.ok() && path.value.count()>1)
-        {
-            const auto& next = path.value.WorldPoint(1);
-            input.x = sign(next.x_mm-unit.x);
-            input.z = sign(next.z_mm-unit.z);
-        }
+    auto profile               = flywow_navigation::MakeDefaultNavigationProfile(unit.id);
+    profile.radius_mm          = 200;
+    profile.max_step_mm        = 600;
+    profile.max_slope_permille = 1500;
+    const auto path            = flywow_navigation::GridPathfinder::FindPathStatic(
+        context_, profile, {unit.x, unit.y, unit.z}, {other.x, other.y, other.z});
+    // 路线不存入逻辑事实：相同当前State重新查询得到相同结果；不可达停住。
+    if (path.ok() && path.value.count() > 1)
+    {
+        const auto &next = path.value.WorldPoint(1);
+        input.x          = sign(next.x_mm - unit.x);
+        input.z          = sign(next.z_mm - unit.z);
+    }
 }
-Input Engine::ai(const Unit& unit)
+Input Engine::ai(const Unit &unit)
 {
-    const auto index=target(unit);
-    if (index==state_.units.size()) return {};
-    const auto& other=state_.units[index];
-    Input input;
-    if (unit.move_mode==2) chaseAir(unit,other,input);
-    else if (distance2(unit,other)>800*800) chaseGround(unit,other,input);
-    input.skill=distance2(unit,other)<=900*900 && other.move_mode==1 ? 1 : 3;
+    const auto index = target(unit);
+    if (index == state_.units.size())
+        return {};
+    const auto &other = state_.units[index];
+    Input       input;
+    if (unit.move_mode == 2)
+        chaseAir(unit, other, input);
+    else if (distance2(unit, other) > 800 * 800)
+        chaseGround(unit, other, input);
+    input.skill = distance2(unit, other) <= 900 * 900 && other.move_mode == 1 ? 1 : 3;
     return input;
 }
-void Engine::move(Unit& unit, Input input)
+void Engine::move(Unit &unit, Input input)
 {
     // 3000mm/s × 50ms / 1000 = 150mm；对角分量乘707/1000约为1/sqrt(2)。
     // 这里的106mm量化是玩法合同，两端使用同一代码；不使用平台sqrt。
-    if (unit.move_mode==1) input.y=0;
-    const int axes=(input.x!=0)+(input.z!=0)+(input.y!=0);
-    const std::int64_t length = axes==3 ? 86 : axes==2 ? 106 : 150;
-    const auto dx = input.x * length;
-    const auto dz = input.z * length;
-    const auto dy = input.y * length;
+    if (unit.move_mode == 1)
+        input.y = 0;
+    const int          axes   = (input.x != 0) + (input.z != 0) + (input.y != 0);
+    const std::int64_t length = axes == 3 ? 86 : axes == 2 ? 106 : 150;
+    const auto         dx     = input.x * length;
+    const auto         dz     = input.z * length;
+    const auto         dy     = input.y * length;
     // 最大子步不超过cell/4，防止跨越一个阻挡格；最多8步。
-    const auto stride = std::max<std::int64_t>(1,map_->metadata().cell_size_mm/4);
-    const auto steps = std::max<std::int64_t>(1,(length+stride-1)/stride);
+    const auto         stride = std::max<std::int64_t>(1, map_->metadata().cell_size_mm / 4);
+    const auto         steps  = std::max<std::int64_t>(1, (length + stride - 1) / stride);
     for (std::int64_t n = 1; n <= steps; ++n)
     {
-        const auto sx = dx*n/steps - dx*(n-1)/steps;
-        const auto sz = dz*n/steps - dz*(n-1)/steps;
-        const auto sy = dy*n/steps - dy*(n-1)/steps;
-        std::int64_t y = unit.y;
+        const auto   sx = dx * n / steps - dx * (n - 1) / steps;
+        const auto   sz = dz * n / steps - dz * (n - 1) / steps;
+        const auto   sy = dy * n / steps - dy * (n - 1) / steps;
+        std::int64_t y  = unit.y;
         // X后Z是固定的贴墙滑动顺序；不是由物理回调执行顺序决定。
-        if (unit.move_mode==2 ? sampleAir(unit.x+sx,unit.z,unit.y,y) : sample(unit.x+sx,unit.z,unit.y,y)) { unit.x+=sx; unit.y=y; }
-        if (unit.move_mode==2 ? sampleAir(unit.x,unit.z+sz,unit.y,y) : sample(unit.x,unit.z+sz,unit.y,y)) { unit.z+=sz; unit.y=y; }
-        if (unit.move_mode==2 && sampleAir(unit.x,unit.z,unit.y+sy,y)) unit.y=y;
+        if (unit.move_mode == 2 ? sampleAir(unit.x + sx, unit.z, unit.y, y)
+                                : sample(unit.x + sx, unit.z, unit.y, y))
+        {
+            unit.x += sx;
+            unit.y = y;
+        }
+        if (unit.move_mode == 2 ? sampleAir(unit.x, unit.z + sz, unit.y, y)
+                                : sample(unit.x, unit.z + sz, unit.y, y))
+        {
+            unit.z += sz;
+            unit.y = y;
+        }
+        if (unit.move_mode == 2 && sampleAir(unit.x, unit.z, unit.y + sy, y))
+            unit.y = y;
     }
 }
-void Engine::cast(Unit& unit, std::int32_t skill_id, std::vector<std::int32_t>& damage)
+void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &damage)
 {
-    if (skill_id == 0) return;
-    const auto& def = kSkills[skill_id-1];
-    const auto index = target(unit,def.target_modes);
-    if (index == state_.units.size() || state_.frame < unit.ready[skill_id-1] ||
-        distance2(unit,state_.units[index]) > def.range*def.range ||
-        (def.target_modes & state_.units[index].move_mode)==0) return;
-    if (def.effect==SkillEffect::kLogicalBolt && state_.bolts.size() >= kMaxBolts) return;
+    if (skill_id == 0)
+        return;
+    const auto &def   = kSkills[skill_id - 1];
+    const auto  index = target(unit, def.target_modes);
+    if (index == state_.units.size() || state_.frame < unit.ready[skill_id - 1] ||
+        distance2(unit, state_.units[index]) > def.range * def.range ||
+        (def.target_modes & state_.units[index].move_mode) == 0)
+        return;
+    if (def.effect == SkillEffect::kLogicalBolt && state_.bolts.size() >= kMaxBolts)
+        return;
 
-    unit.ready[skill_id-1] = state_.frame + def.cooldown;
-    if (def.effect==SkillEffect::kInstant) { damage[index] += def.damage; return; }
-    if (def.effect==SkillEffect::kVisualBolt) damage[index] += def.damage; // 表现飞行不会改变已经结算的伤害。
-    if (state_.bolts.size()>=kMaxBolts) return; // 表现球满槽仅降级视觉，不撤回已提交的伤害与冷却。
-    state_.bolts.push_back({state_.next_bolt++,unit.id,state_.units[index].id,
-                            state_.frame+60,def.effect==SkillEffect::kVisualBolt ? 0 : def.damage,unit.x,unit.y,unit.z});
+    unit.ready[skill_id - 1] = state_.frame + def.cooldown;
+    if (def.effect == SkillEffect::kInstant)
+    {
+        damage[index] += def.damage;
+        return;
+    }
+    if (def.effect == SkillEffect::kVisualBolt)
+        damage[index] += def.damage; // 表现飞行不会改变已经结算的伤害。
+    if (state_.bolts.size() >= kMaxBolts)
+        return; // 表现球满槽仅降级视觉，不撤回已提交的伤害与冷却。
+    state_.bolts.push_back({state_.next_bolt++, unit.id, state_.units[index].id, state_.frame + 60,
+                            def.effect == SkillEffect::kVisualBolt ? 0 : def.damage, unit.x, unit.y,
+                            unit.z});
 }
-void Engine::projectiles(std::vector<std::int32_t>& damage)
+void Engine::projectiles(std::vector<std::int32_t> &damage)
 {
     std::vector<Bolt> surviving;
     surviving.reserve(kMaxBolts);
     for (auto bolt : state_.bolts)
     {
-        const auto it = std::find_if(state_.units.begin(),state_.units.end(),
-            [&](const Unit& unit){ return unit.id == bolt.target && unit.hp>0; });
-        if (it == state_.units.end() || bolt.expires <= state_.frame) continue;
-        const auto dx = it->x-bolt.x;
-        const auto dz = it->z-bolt.z;
-        const auto dy = it->y-bolt.y;
-        const auto span = std::max({std::abs(dx),std::abs(dy),std::abs(dz)});
+        const auto it = std::find_if(state_.units.begin(), state_.units.end(), [&](const Unit &unit)
+                                     { return unit.id == bolt.target && unit.hp > 0; });
+        if (it == state_.units.end() || bolt.expires <= state_.frame)
+            continue;
+        const auto dx   = it->x - bolt.x;
+        const auto dz   = it->z - bolt.z;
+        const auto dy   = it->y - bolt.y;
+        const auto span = std::max({std::abs(dx), std::abs(dy), std::abs(dz)});
         // 400mm/frame；以Chebyshev长度归一保证整数确定性，技能规则不是欧氏匀速。
         if (span <= 400)
         {
-            damage[static_cast<std::size_t>(it-state_.units.begin())] += bolt.damage;
+            damage[static_cast<std::size_t>(it - state_.units.begin())] += bolt.damage;
             continue;
         }
-        bolt.x += dx*400/span;
-        bolt.z += dz*400/span;
-        bolt.y += dy*400/span;
+        bolt.x += dx * 400 / span;
+        bolt.z += dz * 400 / span;
+        bolt.y += dy * 400 / span;
         surviving.push_back(bolt);
     }
     state_.bolts.swap(surviving); // 保持原ID顺序；回滚后迭代顺序不改变。
 }
-void Engine::finish(const std::vector<std::int32_t>& damage)
+void Engine::finish(const std::vector<std::int32_t> &damage)
 {
     bool alive1 = false;
     bool alive2 = false;
     for (std::size_t i = 0; i < state_.units.size(); ++i)
     {
-        auto& unit = state_.units[i];
-        unit.hp = std::max(0,unit.hp-damage[i]);
-        alive1 |= unit.hp>0 && unit.camp==1;
-        alive2 |= unit.hp>0 && unit.camp==2;
+        auto &unit = state_.units[i];
+        unit.hp    = std::max(0, unit.hp - damage[i]);
+        alive1 |= unit.hp > 0 && unit.camp == 1;
+        alive2 |= unit.hp > 0 && unit.camp == 2;
     }
-    if (!alive1 || !alive2) state_.winner = alive1 ? 1 : alive2 ? 2 : 3;
-    else if (state_.frame>=kMaxFrames) state_.winner = 3;
+    if (!alive1 || !alive2)
+        state_.winner = alive1 ? 1 : alive2 ? 2 : 3;
+    else if (state_.frame >= kMaxFrames)
+        state_.winner = 3;
 }
 void Engine::step(Input input)
 {
     // API原子提交：任何异常恢复旧逻辑状态；临时内存失败不留下半帧。
     State before = state_;
-    try { stepUnchecked(input); }
-    catch (...) { state_ = std::move(before); throw; }
+    try
+    {
+        stepUnchecked(input);
+    }
+    catch (...)
+    {
+        state_ = std::move(before);
+        throw;
+    }
 }
 void Engine::stepUnchecked(Input input)
 {
-    if (state_.winner != 0) throw std::runtime_error("BATTLE_FINISHED");
-    if (input.x < -1 || input.x > 1 || input.z < -1 || input.z > 1 ||
-        input.y != 0 || input.skill < 0 || input.skill > 3) throw std::runtime_error("BAD_INPUT");
+    if (state_.winner != 0)
+        throw std::runtime_error("BATTLE_FINISHED");
+    if (input.x < -1 || input.x > 1 || input.z < -1 || input.z > 1 || input.y != 0 ||
+        input.skill < 0 || input.skill > 3)
+        throw std::runtime_error("BAD_INPUT");
     ++state_.frame;
     std::vector<Input> inputs;
-    for (const auto& unit : state_.units) inputs.push_back(unit.id==1001 ? input : ai(unit));
+    for (const auto &unit : state_.units)
+        inputs.push_back(unit.id == 1001 ? input : ai(unit));
     for (std::size_t i = 0; i < state_.units.size(); ++i)
-        if (state_.units[i].hp>0) move(state_.units[i],inputs[i]);
+        if (state_.units[i].hp > 0)
+            move(state_.units[i], inputs[i]);
 
-    std::vector<std::int32_t> damage(state_.units.size(),0);
+    std::vector<std::int32_t> damage(state_.units.size(), 0);
     for (std::size_t i = 0; i < state_.units.size(); ++i)
-        if (state_.units[i].hp>0) cast(state_.units[i],inputs[i].skill,damage);
+        if (state_.units[i].hp > 0)
+            cast(state_.units[i], inputs[i].skill, damage);
     projectiles(damage);
     finish(damage); // 同帧统一提交伤害；不会因先处理ID小者而取消对方同帧攻击。
 }
 std::string Engine::save() const
 {
     std::string out;
-    out.reserve(128 + state_.units.size()*52 + state_.bolts.size()*44);
-    put(out,1,4); put(out,state_.frame,4); put(out,state_.winner,4); put(out,state_.next_bolt,4);
-    put(out,state_.units.size(),4);
-    for (const auto& unit : state_.units)
+    out.reserve(128 + state_.units.size() * 52 + state_.bolts.size() * 44);
+    put(out, 1, 4);
+    put(out, state_.frame, 4);
+    put(out, state_.winner, 4);
+    put(out, state_.next_bolt, 4);
+    put(out, state_.units.size(), 4);
+    for (const auto &unit : state_.units)
     {
-        put(out,unit.id,4); put(out,unit.camp,4); put(out,unit.move_mode,4);
-        put(out,static_cast<std::uint64_t>(unit.x),8);
-        put(out,static_cast<std::uint64_t>(unit.y),8);
-        put(out,static_cast<std::uint64_t>(unit.z),8);
-        put(out,static_cast<std::uint32_t>(unit.hp),4);
-        put(out,unit.ready[0],4); put(out,unit.ready[1],4); put(out,unit.ready[2],4);
+        put(out, unit.id, 4);
+        put(out, unit.camp, 4);
+        put(out, unit.move_mode, 4);
+        put(out, static_cast<std::uint64_t>(unit.x), 8);
+        put(out, static_cast<std::uint64_t>(unit.y), 8);
+        put(out, static_cast<std::uint64_t>(unit.z), 8);
+        put(out, static_cast<std::uint32_t>(unit.hp), 4);
+        put(out, unit.ready[0], 4);
+        put(out, unit.ready[1], 4);
+        put(out, unit.ready[2], 4);
     }
-    put(out,state_.bolts.size(),4);
-    for (const auto& bolt : state_.bolts)
+    put(out, state_.bolts.size(), 4);
+    for (const auto &bolt : state_.bolts)
     {
-        put(out,bolt.id,4); put(out,bolt.caster,4); put(out,bolt.target,4); put(out,bolt.expires,4); put(out,static_cast<std::uint32_t>(bolt.damage),4);
-        put(out,static_cast<std::uint64_t>(bolt.x),8);
-        put(out,static_cast<std::uint64_t>(bolt.y),8);
-        put(out,static_cast<std::uint64_t>(bolt.z),8);
+        put(out, bolt.id, 4);
+        put(out, bolt.caster, 4);
+        put(out, bolt.target, 4);
+        put(out, bolt.expires, 4);
+        put(out, static_cast<std::uint32_t>(bolt.damage), 4);
+        put(out, static_cast<std::uint64_t>(bolt.x), 8);
+        put(out, static_cast<std::uint64_t>(bolt.y), 8);
+        put(out, static_cast<std::uint64_t>(bolt.z), 8);
     }
     return out;
 }
-void Engine::restore(const std::string& bytes)
+void Engine::restore(const std::string &bytes)
 {
-    std::size_t offset=0;
-    State candidate;
-    const auto count=readStateHeader(bytes,offset,candidate);
-    for (std::size_t i=0;i<count;++i) candidate.units.push_back(readUnit(bytes,offset,candidate));
+    std::size_t offset = 0;
+    State       candidate;
+    const auto  count = readStateHeader(bytes, offset, candidate);
+    for (std::size_t i = 0; i < count; ++i)
+        candidate.units.push_back(readUnit(bytes, offset, candidate));
 
-    const auto bolts=get(bytes,offset,4);
-    if (bolts>kMaxBolts) throw std::runtime_error("STATE_BOLTS");
-    for (std::size_t i=0;i<bolts;++i) candidate.bolts.push_back(readBolt(bytes,offset,candidate));
-    if (offset!=bytes.size()) throw std::runtime_error("STATE_TRAILING");
-    state_=std::move(candidate); // 所有校验通过后唯一发布点。
+    const auto bolts = get(bytes, offset, 4);
+    if (bolts > kMaxBolts)
+        throw std::runtime_error("STATE_BOLTS");
+    for (std::size_t i = 0; i < bolts; ++i)
+        candidate.bolts.push_back(readBolt(bytes, offset, candidate));
+    if (offset != bytes.size())
+        throw std::runtime_error("STATE_TRAILING");
+    state_ = std::move(candidate); // 所有校验通过后唯一发布点。
 }
-}
+} // namespace lesson_frame
 
-extern "C" void* fs_open(const char* path)
+extern "C" void *fs_open(const char *path)
 {
     try
     {
-        if (!path) return nullptr;
-        const auto map=flywow_navigation::BMapReader::Read(path);
+        if (!path)
+            return nullptr;
+        const auto map = flywow_navigation::BMapReader::Read(path);
         return map.ok() ? new lesson_frame::Engine(map.value) : nullptr;
     }
-    catch (...) { return nullptr; }
+    catch (...)
+    {
+        return nullptr;
+    }
 }
-extern "C" void fs_close(void* handle) { delete static_cast<lesson_frame::Engine*>(handle); }
-extern "C" int fs_step(void* handle,int x,int z,int skill)
+extern "C" void fs_close(void *handle)
+{
+    delete static_cast<lesson_frame::Engine *>(handle);
+}
+extern "C" int fs_step(void *handle, int x, int z, int skill)
 {
     try
     {
-        if (!handle) return 0;
-        static_cast<lesson_frame::Engine*>(handle)->step({x,z,0,skill});
+        if (!handle)
+            return 0;
+        static_cast<lesson_frame::Engine *>(handle)->step({x, z, 0, skill});
         return 1;
     }
-    catch (...) { return 0; }
+    catch (...)
+    {
+        return 0;
+    }
 }
-extern "C" int fs_save(void* handle,unsigned char* out,int capacity)
+extern "C" int fs_save(void *handle, unsigned char *out, int capacity)
 {
     try
     {
-        if (!handle || !out || capacity<0) return 0;
-        const auto bytes=static_cast<lesson_frame::Engine*>(handle)->save();
-        if (bytes.size()>static_cast<std::size_t>(capacity)) return 0;
-        std::memcpy(out,bytes.data(),bytes.size());
+        if (!handle || !out || capacity < 0)
+            return 0;
+        const auto bytes = static_cast<lesson_frame::Engine *>(handle)->save();
+        if (bytes.size() > static_cast<std::size_t>(capacity))
+            return 0;
+        std::memcpy(out, bytes.data(), bytes.size());
         return static_cast<int>(bytes.size());
     }
-    catch (...) { return 0; }
+    catch (...)
+    {
+        return 0;
+    }
 }
-extern "C" int fs_restore(void* handle,const unsigned char* bytes,int count)
+extern "C" int fs_restore(void *handle, const unsigned char *bytes, int count)
 {
     try
     {
-        if (!handle || !bytes || count<0 || count>16384) return 0;
-        static_cast<lesson_frame::Engine*>(handle)->restore(std::string(reinterpret_cast<const char*>(bytes),count));
+        if (!handle || !bytes || count < 0 || count > 16384)
+            return 0;
+        static_cast<lesson_frame::Engine *>(handle)->restore(
+            std::string(reinterpret_cast<const char *>(bytes), count));
         return 1;
     }
-    catch (...) { return 0; }
+    catch (...)
+    {
+        return 0;
+    }
 }
 
-extern "C" std::uint32_t fs_map_version(void* handle)
+extern "C" std::uint32_t fs_map_version(void *handle)
 {
-    return handle ? static_cast<lesson_frame::Engine*>(handle)->mapVersion() : 0;
+    return handle ? static_cast<lesson_frame::Engine *>(handle)->mapVersion() : 0;
 }
-extern "C" std::uint32_t fs_map_id(void* handle)
+extern "C" std::uint32_t fs_map_id(void *handle)
 {
-    return handle ? static_cast<lesson_frame::Engine*>(handle)->mapId() : 0;
+    return handle ? static_cast<lesson_frame::Engine *>(handle)->mapId() : 0;
 }
-extern "C" const char* fs_rules_hash() { return LESSON_FRAME_RULES_HASH; }
 ```
 
 ### server/native/frame_sync/frame_binding.cpp
@@ -799,89 +980,103 @@ using flywow_lua_binding::LuaBinding;
 using flywow_lua_binding::LuaTable;
 namespace
 {
-constexpr const char* kType="lesson.frame.engine";
+constexpr const char *kType = "lesson.frame.engine";
 struct Owner
 {
-    void* handle=nullptr;
-    ~Owner() noexcept { fs_close(handle); }
+    void *handle = nullptr;
+    ~Owner() noexcept
+    {
+        fs_close(handle);
+    }
 };
 // 封装层固定栈/引用合同：参数读取不弹栈，returnValues压结果；临时LuaTable的
 // registry引用在回调退出时unref，Lua栈中的返回值继续持有对象。无longjmp错误API。
-int openEngine(lua_State* state)
+int openEngine(lua_State *state)
 {
-    LuaBinding lua(state);
+    LuaBinding  lua(state);
     std::string path;
-    if (!lua.readValue(1,path)) return lua.pushError();
-    Owner* owner=nullptr;
-    if (!lua.newUserdata(kType,owner)) return lua.pushError();
-    owner->handle=fs_open(path.c_str());
-    if (!owner->handle) return lua.pushError("MAP_LOAD","cannot open battle map");
+    if (!lua.readValue(1, path))
+        return lua.pushError();
+    Owner *owner = nullptr;
+    if (!lua.newUserdata(kType, owner))
+        return lua.pushError();
+    owner->handle = fs_open(path.c_str());
+    if (!owner->handle)
+        return lua.pushError("MAP_LOAD", "cannot open battle map");
     return lua.returnValues(owner);
 }
-int stepEngine(lua_State* state)
+int stepEngine(lua_State *state)
 {
     LuaBinding lua(state);
-    Owner* owner=nullptr;
-    int x=0,z=0,skill=0;
-    if (!lua.readUserdata(1,kType,owner) || !lua.readValue(2,x) ||
-        !lua.readValue(3,z) || !lua.readValue(4,skill)) return lua.pushError();
-    if (!fs_step(owner->handle,x,z,skill)) return lua.pushError("STEP_FAILED","invalid input or finished state");
+    Owner     *owner = nullptr;
+    int        x = 0, z = 0, skill = 0;
+    if (!lua.readUserdata(1, kType, owner) || !lua.readValue(2, x) || !lua.readValue(3, z) ||
+        !lua.readValue(4, skill))
+        return lua.pushError();
+    if (!fs_step(owner->handle, x, z, skill))
+        return lua.pushError("STEP_FAILED", "invalid input or finished state");
     return lua.returnValues(true);
 }
-int saveEngine(lua_State* state)
+int saveEngine(lua_State *state)
 {
     LuaBinding lua(state);
-    Owner* owner=nullptr;
-    if (!lua.readUserdata(1,kType,owner)) return lua.pushError();
+    Owner     *owner = nullptr;
+    if (!lua.readUserdata(1, kType, owner))
+        return lua.pushError();
     unsigned char buffer[16384];
-    const int count=fs_save(owner->handle,buffer,sizeof(buffer));
-    if (count==0) return lua.pushError("STATE_SAVE","closed engine or state overflow");
-    return lua.returnValues(std::string(reinterpret_cast<char*>(buffer),count));
+    const int     count = fs_save(owner->handle, buffer, sizeof(buffer));
+    if (count == 0)
+        return lua.pushError("STATE_SAVE", "closed engine or state overflow");
+    return lua.returnValues(std::string(reinterpret_cast<char *>(buffer), count));
 }
-int restoreEngine(lua_State* state)
+int restoreEngine(lua_State *state)
 {
-    LuaBinding lua(state);
-    Owner* owner=nullptr;
+    LuaBinding  lua(state);
+    Owner      *owner = nullptr;
     std::string bytes;
-    if (!lua.readUserdata(1,kType,owner) || !lua.readValue(2,bytes)) return lua.pushError();
-    if (!fs_restore(owner->handle,reinterpret_cast<const unsigned char*>(bytes.data()),static_cast<int>(bytes.size())))
-        return lua.pushError("STATE_RESTORE","invalid or incompatible checkpoint");
+    if (!lua.readUserdata(1, kType, owner) || !lua.readValue(2, bytes))
+        return lua.pushError();
+    if (!fs_restore(owner->handle, reinterpret_cast<const unsigned char *>(bytes.data()),
+                    static_cast<int>(bytes.size())))
+        return lua.pushError("STATE_RESTORE", "invalid or incompatible checkpoint");
     return lua.returnValues(true);
 }
-int closeEngine(lua_State* state)
+int closeEngine(lua_State *state)
 {
     LuaBinding lua(state);
-    Owner* owner=nullptr;
-    if (!lua.readUserdata(1,kType,owner)) return lua.pushError();
+    Owner     *owner = nullptr;
+    if (!lua.readUserdata(1, kType, owner))
+        return lua.pushError();
     fs_close(owner->handle);
-    owner->handle=nullptr; // GC只析构Owner一次，不再释放旧指针。
+    owner->handle = nullptr; // GC只析构Owner一次，不再释放旧指针。
     return lua.returnValues(true);
 }
-int identity(lua_State* state)
+int identity(lua_State *state)
 {
     LuaBinding lua(state);
-    Owner* owner=nullptr;
-    if (!lua.readUserdata(1,kType,owner)) return lua.pushError();
-    if (!owner->handle) return lua.pushError("CLOSED","engine is closed");
-    return lua.returnValues(fs_map_id(owner->handle),fs_map_version(owner->handle));
+    Owner     *owner = nullptr;
+    if (!lua.readUserdata(1, kType, owner))
+        return lua.pushError();
+    if (!owner->handle)
+        return lua.pushError("CLOSED", "engine is closed");
+    return lua.returnValues(fs_map_id(owner->handle), fs_map_version(owner->handle));
 }
-int rulesHash(lua_State* state)
+} // namespace
+extern "C" int luaopen_lesson_frame_native(lua_State *state)
 {
     LuaBinding lua(state);
-    return lua.returnValues(fs_rules_hash());
-}
-}
-extern "C" int luaopen_lesson_frame_native(lua_State* state)
-{
-    LuaBinding lua(state);
-    LuaTable meta;
-    if (!lua.registerUserdata<Owner>(kType,meta)) return lua.pushError();
-    auto methods=lua.newTable();
-    methods.setFunction("step",stepEngine); methods.setFunction("save",saveEngine);
-    methods.setFunction("restore",restoreEngine); methods.setFunction("close",closeEngine);
-    methods.setFunction("identity",identity); meta.writeValue("__index",methods);
-    auto module=lua.newTable();
-    module.setFunction("open",openEngine); module.setFunction("rules_hash",rulesHash);
+    LuaTable   meta;
+    if (!lua.registerUserdata<Owner>(kType, meta))
+        return lua.pushError();
+    auto methods = lua.newTable();
+    methods.setFunction("step", stepEngine);
+    methods.setFunction("save", saveEngine);
+    methods.setFunction("restore", restoreEngine);
+    methods.setFunction("close", closeEngine);
+    methods.setFunction("identity", identity);
+    meta.writeValue("__index", methods);
+    auto module = lua.newTable();
+    module.setFunction("open", openEngine);
     return lua.returnValues(module);
 }
 ```
@@ -890,7 +1085,7 @@ extern "C" int luaopen_lesson_frame_native(lua_State* state)
 
 **操作：新建。** 把同一核心编译为Linux Lua模块与Windows Unity DLL，不下载或复制FlyWow源码。
 
-学习导航：精读 C++17、固定Lua ABI、真实子模块源码路径、rules_hash由源码内容生成。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+学习导航：精读 C++17、固定 Lua ABI、真实子模块源码路径和 CMake 目标边界。可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
 
 ```cmake
 # 职责：构建宿主Frame Core、Lua Binding和Unity Native DLL；源码来自固定子模块。
@@ -902,23 +1097,17 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 set(FLYWOW "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet-flywow")
 set(GRID "${FLYWOW}/navigation/native/grid_map")
-file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/frame_core.cpp" CORE_HASH)
-file(SHA256 "${CMAKE_CURRENT_SOURCE_DIR}/frame_core.h" HEADER_HASH)
-set(RULES_CONTENT "${CORE_HASH}${HEADER_HASH}")
-file(GLOB NAV_HEADERS "${GRID}/*.h")
-set(NAV_SOURCES bmap_reader.cpp grid_map.cpp nav_result.cpp dynamic_occupancy.cpp navigation_context.cpp navigation_profile_registry.cpp grid_pathfinder.cpp)
-foreach(HEADER IN LISTS NAV_HEADERS)
-    file(SHA256 "${HEADER}" NAV_HASH)
-    string(APPEND RULES_CONTENT "${NAV_HASH}")
-endforeach()
-foreach(SOURCE IN LISTS NAV_SOURCES)
-    file(SHA256 "${GRID}/${SOURCE}" NAV_HASH)
-    string(APPEND RULES_CONTENT "${NAV_HASH}")
-endforeach()
-string(SHA256 RULES_HASH "${RULES_CONTENT}")
-add_library(frame_core SHARED frame_core.cpp "${GRID}/bmap_reader.cpp" "${GRID}/grid_map.cpp" "${GRID}/nav_result.cpp" "${GRID}/dynamic_occupancy.cpp" "${GRID}/navigation_context.cpp" "${GRID}/navigation_profile_registry.cpp" "${GRID}/grid_pathfinder.cpp")
+add_library(frame_core SHARED
+    frame_core.cpp
+    "${GRID}/bmap_reader.cpp"
+    "${GRID}/grid_map.cpp"
+    "${GRID}/nav_result.cpp"
+    "${GRID}/dynamic_occupancy.cpp"
+    "${GRID}/navigation_context.cpp"
+    "${GRID}/navigation_profile_registry.cpp"
+    "${GRID}/grid_pathfinder.cpp"
+)
 target_include_directories(frame_core PUBLIC . "${GRID}")
-target_compile_definitions(frame_core PRIVATE LESSON_FRAME_RULES_HASH="${RULES_HASH}")
 if(MSVC)
     target_compile_options(frame_core PRIVATE /W4 /permissive- /EHsc /utf-8)
     set_target_properties(frame_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
@@ -937,12 +1126,19 @@ if(LESSON_FRAME_LUA)
     set(SKYNET_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet/3rd/lua")
     add_subdirectory("${FLYWOW}/lua-binding" "${CMAKE_BINARY_DIR}/lua-binding" EXCLUDE_FROM_ALL)
     add_library(lesson_frame_native MODULE frame_binding.cpp)
-    target_include_directories(lesson_frame_native PRIVATE "${SKYNET_LUA_DIR}" "${FLYWOW}/lua-binding")
+    target_include_directories(lesson_frame_native PRIVATE
+        "${SKYNET_LUA_DIR}"
+        "${FLYWOW}/lua-binding"
+    )
     target_link_libraries(lesson_frame_native PRIVATE frame_core flywow_lua_binding)
     set_target_properties(lesson_frame_native PROPERTIES PREFIX "" BUILD_RPATH "$ORIGIN")
 endif()
 enable_testing()
-add_test(NAME frame_native COMMAND frame_test "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap")
+add_test(
+    NAME frame_native
+    COMMAND frame_test
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap"
+)
 ```
 
 ### server/native/frame_sync/frame_test.cpp
@@ -953,47 +1149,70 @@ add_test(NAME frame_native COMMAND frame_test "${CMAKE_CURRENT_SOURCE_DIR}/../..
 
 ```cpp
 // 职责：帧同步Native聚焦回归与跨平台Golden；不启动Server。
-#include "frame_core.h"
 #include "bmap_reader.h"
+#include "frame_core.h"
 #include <cassert>
+#include <chrono>
 #include <iomanip>
 #include <iostream>
-#include <chrono>
-std::uint32_t hashBytes(const std::string& bytes)
+std::uint32_t hashBytes(const std::string &bytes)
 {
-    std::uint32_t hash=2166136261u;
-    for (unsigned char byte : bytes) hash=(hash^byte)*16777619u;
+    std::uint32_t hash = 2166136261u;
+    for (unsigned char byte : bytes)
+        hash = (hash ^ byte) * 16777619u;
     return hash; // 模拟分歧诊断用FNV32，不是密码或资产完整性hash。
 }
-int main(int argc,char** argv)
+int main(int argc, char **argv)
 {
-    if (argc!=2) return 2;
-    const auto map=flywow_navigation::BMapReader::Read(argv[1]);
-    if (!map.ok()) return 3;
-    lesson_frame::Engine a(map.value),b(map.value);
-    const auto initial=a.save();
-    assert(a.state().units[0].move_mode==1 && a.state().units[1].move_mode==2);
-    const auto born_y=a.state().units[1].y;
-    for (int i=0;i<12;++i) a.step({});
-    assert(a.state().units[1].y!=born_y); // Server AI确实升降，不固定高度。
+    if (argc != 2)
+        return 2;
+    const auto map = flywow_navigation::BMapReader::Read(argv[1]);
+    if (!map.ok())
+        return 3;
+    lesson_frame::Engine a(map.value), b(map.value);
+    const auto           initial = a.save();
+    assert(a.state().units[0].move_mode == 1 && a.state().units[1].move_mode == 2);
+    const auto born_y = a.state().units[1].y;
+    for (int i = 0; i < 12; ++i)
+        a.step({});
+    assert(a.state().units[1].y != born_y); // Server AI确实升降，不固定高度。
     a.restore(initial);
-    for (int i=0;i<240 && a.state().winner==0;++i)
+    for (int i = 0; i < 240 && a.state().winner == 0; ++i)
     {
-        const lesson_frame::Input input{(i/30)%3-1,(i/45)%3-1,0,i%20==0?2:i%12==0?1:0};
-        const auto before=a.save();
-        a.step(input); b.step(input);
-        assert(a.save()==b.save());
-        b.restore(before); b.step(input);
-        assert(a.save()==b.save());
+        const lesson_frame::Input input{(i / 30) % 3 - 1, (i / 45) % 3 - 1, 0,
+                                        i % 20 == 0   ? 2
+                                        : i % 12 == 0 ? 1
+                                                      : 0};
+        const auto                before = a.save();
+        a.step(input);
+        b.step(input);
+        assert(a.save() == b.save());
+        b.restore(before);
+        b.step(input);
+        assert(a.save() == b.save());
         std::cout << "GOLDEN " << a.state().frame << " " << hashBytes(a.save()) << "\n";
     }
-    const auto saved=a.save();
-    try { a.restore(saved+"x"); assert(false); } catch (...) {}
-    assert(a.save()==saved);
-    try { a.step({9,0,0}); assert(false); } catch (...) {}
-    assert(a.save()==saved);
+    const auto saved = a.save();
+    try
+    {
+        a.restore(saved + "x");
+        assert(false);
+    }
+    catch (...)
+    {
+    }
+    assert(a.save() == saved);
+    try
+    {
+        a.step({9, 0, 0});
+        assert(false);
+    }
+    catch (...)
+    {
+    }
+    assert(a.save() == saved);
     a.restore(initial);
-    assert(a.save()==initial);
+    assert(a.save() == initial);
     std::cout << "FRAME_NATIVE_OK map=" << a.mapId() << ":" << a.mapVersion() << "\n";
 }
 ```
@@ -1019,8 +1238,10 @@ assert(a:step(1,0,3,0))
 assert(a:save() ~= b:save(), "separate userdata must own separate State")
 assert(b:restore(a:save()))
 assert(a:save() == b:save())
-assert(a:close()); assert(a:close())
-ok, err = a:save(); assert(ok == nil and type(err.code) == "string")
+assert(a:close())
+assert(a:close())
+ok, err = a:save()
+assert(ok == nil and type(err.code) == "string")
 assert(b:close())
 collectgarbage("collect")
 print("FRAME_BINDING_OK")
@@ -1100,7 +1321,12 @@ ctest --test-dir build/frame_sync --output-on-failure
 -- 生命周期：每场景重建 Lua State 模块状态；不启动网络，不冒充真实集成验证。
 -- 不负责：不验证 Protobuf 字节或真实 Skynet 调度，它们由宿主集成测试覆盖。
 local root = assert(arg[1])
-package.preload["shared.debug.luapanda_debug"] = function() return {start=function() end} end
+package.preload["shared.debug.luapanda_debug"] = function()
+    return
+    {
+        start = function() end,
+    }
+end
 package.path = root .. "/gateway/lualib/?.lua;" .. package.path
 
 -- 创建独立的可控场景；overrides 为配置覆盖，无 I/O；返回由测试拥有的控制对象。
@@ -1126,64 +1352,100 @@ local function scenario(overrides)
     for k, v in pairs(overrides or {}) do config[k] = v end
     local skynet = {}
     -- 替身不允许数据平面出现同步 call；任何意外等待立即使测试失败。
-    function skynet.call() error("Gateway must never call handler") end
+    function skynet.call()
+        error("Gateway must never call handler")
+    end
     -- 固定签名记录本地异步消息；返回 session=0，符合 pinned Skynet send。
     function skynet.send(address, protocol, command, message)
         e.sends[#e.sends + 1] = { address, command, message }
         return 0
     end
     -- 注册但不抢先执行任务；测试自行控制协程推进，无 OS 线程。
-    function skynet.fork(fn) e.forks[#e.forks + 1] = coroutine.create(fn) end
+    function skynet.fork(fn)
+        e.forks[#e.forks + 1] = coroutine.create(fn)
+    end
     -- 在测试调度器等待下一次扫描。
-    function skynet.sleep() coroutine.yield("sleep") end
+    function skynet.sleep()
+        coroutine.yield("sleep")
+    end
     -- 返回测试时钟 tick。
-    function skynet.now() return e.now end
+    function skynet.now()
+        return e.now
+    end
     -- 固定 Service handle。
-    function skynet.self() return 99 end
+    function skynet.self()
+        return 99
+    end
     -- 每场景由外部隔离状态，固定高精度 tick 足够验证不同 epoch 的拒绝。
-    function skynet.hpc() return 12345 end
+    function skynet.hpc()
+        return 12345
+    end
     -- 忽略诊断日志；结果通过状态断言检查。
-    function skynet.error() end
+    function skynet.error()
+    end
     -- 捕获管理调用返回 record。
-    function skynet.retpack(result) e.result = result end
+    function skynet.retpack(result)
+        e.result = result
+    end
     -- 保存真实 Service 的分发回调。
-    function skynet.dispatch(protocol, fn) e.dispatch = fn end
+    function skynet.dispatch(protocol, fn)
+        e.dispatch = fn
+    end
     -- 同步初始化入口，不执行真实调度。
-    function skynet.start(fn) fn() end
+    function skynet.start(fn)
+        fn()
+    end
     local socket = {}
     -- 固定监听 fd 和地址；无 I/O。
-    function socket.listen(host, port) return 1, host, port end
+    function socket.listen(host, port)
+        return 1, host, port
+    end
     -- 监听回调保存供测试注入连接；客户端 start 不执行 I/O。
     function socket.start(fd, fn)
         e.started[fd] = true
-        if fn then e.accept = fn end
+        if fn then
+            e.accept = fn
+        end
     end
     -- 缓冲限制由真实集成验证；替身保持签名。
-    function socket.limit() end
+    function socket.limit()
+    end
     -- 警告回调无需触发，真实集成另测写队列。
-    function socket.warning(fd, callback) e.warning = callback end
+    function socket.warning(fd, callback)
+        e.warning = callback
+    end
     -- 精确读取已有字节，不足时挂起；模仿 Socket read 的等待条件。
     function socket.read(fd, size)
         local data = e.streams[fd] or ""
-        if #data < size then coroutine.yield("read"); return false, "" end
+        if #data < size then
+            coroutine.yield("read")
+            return false, ""
+        end
         e.streams[fd] = data:sub(size + 1)
         return data:sub(1, size)
     end
     -- 记录完整 TCP frame；写入失败场景通过标志注入。
     function socket.write(fd, bytes)
-        if e.fail_write then return false end
+        if e.fail_write then
+            return false
+        end
         e.writes[#e.writes + 1] = { fd, bytes }
         return true
     end
     -- 记录关闭，不复用 fd。
-    function socket.close(fd) e.closed[fd] = true; e.started[fd] = nil end
+    function socket.close(fd)
+        e.closed[fd] = true
+        e.started[fd] = nil
+    end
     -- 接管前的 accepted fd 必须通过 close_fd 释放。
     function socket.close_fd(fd)
         assert(not e.started[fd], "close_fd is only valid before socket.start")
         e.closed[fd] = true
     end
     -- 与 pinned socket_pool ownership 保持一致。
-    function socket.invalid(fd) return not e.started[fd] end
+    function socket.invalid(fd)
+        return not e.started[fd]
+    end
     local websocket = {}
     -- 接受握手后模拟收到一个 binary 消息，再挂起等待后续消息。
     function websocket.accept(fd, handler)
@@ -1194,11 +1456,17 @@ local function scenario(overrides)
         return true
     end
     -- 记录 WS 完整消息写入；不 yield。
-    function websocket.write(fd, bytes) e.writes[#e.writes + 1] = { fd, bytes } end
+    function websocket.write(fd, bytes)
+        e.writes[#e.writes + 1] = { fd, bytes }
+    end
     -- 记录 WS 关闭。
-    function websocket.close(fd) e.closed[fd] = true end
+    function websocket.close(fd)
+        e.closed[fd] = true
+    end
     -- 返回握手前是否尚未建立 WS 对象。
-    function websocket.is_close(id) return e.ws == nil or e.closed[id] == true end
+    function websocket.is_close(id)
+        return e.ws == nil or e.closed[id] == true
+    end
     local registry = {}
     -- 提供只读测试索引。
     function registry.load() return
@@ -1229,7 +1497,9 @@ local function scenario(overrides)
         }
     end
     -- 请求 body 替身，与业务无关。
-    function codec.decode_request() return { test_id = 1, map_id = 1001 } end
+    function codec.decode_request()
+        return { test_id = 1, map_id = 1001 }
+    end
     -- 响应结果编码为文本，fail 注入编码异常。
     function codec.encode_response(definition, version, request_id, response)
         assert(not response.fail, "encode failure")
@@ -1343,8 +1613,10 @@ assert(e.closed[10])
 e = scenario()
 e.streams[10] = frame(1)
 e.streams[11] = frame(2)
-e.accept(10, "peer-a"); resume(e.forks[2])
-e.accept(11, "peer-b"); resume(e.forks[3])
+e.accept(10, "peer-a")
+resume(e.forks[2])
+e.accept(11, "peer-b")
+resume(e.forks[3])
 local targeted =
 {
     gateway_epoch = e.sends[1][3].gateway_epoch,
@@ -1371,8 +1643,10 @@ assert(#e.writes == 3, "broadcast still reaches both ready connections")
 targeted.request_id = 1
 e.dispatch(0, 7, "send_data", targeted)
 assert(#e.writes == 3, "broadcast cannot pretend to be correlated response")
-targeted.connection_id = 1; targeted.request_id = 0
-e.dispatch(0, 7, "close", targeted); resume(e.forks[4])
+targeted.connection_id = 1
+targeted.request_id = 0
+e.dispatch(0, 7, "close", targeted)
+resume(e.forks[4])
 e.dispatch(0, 7, "send_data", targeted)
 assert(#e.writes == 3, "closed target must not fall back to broadcast")
 targeted.connection_id = 9999
@@ -1406,74 +1680,104 @@ print("GATEWAY_ASYNC_UNIT_OK")
 **操作：局部修改 `shared/protocol/navigation_query.proto` 的CommandId，添加：**
 
 ```proto
-  FRAME_JOIN = 1101;
-  FRAME_INPUT = 1102;
-  FRAME_PUSH = 1103;
-  FRAME_RECOVER = 1104;
-  FRAME_LEAVE = 1105;
-  FRAME_REPLAY = 1106;
+FRAME_JOIN    = 1101;
+FRAME_INPUT   = 1102;
+FRAME_PUSH    = 1103;
+FRAME_RECOVER = 1104;
+FRAME_LEAVE   = 1105;
+FRAME_REPLAY  = 1106;
 ```
 
 **操作：在同一个Proto文件末尾追加以下完整messages。** `.proto.inc`只是本文作者组织片段的名字，不是你要创建的第二份协议文件；不要新增运行时协议源。
 
 ```proto
 // 职责：以下message追加到navigation_query.proto；CommandId另按正文局部修改。
-message FrameCommand {
-  uint32 frame = 1;       // 请求生效帧；必须位于Server当前帧之后的窗口内。
-  sint32 x = 2;          // -1/0/1，X方向按键。
-  sint32 z = 3;          // -1/0/1，Z方向按键。
-  uint32 skill = 4;      // 0无施法，1近战，2表现弹丸，3逻辑火球。
+message FrameCommand
+{
+    uint32 frame = 1; // 请求生效帧；必须位于Server当前帧之后的窗口内。
+    sint32 x     = 2; // -1/0/1，X方向按键。
+    sint32 z     = 3; // -1/0/1，Z方向按键。
+    uint32 skill = 4; // 0无施法，1近战，2表现弹丸，3逻辑火球。
 }
-message FrameRecord {
-  FrameCommand input = 1; // 该帧被权威采用的玩家输入；AI在确定性Core内派生。
-  bool supplied = 2;      // true采用玩家输入；false采用明确的缺输入规则。
-  fixed32 hash = 3;       // 本帧结束的规范化状态FNV32；用于诊断分歧。
+message FrameRecord
+{
+    FrameCommand input    = 1; // 该帧被权威采用的玩家输入；AI在确定性Core内派生。
+    bool         supplied = 2; // true采用玩家输入；false采用明确的缺输入规则。
+    fixed32      hash     = 3; // 本帧结束的规范化状态FNV32；用于诊断分歧。
 }
-message FrameJoinRequest { uint32 scenario_id = 1; }
-message FrameJoinResponse {
-  string code = 1;          // OK/BUSY/BAD_SCENARIO/INTERNAL等稳定机器码。
-  uint32 battle_id = 2;
-  bytes resume_token = 3;   // 32bytes操作系统随机凭据；不能写日志。
-  uint32 generation = 4;    // 重连会话代数；阻止旧连接输入写新会话。
-  uint32 map_id = 5;
-  uint32 map_version = 6;
-  string map_hash = 7;      // 已发布BMAP SHA256。
-  string rules_hash = 8;    // Native规则源码身份；跨端必须相同。
-  uint32 frame = 9;
-  bytes checkpoint = 10;   // 初始完整状态；正常帧只传FrameRecord。
+message FrameJoinRequest
+{
+    uint32 scenario_id = 1;
 }
-message FrameInputRequest {
-  uint32 battle_id = 1;
-  uint32 generation = 2;
-  repeated FrameCommand inputs = 3; // 最多8条；一帧只允许一个不可变输入。
+message FrameJoinResponse
+{
+    string code         = 1; // OK/BUSY/BAD_SCENARIO/INTERNAL等稳定机器码。
+    uint32 battle_id    = 2;
+    bytes  resume_token = 3; // 32bytes操作系统随机凭据；不能写日志。
+    uint32 generation   = 4; // 重连会话代数；阻止旧连接输入写新会话。
+    uint32 map_id       = 5;
+    uint32 map_version  = 6;
+    string map_hash     = 7; // 已发布BMAP SHA256。
+    reserved 8;              // 已发布字段号永久保留，避免旧客户端把字段误读为新语义。
+    uint32 frame      = 9;
+    bytes  checkpoint = 10; // 初始完整状态；正常帧只传FrameRecord。
 }
-message FrameInputResult {
-  uint32 frame = 1; // 对应请求中的目标帧；用于定位批内结果。
-  string code = 2;  // OK/BAD_INPUT/LATE/INPUT_WINDOW/CONFLICT/FINISHED。
+message FrameInputRequest
+{
+    uint32                battle_id  = 1;
+    uint32                generation = 2;
+    repeated FrameCommand inputs     = 3; // 最多8条；一帧只允许一个不可变输入。
 }
-message FramePushResponse {
-  uint32 battle_id = 1;
-  uint32 generation = 2;
-  repeated FrameRecord records = 3;       // 按帧严格连续；一正常推送当前帧。
-  string code = 4;                        // 请求级：OK/EMPTY_INPUT/INPUT_BATCH_TOO_LARGE/OVERLOAD/INTERNAL。
-  uint32 winner = 5;                      // 0进行中，1/2阵营胜利，3平局。
-  repeated FrameInputResult input_results = 6; // 输入请求的逐项结果；顺序与inputs一致。
+message FrameInputResult
+{
+    uint32 frame = 1; // 对应请求中的目标帧；用于定位批内结果。
+    string code  = 2; // OK/BAD_INPUT/LATE/INPUT_WINDOW/CONFLICT/FINISHED。
 }
-message FrameRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
-message FrameRecoverResponse { FrameJoinResponse state = 1; }
-message FrameLeaveRequest { uint32 battle_id = 1; uint32 generation = 2; }
-message FrameLeaveResponse { string code = 1; }
-message FrameReplayRequest { uint32 battle_id = 1; bytes resume_token = 2; uint32 offset = 3; }
-message FrameReplayResponse {
-  string code = 1;
-  repeated FrameRecord records = 2; // 分页最多256帧；不把整场日志塞进单个帧。
-  uint32 total = 3;
-  FrameJoinResponse initial = 4;   // 第一页带身份/初始状态，不带恢复凭据。
+message FramePushResponse
+{
+    uint32               battle_id  = 1;
+    uint32               generation = 2;
+    repeated FrameRecord records    = 3; // 按帧严格连续；一正常推送当前帧。
+    string code   = 4; // 请求级：OK/EMPTY_INPUT/INPUT_BATCH_TOO_LARGE/OVERLOAD/INTERNAL。
+    uint32 winner = 5; // 0进行中，1/2阵营胜利，3平局。
+    repeated FrameInputResult input_results = 6; // 输入请求的逐项结果；顺序与inputs一致。
 }
-message FrameReplay {
-  uint32 format_version = 1;       // 目前1；加载时拒绝未知版本。
-  FrameJoinResponse initial = 2;
-  repeated FrameRecord records = 3;
+message FrameRecoverRequest
+{
+    uint32 battle_id    = 1;
+    bytes  resume_token = 2;
+}
+message FrameRecoverResponse
+{
+    FrameJoinResponse state = 1;
+}
+message FrameLeaveRequest
+{
+    uint32 battle_id  = 1;
+    uint32 generation = 2;
+}
+message FrameLeaveResponse
+{
+    string code = 1;
+}
+message FrameReplayRequest
+{
+    uint32 battle_id    = 1;
+    bytes  resume_token = 2;
+    uint32 offset       = 3;
+}
+message FrameReplayResponse
+{
+    string               code    = 1;
+    repeated FrameRecord records = 2; // 分页最多256帧；不把整场日志塞进单个帧。
+    uint32               total   = 3;
+    FrameJoinResponse    initial = 4; // 第一页带身份/初始状态，不带恢复凭据。
+}
+message FrameReplay
+{
+    uint32               format_version = 1; // 目前1；加载时拒绝未知版本。
+    FrameJoinResponse    initial        = 2;
+    repeated FrameRecord records        = 3;
 }
 ```
 
@@ -1505,7 +1809,7 @@ rg -n 'FRAME_|FrameInput|FramePush' server/lualib/gateway/protocol/navigation_re
 
 该脚本将唯一Proto生成到现有 `Assets/BattleNavigation/Scripts/Protocol/NavigationQuery.cs`，保持已有Google.Protobuf引用。不要再把WSL生成的另一份同名C#放入Assets，否则相同类型重复定义。
 
-失败排查：命令没有Request/Response是命名前缀不匹配；descriptor旧是没有重新生成/重启；Server与Unity使用不同map_hash/rules_hash是发布身份不一致；协议枚举编号不能因为重新排列就改变。
+失败排查：命令没有Request/Response是命名前缀不匹配；descriptor旧是没有重新生成/重启；Server与Unity使用不同map_hash是地图发布身份不一致；协议枚举编号不能因为重新排列就改变。
 
 ## 5. 实时Runtime与Worker：时间在调度层，规则在Core
 
@@ -1560,7 +1864,7 @@ return
 
 ### server/scripts/lessons/prepare_frame_sync.py
 
-**操作：新建。** 在启动前验证已发布地图hash并生成资产身份配置；规则hash由Native构建绑定。
+**操作：新建。** 在启动前验证已发布地图hash并生成资产身份配置。该文件只描述地图资产身份，不计算或绑定源代码hash。
 
 学习导航：精读 路径从脚本推导，manifest与BMAP内容一致性，源码运行时不读Unity工程。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
 
@@ -1577,8 +1881,11 @@ digest = hashlib.sha256((asset/'battle_1001.bmap').read_bytes()).hexdigest()
 if digest != manifest['content_sha256']:
     raise SystemExit('MAP_HASH_MISMATCH')
 target = root/'server/config/frame_sync_asset.lua'
-target.write_text('--- 构建生成的已验证地图身份；不手改。\nreturn { map_id = %d, map_version = %d, map_hash = "%s" }\n' %
-                  (manifest['map_id'],manifest['map_version'],digest), encoding='utf-8')
+content = (
+    '--- 构建生成的已验证地图身份；不手改。\n'
+    'return { map_id = %d, map_version = %d, map_hash = "%s" }\n'
+) % (manifest['map_id'], manifest['map_version'], digest)
+target.write_text(content, encoding='utf-8')
 print('FRAME_ASSET_OK',digest)
 ```
 
@@ -1606,19 +1913,44 @@ Runtime只管理本场的输入窗口与Core调用，不注册Service、不读�
 local native = require "lesson_frame_native"
 local M = {}
 
+---@class FrameInput
+---@field frame integer 目标Server帧；已经执行的帧不可修改。
+---@field x integer X轴意图，取值-1/0/1；不代表正式位置。
+---@field z integer Z轴意图，取值-1/0/1；不代表正式位置。
+---@field y integer 本课固定为0，保留与Native输入record一致的字段。
+---@field skill integer 技能编号；0表示本帧不施放。
+---@class FrameRecord
+---@field input FrameInput 本帧正式采用的输入；缺输入时由Server补齐。
+---@field supplied boolean true表示截止前收到并采用玩家输入。
+---@field hash integer 本帧规范化Native状态的非安全校验值。
+---@class FrameRuntimeOptions
+---@field map_path string 已验证地图资产路径；只在创建时读取。
+---@field future_window integer 最多接受的未来帧距离。
+---@field max_frames integer 单场可保留的Replay输入记录上限。
+---@class FrameRuntimeError
+---@field code string 稳定错误码，供Worker转换成传输合同。
+
 ---@class FrameRuntime
 ---@field engine userdata 独占Native模拟；close后不再调用。
 ---@field frame integer 已完成权威帧。
 ---@field winner integer 0未结束、1/2胜方、3平局。
----@field pending table<integer,table> 尚未执行的输入，最多future_window条。
----@field records table 有界整场帧输入日志；不保留每帧完整状态。
+---@field pending table<integer,FrameInput> 尚未执行输入；由该Runtime独占，最多future_window条。
+---@field records FrameRecord[] 有界整场帧输入日志；不保留每帧完整状态。
+---@field window integer 与配置future_window一致；用于拒绝过远的未来输入。
+---@field max_frames integer records容量上限；达到后Battle停止追加并失败。
+---@field missing integer 连续缺输入帧数；控制短时方向保持。
+---@field last_x integer 最近正式输入方向X分量。
+---@field last_z integer 最近正式输入方向Z分量。
+---@field last_y integer 最近正式输入高度分量；本课恒为0。
 
---- 对规范化状态做32位FNV；不作安全校验，SHA256用于资产/规则身份。
+--- 对规范化状态做32位FNV；不作安全校验，SHA256用于已发布地图资产身份；程序版本随发行包管理。
 ---@param bytes string 本次调用借用的Native状态。
 ---@return integer hash unsigned32。
 function M.hash(bytes)
     local value = 2166136261
-    for i = 1, #bytes do value = ((value ~ bytes:byte(i)) * 16777619) & 0xffffffff end
+    for i = 1, #bytes do
+        value = ((value ~ bytes:byte(i)) * 16777619) & 0xffffffff
+    end
     return value
 end
 
@@ -1630,13 +1962,18 @@ local function header(bytes)
 end
 
 --- 建立独占Native模拟；启动资产I/O，失败以nil/error交给Worker。
----@param options table map_path/future_window/max_frames由配置注入。
+---@param options FrameRuntimeOptions map路径与容量由Worker配置注入；不在Core读取环境变量。
 ---@return FrameRuntime|nil runtime, table|nil error
 function M.create(options)
     local engine, err = native.open(options.map_path)
-    if not engine then return nil, err end
+    if not engine then
+        return nil, err
+    end
     local initial, save_err = engine:save()
-    if not initial then engine:close(); return nil, save_err end
+    if not initial then
+        engine:close()
+        return nil, save_err
+    end
     return
     {
         engine        = engine,
@@ -1657,22 +1994,33 @@ end
 --- 接受未来帧意图；重复相同输入幂等，不允许改写已接受输入。
 --- 不yield、不修改正式位置；成功OK，失败稳定code。
 ---@param runtime FrameRuntime 当前Battle owner。
----@param input table frame/x/z/skill；函数复制字段，不保存借用table。
----@return string code
+---@param input FrameInput 调用方借用的意图record；函数只复制标量字段。
+---@return string code OK表示幂等接受；其他值是稳定拒绝原因。
 function M.accept(runtime, input)
     local f = input.frame or 0
     local x, z, skill, y = input.x or 0, input.z or 0, input.skill or 0, input.y or 0
     if math.type(f) ~= "integer" or math.type(x) ~= "integer" or
         math.type(z) ~= "integer" or math.type(skill) ~= "integer" or
-        math.type(y) ~= "integer" or y ~= 0 or x < -1 or x > 1 or z < -1 or z > 1 or skill < 0 or skill > 3 then
+        math.type(y) ~= "integer" or y ~= 0 or x < -1 or x > 1 or
+        z < -1 or z > 1 or skill < 0 or skill > 3 then
         return "BAD_INPUT"
     end
-    if runtime.winner ~= 0 then return "FINISHED" end
-    if f <= runtime.frame then return "LATE" end
-    if f > runtime.frame + runtime.window then return "INPUT_WINDOW" end
+    if runtime.winner ~= 0 then
+        return "FINISHED"
+    end
+    if f <= runtime.frame then
+        return "LATE"
+    end
+    if f > runtime.frame + runtime.window then
+        return "INPUT_WINDOW"
+    end
     local previous = runtime.pending[f]
     if previous then
-        return previous.x == x and previous.z == z and previous.skill == skill and previous.y == y and "OK" or "CONFLICT"
+        same = previous.x == x and previous.z == z and previous.skill == skill and previous.y == y
+        if same then
+            return "OK"
+        end
+        return "CONFLICT"
     end
 
     runtime.pending[f] = { frame = f, x = x, z = z, skill = skill, y = y }
@@ -1684,7 +2032,9 @@ end
 ---@param runtime FrameRuntime 当前Battle owner。
 ---@return table|nil record, table|nil error
 function M.step(runtime)
-    if runtime.winner ~= 0 then return nil, { code = "FINISHED" } end
+    if runtime.winner ~= 0 then
+        return nil, { code = "FINISHED" }
+    end
     local frame = runtime.frame + 1
     local input = runtime.pending[frame]
     local supplied = input ~= nil
@@ -1692,20 +2042,26 @@ function M.step(runtime)
         runtime.last_x, runtime.last_z, runtime.last_y = input.x, input.z, input.y
         runtime.missing = 0
     else
+        -- 截止后该帧输入已固定；方向只短暂保持，技能不重放，避免迟到包改写历史。
         runtime.missing = runtime.missing + 1
         local hold = runtime.missing <= 2
         input = { frame = frame, x = hold and runtime.last_x or 0,
                   z = hold and runtime.last_z or 0, y = hold and runtime.last_y or 0, skill = 0 }
     end
     local ok, err = runtime.engine:step(input.x, input.z, input.skill)
-    if not ok then return nil, err end
+    if not ok then
+        return nil, err
+    end
 
     local state, save_err = runtime.engine:save()
-    if not state then return nil, save_err end
+    if not state then
+        return nil, save_err
+    end
     runtime.frame, runtime.winner = header(state)
     runtime.pending[frame] = nil
     local record = { input = input, supplied = supplied, hash = M.hash(state) }
     assert(#runtime.records < runtime.max_frames, "FRAME_LOG_LIMIT")
+    -- 只保存被正式执行的输入与摘要；完整状态通过Checkpoint按需生成。
     runtime.records[#runtime.records + 1] = record
     return record
 end
@@ -1713,7 +2069,10 @@ end
 --- close幂等释放Native；Worker摘除索引后调用，GC不作为主释放路径。
 ---@param runtime FrameRuntime owner。
 function M.close(runtime)
-    if runtime.engine then runtime.engine:close(); runtime.engine = nil end
+    if runtime.engine then
+        runtime.engine:close()
+        runtime.engine = nil
+    end
 end
 return M
 ```
@@ -1732,9 +2091,15 @@ package.preload.lesson_frame_native = function()
     return { open = function()
         local frame = 0
         return {
-            step = function() frame = frame + 1; return true end,
+            step = function()
+        frame = frame + 1
+        return true
+    end,
             save = function() return string.pack("<I4I4I4",1,frame,0) end,
-            close = function() closed = true; return true end,
+            close = function()
+        closed = true
+        return true
+    end,
         }
     end }
 end
@@ -1755,7 +2120,9 @@ for i=1,3 do
     assert(record.input.x == (i<=2 and 1 or 0))
 end
 assert(#state.records == 4 and state.pending[1] == nil)
-core.close(state); core.close(state); assert(closed)
+core.close(state)
+core.close(state)
+assert(closed)
 print("FRAME_RUNTIME_OK")
 ```
 
@@ -1791,12 +2158,31 @@ local dispatcher = nil -- composition root注入，唯一结果接收者。
 ---@class FrameSession
 ---@field gateway_epoch string Gateway实例身份；回推时原样携带。
 ---@field connection_id integer 已握手连接；不是玩家永久身份。
+---@alias FrameWorkerCommand "configure"|"inputs"|"disconnect"|"create"|"recover"|"replay"|"leave"
+---@class FrameInputBatch
+---@field generation integer 请求所属会话代数；恢复后旧代数输入失效。
+---@field inputs FrameInput[] 同一请求中按帧独立判定的意图列表。
 ---@class FrameWorkerRequest
 ---@field battle_id integer Dispatcher分配且不复用的Battle ID。
----@field session FrameSession 当前请求的传输身份。
----@field request table Proto已解码body；不含fd。
+---@field session FrameSession 当前请求的传输身份；只含Gateway epoch/connection ID。
+---@field request FrameInputBatch|table Proto解码后的业务body；不含fd或借用buffer。
+---@class FrameBattle
+---@field id integer Dispatcher分配的Battle ID；Worker内作为索引键。
+---@field core FrameRuntime Worker独占的Battle模拟与Native Engine。
+---@field token string 32字节恢复凭据；Battle生命周期内由本Worker持有。
+---@field generation integer 重连代数；每次恢复递增以拒绝旧连接迟到消息。
+---@field session FrameSession 当前有效传输身份。
+---@field due integer 下一权威tick截止时刻，单位Skynet tick。
+---@field failed boolean|nil 终止标记；失败Battle保留至retention到期。
+---@field failure_code string|nil 稳定失败码；仅failed时存在。
+---@field finished integer|nil 完成/失败时刻，单位Skynet tick。
+---@field disconnected integer|nil 断线时刻，单位Skynet tick。
+---@class FramePushData
+---@field session FrameSession 推送目标连接，不包含Socket fd。
+---@field data table FramePushResponse业务结果。
 
 --- 使用操作系统熵生成32bytes凭据；I/O失败不退化为math.random。
+---@return string 由操作系统熵生成的32字节恢复凭据；I/O失败抛TOKEN_IO。
 local function token()
     local file = assert(io.open("/dev/urandom", "rb"))
     local value = file:read(32)
@@ -1805,13 +2191,21 @@ local function token()
     return value
 end
 --- 对恢复凭据做固定长度比较，避免提前退出的位置泄露。
+---@param a string|nil Battle持有的凭据。
+---@param b string|nil 客户端提交的凭据。
+---@return boolean 固定长度逐字节比较结果。
 local function token_equal(a, b)
-    if type(a) ~= "string" or type(b) ~= "string" or #a ~= 32 or #b ~= 32 then return false end
+    if type(a) ~= "string" or type(b) ~= "string" or #a ~= 32 or #b ~= 32 then
+        return false
+    end
     local diff = 0
     for i = 1, 32 do diff = diff | (a:byte(i) ~ b:byte(i)) end
     return diff == 0
 end
 --- 生成控制状态；仅加入/恢复会读取完整Native状态。
+---@param battle FrameBattle 由当前Worker拥有的Battle。
+---@param initial boolean true时生成不含恢复凭据的Replay起点Checkpoint。
+---@return table 可序列化控制响应；Native状态复制为Lua string。
 local function snapshot(battle, initial)
     local map_id, map_version = battle.core.engine:identity()
     return
@@ -1823,12 +2217,15 @@ local function snapshot(battle, initial)
         map_id       = map_id,
         map_version  = map_version,
         map_hash     = meta.map_hash,
-        rules_hash   = native.rules_hash(),
         frame        = initial and 0 or battle.core.frame,
         checkpoint   = initial and battle.core.initial or assert(battle.core.engine:save()),
     }
 end
 --- 推送目标连接；request_id=0表示无请求关联；不等待客户端收到。
+---@param battle FrameBattle 目标Battle；仅向其当前session发送。
+---@param records FrameRecord[] 已正式推进的权威帧记录。
+---@param code string 稳定结果码；request_id=0的异步推送不等待客户端。
+---@param input_results table|nil 本批各输入逐项接受/拒绝结果。
 local function push(battle, records, code, input_results)
     skynet.send(dispatcher, "lua", "frame_push",
     {
@@ -1839,20 +2236,30 @@ local function push(battle, records, code, input_results)
     })
 end
 --- 检查当前连接和会话代数；旧连接迟到输入不可进入新会话。
+---@param battle FrameBattle|nil Worker索引查得的实例。
+---@param args FrameWorkerRequest 当前Dispatcher转发请求。
+---@return boolean Battle、会话代数和连接身份均匹配时为true。
 local function owns(battle, args)
     return battle and battle.generation == args.request.generation and
         battle.session.gateway_epoch == args.session.gateway_epoch and
         battle.session.connection_id == args.session.connection_id
 end
 --- 建立Runtime与索引；无yield，失败返回稳定错误，由上层记录诊断。
+---@param args FrameWorkerRequest Dispatcher分配Battle ID并显式传入session。
+---@return table Join结果；失败返回稳定code，创建失败前释放Native。
 local function create(args)
-    if #order >= config.max_battles then return { code = "BUSY" } end
+    if #order >= config.max_battles then
+        return { code = "BUSY" }
+    end
     local credential = token() -- 先完成可能失败的I/O，避免创建Engine后泄漏。
     local runtime, err = core.create(config)
-    if not runtime then return { code = err.code } end
+    if not runtime then
+        return { code = err.code }
+    end
     local map_id, map_version = runtime.engine:identity()
     if map_id ~= meta.map_id or map_version ~= meta.map_version then
-        core.close(runtime); return { code = "ASSET_IDENTITY" }
+        core.close(runtime)
+        return { code = "ASSET_IDENTITY" }
     end
     local battle = { id = args.battle_id, core = runtime, token = credential, generation = 1,
                      session = args.session, due = skynet.now() + 10, disconnected = nil }
@@ -1862,10 +2269,16 @@ local function create(args)
     return snapshot(battle, false)
 end
 --- 恢复凭据归Battle所有；重连原子更换session并清掉旧代数未来输入。
+---@param args FrameWorkerRequest 凭据和新连接身份来自Dispatcher入站请求。
+---@return table Checkpoint和新generation；凭据无效时统一返回NOT_FOUND。
 local function recover(args)
     local battle = battles[args.battle_id]
-    if not battle or not token_equal(battle.token, args.request.resume_token) then return { code = "NOT_FOUND" } end
-    if battle.failed then return { code = battle.failure_code } end
+    if not battle or not token_equal(battle.token, args.request.resume_token) then
+        return { code = "NOT_FOUND" }
+    end
+    if battle.failed then
+        return { code = battle.failure_code }
+    end
     battle.generation = battle.generation + 1
     battle.session = args.session
     battle.disconnected = nil
@@ -1875,17 +2288,25 @@ local function recover(args)
 end
 --- 输入只入有界未来窗口；拒绝通过FramePush明确通知，不把send当接受。
 --- 截止以Worker处理时钟为准；Timer稍晚执行也不能给已到期帧重新开窗口。
+---@param battle FrameBattle 当前Worker拥有的Battle。
+---@param input FrameInput 未信任的玩家意图；Core再次验证整数范围和窗口。
+---@return string 接受或拒绝code；不在此处修改正式状态。
 local function admit(battle, input)
     local frame = input.frame or 0
     if math.type(frame) == "integer" and frame > battle.core.frame then
         local deadline = battle.due + (frame - battle.core.frame - 1) * config.tick_cs
-        if skynet.now() >= deadline then return "LATE" end
+        if skynet.now() >= deadline then
+            return "LATE"
+        end
     end
     return core.accept(battle.core, input)
 end
+---@param args FrameWorkerRequest 从Dispatcher通过skynet.send收到；无返回值，结果异步push。
 local function inputs(args)
     local battle = battles[args.battle_id]
-    if not owns(battle, args) then return end
+    if not owns(battle, args) then
+        return
+    end
 
     local batch = args.request.inputs or {}
     if #batch == 0 then
@@ -1907,11 +2328,17 @@ local function inputs(args)
     push(battle, {}, "OK", input_results)
 end
 --- 一页Replay最多256帧；只有有效凭据才能读取，离线initial不包含凭据。
+---@param args FrameWorkerRequest 包含battle_id、resume_token和分页offset。
+---@return table 有界Replay页与可选初始Checkpoint；凭据不匹配不泄露Battle存在性。
 local function replay(args)
     local battle = battles[args.battle_id]
-    if not battle or not token_equal(battle.token, args.request.resume_token) then return { code = "NOT_FOUND" } end
+    if not battle or not token_equal(battle.token, args.request.resume_token) then
+        return { code = "NOT_FOUND" }
+    end
     local offset = args.request.offset or 0
-    if offset > #battle.core.records then return { code = "REPLAY_OFFSET" } end
+    if offset > #battle.core.records then
+        return { code = "REPLAY_OFFSET" }
+    end
     local records = {}
     for i = offset + 1, math.min(#battle.core.records, offset + config.replay_page) do
         records[#records + 1] = battle.core.records[i]
@@ -1920,38 +2347,54 @@ local function replay(args)
              initial = offset == 0 and snapshot(battle, true) or nil }
 end
 --- 标记客户端离开；释放逻辑发生在唯一心跳，避免边遍历边删order。
+---@param args FrameWorkerRequest 当前session的离开请求。
+---@return table OK或NOT_FOUND；实际Native释放延迟至heartbeat安全遍历阶段。
 local function leave(args)
     local battle = battles[args.battle_id]
-    if not owns(battle, args) then return { code = "NOT_FOUND" } end
+    if not owns(battle, args) then
+        return { code = "NOT_FOUND" }
+    end
     battle.remove = true
     return { code = "OK" }
 end
 --- Core异常只终止这一场；下一场继续，Runtime资源在删除时close。
+---@param battle FrameBattle 由Heartbeat顺序推进的Battle。
+---@param now integer 当前Skynet tick；绝不由墙钟或客户端提供。
 local function advance(battle, now)
-    if battle.core.winner ~= 0 or battle.failed then return end
+    if battle.core.winner ~= 0 or battle.failed then
+        return
+    end
     local count = 0
+    -- 有界追赶避免单个Worker被长时间占用；超限时结束本场，不跳过权威帧。
     while now >= battle.due and count < config.max_catchup do
         local ok, record, err = pcall(core.step, battle.core)
         if not ok or not record then
             battle.failed = true
             battle.failure_code = "INTERNAL"
             push(battle, {}, "INTERNAL")
-            skynet.error("FRAME_CORE_FAILED id=", battle.id, " ", tostring(ok and err and err.code or record))
+            local failure = ok and err and err.code or record
+            skynet.error("FRAME_CORE_FAILED id=", battle.id, " ", tostring(failure))
             break
         end
         battle.due = battle.due + config.tick_cs
         count = count + 1
         push(battle, { record }, "OK")
-        if battle.core.winner ~= 0 then battle.finished = now; break end
+        if battle.core.winner ~= 0 then
+            battle.finished = now
+            break
+        end
     end
     if not battle.finished and not battle.failed and now >= battle.due then
         battle.failed = true
         battle.failure_code = "OVERLOAD"
         push(battle, {}, "OVERLOAD") -- 绝不跳帧伪装实时跟上。
     end
-    if battle.failed then battle.finished = now end
+    if battle.failed then
+        battle.finished = now
+    end
 end
 --- 一个Worker一个Timer；timeout回调无yield，order稳定；容量配置约束执行时间。
+--- 唯一Battle Tick入口；同一Worker顺序推进并在本回调中回收过期资源。
 local function heartbeat()
     local now, surviving = skynet.now(), {}
     for _, id in ipairs(order) do
@@ -1959,13 +2402,15 @@ local function heartbeat()
         advance(battle, now)
         local expiry = battle.finished or battle.disconnected
         if battle.remove or (expiry and now - expiry >= config.retention_cs) then
-            core.close(battle.core); battles[id] = nil
+            core.close(battle.core)
+            battles[id] = nil
         else surviving[#surviving + 1] = id end
     end
     order = surviving
     skynet.timeout(config.tick_cs, heartbeat)
 end
 --- 断线通知由Dispatch转发；只摘除匹配传输会话，不改新会话。
+---@param session FrameSession 由Dispatcher转发的Gateway断线身份。
 local function disconnect(session)
     for _, id in ipairs(order) do
         local battle = battles[id]
@@ -1978,6 +2423,10 @@ local function disconnect(session)
     end
 end
 skynet.start(function()
+    ---@param session integer Skynet call session；异步send可能为0。
+    ---@param source integer 调用方Service handle；必须等于已配置Dispatcher。
+    ---@param command FrameWorkerCommand 当前Service消息命令。
+    ---@param args table 命令payload；字段合同见FrameWorkerRequest及对应类型。
     skynet.dispatch("lua", function(session, source, command, args)
         if command == "configure" then
             assert(dispatcher == nil)
@@ -2017,16 +2466,30 @@ local skynet = require "skynet"
 local cluster = require "skynet.cluster"
 local config = require "config.frame_sync"
 local ids = require("gateway.protocol.navigation_registry").command_ids
+---@alias FrameDispatchCommand "ready"|"send_data"|"disconnect"|"frame_push"
+---@class FrameDispatchRoute
+---@field gateway_epoch string Gateway实例身份，由Proxy转发。
+---@field connection_id integer 当前连接ID；不是玩家持久身份。
+---@field command_id integer Registry中的稳定命令ID。
+---@field request_id integer 请求序号；0只允许Server主动FramePush。
+---@field data table 解码后的Proto body；不含Socket fd或网络buffer。
 local workers, next_id = {}, 0
 
 --- ID到Worker稳定映射；workers在进程存活期间固定，不允许在线重排。
+---@param id integer Dispatcher分配的Battle ID。
+---@return integer|nil 稳定Worker handle；非法ID返回nil。
 local function worker(id)
-    if math.type(id) ~= "integer" or id < 1 or id > 0x7fffffff then return nil end
+    if math.type(id) ~= "integer" or id < 1 or id > 0x7fffffff then
+        return nil
+    end
     return workers[(id - 1) % #workers + 1]
 end
 --- 发回原传输会话；Gateway按epoch/id检查当前有效性，不保存fd。
 ---@param route table gateway_epoch/connection_id/command_id/request_id，由入站或Worker产生。
 ---@param response table 已验证响应body。
+---@param route FrameDispatchRoute 入站请求或Worker推送的传输路由值。
+---@param response table 已由Battle Worker生成的Proto body。
+--- 通过cluster.send异步交给Gateway Proxy；本函数不yield、不保存fd。
 local function reply(route, response)
     local ok, err = pcall(cluster.send, config.gateway_node, "@frame_proxy", "send_data",
     {
@@ -2036,22 +2499,40 @@ local function reply(route, response)
         request_id    = route.request_id,
         data          = response,
     })
-    if not ok then skynet.error("FRAME_REPLY_FAILED ", tostring(err)) end
+    if not ok then
+        skynet.error("FRAME_REPLY_FAILED ", tostring(err))
+    end
 end
 --- Join仅接受scenario_id；正式状态完全由Server构造。
+---@param route FrameDispatchRoute Join/Recover/Replay/Leave控制请求。
+---@return table 控制响应；skynet.call会yield，返回后只使用route值record。
 local function control(route)
     local request = route.data
-    local args = { battle_id = request.battle_id, request = request,
-                   session = { gateway_epoch = route.gateway_epoch, connection_id = route.connection_id } }
+    local args =
+    {
+        battle_id = request.battle_id,
+        request   = request,
+        session   =
+        {
+            gateway_epoch = route.gateway_epoch,
+            connection_id = route.connection_id,
+        },
+    }
     if route.command_id == ids.FRAME_JOIN then
-        if request.scenario_id ~= 1001 then return { code = "BAD_SCENARIO" } end
-        if next_id >= 0x7fffffff then return { code = "ID_EXHAUSTED" } end
+        if request.scenario_id ~= 1001 then
+            return { code = "BAD_SCENARIO" }
+        end
+        if next_id >= 0x7fffffff then
+            return { code = "ID_EXHAUSTED" }
+        end
         next_id = next_id + 1
         args.battle_id = next_id
         return skynet.call(worker(next_id), "lua", "create", args)
     end
     local target = worker(args.battle_id)
-    if not target then return { code = "NOT_FOUND" } end
+    if not target then
+        return { code = "NOT_FOUND" }
+    end
     if route.command_id == ids.FRAME_RECOVER then
         return { state = skynet.call(target, "lua", "recover", args) }
     elseif route.command_id == ids.FRAME_REPLAY then
@@ -2062,9 +2543,12 @@ local function control(route)
     return { code = "BAD_COMMAND" }
 end
 --- 由Gateway Proxy转来的数据；控制yield只持有值record，不借用连接对象。
+---@param route FrameDispatchRoute Gateway Proxy发送的已解码请求。
+--- FRAME_INPUT经skynet.send异步投递；控制命令经skynet.call后回送原session。
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
-    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0 and route.request_id ~= 0)
+    assert(type(route.gateway_epoch) == "string")
+    assert(route.connection_id > 0 and route.request_id ~= 0)
     if route.command_id == ids.FRAME_INPUT then
         local target = worker(route.data.battle_id)
         if target then
@@ -2077,7 +2561,11 @@ local function incoming(route)
     local ok, result = pcall(control, route)
     if not ok then
         skynet.error("FRAME_CONTROL_FAILED ", tostring(result))
-        result = route.command_id == ids.FRAME_RECOVER and { state = { code = "INTERNAL" } } or { code = "INTERNAL" }
+        if route.command_id == ids.FRAME_RECOVER then
+            result = { state = { code = "INTERNAL" } }
+        else
+            result = { code = "INTERNAL" }
+        end
     end
     reply(route, result)
 end
@@ -2086,11 +2574,17 @@ skynet.start(function()
         workers[i] = skynet.newservice("battle/frame_sync/worker")
         assert(skynet.call(workers[i], "lua", "configure", { dispatcher = skynet.self() }))
     end
+        ---@param session integer Skynet session；ready响应使用retpack，其它消息走显式路由。
+    ---@param source integer 调用方Service handle；frame_push必须属于已创建Worker。
+    ---@param command FrameDispatchCommand Dispatcher入口命令。
+    ---@param payload FrameDispatchRoute|FrameSession route或断线身份record，不含fd。
     skynet.dispatch("lua", function(_, source, command, payload)
         if command == "ready" then skynet.retpack(true)
         elseif command == "send_data" then incoming(payload)
         elseif command == "disconnect" then
-            for _, handle in ipairs(workers) do skynet.send(handle, "lua", "disconnect", payload) end
+            for _, handle in ipairs(workers) do
+                skynet.send(handle, "lua", "disconnect", payload)
+            end
         elseif command == "frame_push" then
             local trusted = false
             for _, handle in ipairs(workers) do trusted = trusted or source == handle end
@@ -2150,7 +2644,9 @@ local gateway = nil -- 组合根注入的本地Gateway handle。
 --- 尽力异步转发；Cluster失败由客户端控制超时/恢复收敛，不建立无限重试。
 local function forward(command, payload)
     local ok, err = pcall(cluster.send, config.battle_node, "@frame_dispatch", command, payload)
-    if not ok then skynet.error("FRAME_PROXY_SEND_FAILED ", tostring(err)) end
+    if not ok then
+        skynet.error("FRAME_PROXY_SEND_FAILED ", tostring(err))
+    end
 end
 skynet.start(function()
     skynet.dispatch("lua", function(_, source, command, payload)
@@ -2350,153 +2846,280 @@ ss -ltnp 'sport = :19021 or sport = :2537 or sport = :2538'
 学习导航：精读 定向推送不串场、重连代数、错误凭据、连续帧hash与回放分页。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
 
 ```python
-# 职责：第三课真实双进程验收客户端；仅Test使用，不成为Runtime协议实现。
-# 输入：已启动的Frame Gateway及相同编译产物；输出断言与FRAME_INTEGRATION_OK。
-# 本测试的通用wire解析器只用于避免测试环境另装Python Protobuf；业务合同仍来自唯一Proto。
+# 职责：第三课真实双进程验收客户端；仅 Test 使用，不成为 Runtime 协议实现。
+# 输入：已启动的 Frame Gateway 及相同编译产物；输出断言与 FRAME_INTEGRATION_OK。
+# 这个轻量 wire reader 只减少测试环境依赖；字段编号仍以唯一 Proto 定义为准。
 from pathlib import Path
 import ctypes
 import socket
 import struct
-import time
+
 from gateway_handshake_client import perform
 
 ROOT = Path(__file__).resolve().parents[2]
 
+
 def varint(value):
-    result=bytearray()
-    while value>127: result.append((value&127)|128); value>>=7
+    """编码非负 Proto varint；调用方保证输入在协议允许范围内。"""
+    result = bytearray()
+    while value > 127:
+        result.append((value & 0x7F) | 0x80)
+        value >>= 7
     result.append(value)
     return bytes(result)
 
-def number(field,value): return varint(field<<3)+varint(value)
-def blob(field,value): return varint((field<<3)|2)+varint(len(value))+value
-def zigzag(value): return (value<<1)^(value>>31)
+
+def number(field, value):
+    """编码 wire type 0 的整数测试字段。"""
+    return varint(field << 3) + varint(value)
+
+
+def blob(field, value):
+    """编码 wire type 2 的 bytes 测试字段。"""
+    return varint((field << 3) | 2) + varint(len(value)) + value
+
+
+def zigzag(value):
+    """将本用例使用的有符号32位值映射为 Proto sint32。"""
+    return (value << 1) ^ (value >> 31)
+
 
 def fields(data):
-    result={}; offset=0
-    def read():
+    """解析本课消息使用的 wire types；拒绝未知类型和超长 varint。"""
+    result = {}
+    offset = 0
+
+    def read_varint():
         nonlocal offset
-        value=0; shift=0
+        value = 0
+        shift = 0
         while True:
-            byte=data[offset]; offset+=1; value|=(byte&127)<<shift
-            if byte<128: return value
-            shift+=7
-            assert shift<=63
-    while offset<len(data):
-        tag=read(); field,wire=tag>>3,tag&7
-        if wire==0: value=read()
-        elif wire==2:
-            size=read(); value=data[offset:offset+size]; offset+=size
-        elif wire==5: value=struct.unpack_from('<I',data,offset)[0]; offset+=4
-        elif wire==1: value=struct.unpack_from('<Q',data,offset)[0]; offset+=8
-        else: raise AssertionError('unsupported wire')
-        result.setdefault(field,[]).append(value)
+            byte = data[offset]
+            offset += 1
+            value |= (byte & 0x7F) << shift
+            if byte < 0x80:
+                return value
+            shift += 7
+            assert shift <= 63, "varint exceeds 64 bits"
+
+    while offset < len(data):
+        tag = read_varint()
+        field, wire = tag >> 3, tag & 7
+        if wire == 0:
+            value = read_varint()
+        elif wire == 2:
+            size = read_varint()
+            value = data[offset : offset + size]
+            assert len(value) == size, "truncated length-delimited field"
+            offset += size
+        elif wire == 5:
+            value = struct.unpack_from("<I", data, offset)[0]
+            offset += 4
+        elif wire == 1:
+            value = struct.unpack_from("<Q", data, offset)[0]
+            offset += 8
+        else:
+            raise AssertionError(f"unsupported wire type: {wire}")
+        result.setdefault(field, []).append(value)
     return result
 
-def one(data,field,default=0): return data.get(field,[default])[0]
+
+def one(data, field, default=0):
+    """读取本用例约定的第一个字段值；缺失时返回明确的测试默认值。"""
+    return data.get(field, [default])[0]
+
 
 class Client:
+    """单连接测试客户端；socket 由实例拥有，close 负责释放。"""
+
     def __init__(self):
-        self.sock=socket.create_connection(('127.0.0.1',19021),timeout=3)
-        self.sock.settimeout(3); self.sock.setsockopt(socket.IPPROTO_TCP,socket.TCP_NODELAY,1)
-        self.seq=0; self.pushes=[]
-        perform(self.send,self.receive)
-    def exact(self,size):
-        data=b''
-        while len(data)<size:
-            part=self.sock.recv(size-len(data)); assert part,'unexpected EOF'; data+=part
+        self.sock = socket.create_connection(("127.0.0.1", 19021), timeout=3)
+        self.sock.settimeout(3)
+        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
+        self.seq = 0
+        self.pushes = []  # request() 先读到的异步推送暂存于本连接。
+        perform(self.send, self.receive)
+
+    def exact(self, size):
+        """TCP read 可短读；累积至指定字节数，否则让连接错误显式失败。"""
+        data = b""
+        while len(data) < size:
+            part = self.sock.recv(size - len(data))
+            assert part, "unexpected EOF"
+            data += part
         return data
-    def send(self,data): self.sock.sendall(struct.pack('>H',len(data))+data)
-    def receive(self): return self.exact(struct.unpack('>H',self.exact(2))[0])
-    def send_request(self,command,body):
-        self.seq+=1
-        self.send(number(1,3)+number(2,command)+number(3,self.seq)+blob(4,body))
+
+    def send(self, data):
+        """用两字节大端长度前缀发送一个完整 Gateway frame。"""
+        self.sock.sendall(struct.pack(">H", len(data)) + data)
+
+    def receive(self):
+        """读取完整长度前缀与 payload；exact 处理任意 TCP 分段。"""
+        size = struct.unpack(">H", self.exact(2))[0]
+        return self.exact(size)
+
+    def send_request(self, command, body):
+        """分配本连接递增 request_id 并发送；不等待 Server 处理。"""
+        self.seq += 1
+        envelope = number(1, 3) + number(2, command) + number(3, self.seq) + blob(4, body)
+        self.send(envelope)
         return self.seq
-    def request(self,command,body):
-        request_id=self.send_request(command,body)
+
+    def request(self, command, body):
+        """等待匹配响应，同时保留先到的无关联 FramePush。"""
+        request_id = self.send_request(command, body)
         for _ in range(100):
-            env=fields(self.receive()); response=fields(one(env,4,b''))
-            if one(env,3)==0:
-                assert one(env,2)==1103; self.pushes.append(response); continue
-            assert one(env,3)==request_id and one(env,2)==command
+            envelope = fields(self.receive())
+            response = fields(one(envelope, 4, b""))
+            if one(envelope, 3) == 0:
+                assert one(envelope, 2) == 1103
+                self.pushes.append(response)
+                continue
+            assert one(envelope, 3) == request_id
+            assert one(envelope, 2) == command
             return response
-        raise AssertionError('control starved')
+        raise AssertionError("control starved")
+
     def push(self):
-        if self.pushes: return self.pushes.pop(0)
-        env=fields(self.receive()); assert one(env,3)==0 and one(env,2)==1103
-        return fields(one(env,4,b''))
-    def close(self): self.sock.close()
+        """返回排队推送，或继续读到下一条 request_id=0 的推送。"""
+        if self.pushes:
+            return self.pushes.pop(0)
+        envelope = fields(self.receive())
+        assert one(envelope, 3) == 0 and one(envelope, 2) == 1103
+        return fields(one(envelope, 4, b""))
+
+    def close(self):
+        """关闭本实例拥有的 socket；调用方在 finally 中执行。"""
+        self.sock.close()
+
 
 class Native:
+    """独立 Native Replay 校验器；只重放 Server 已正式采用的记录。"""
+
     def __init__(self):
-        self.lib=ctypes.CDLL(str(ROOT/'server/build/frame_sync/libframe_core.so'))
-        self.lib.fs_open.argtypes=[ctypes.c_char_p]; self.lib.fs_open.restype=ctypes.c_void_p
-        self.lib.fs_close.argtypes=[ctypes.c_void_p]
-        self.lib.fs_step.argtypes=[ctypes.c_void_p,ctypes.c_int,ctypes.c_int,ctypes.c_int]
-        self.lib.fs_save.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int]
-        self.lib.fs_restore.argtypes=[ctypes.c_void_p,ctypes.c_void_p,ctypes.c_int]
-        self.handle=self.lib.fs_open(str(ROOT/'shared/navigation/battle_1001/battle_1001.bmap').encode())
-        assert self.handle
-    def restore(self,data): assert self.lib.fs_restore(self.handle,data,len(data))==1
+        library = ROOT / "server/build/frame_sync/libframe_core.so"
+        self.lib = ctypes.CDLL(str(library))
+        self.lib.fs_open.argtypes = [ctypes.c_char_p]
+        self.lib.fs_open.restype = ctypes.c_void_p
+        self.lib.fs_close.argtypes = [ctypes.c_void_p]
+        self.lib.fs_step.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
+        self.lib.fs_save.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        self.lib.fs_restore.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
+        map_path = ROOT / "shared/navigation/battle_1001/battle_1001.bmap"
+        self.handle = self.lib.fs_open(str(map_path).encode())
+        assert self.handle, "Native Engine creation failed"
+
+    def restore(self, data):
+        """从拥有的 bytes 恢复独立 Engine；不与 Server 共享可变状态。"""
+        assert self.lib.fs_restore(self.handle, data, len(data)) == 1
+
     def save(self):
-        out=ctypes.create_string_buffer(16384); size=self.lib.fs_save(self.handle,out,len(out)); assert size>0
-        return out.raw[:size]
-    def step(self,record):
-        command=fields(one(record,1,b''))
+        """复制 Native 输出到 Python bytes，缓冲区由本方法拥有。"""
+        output = ctypes.create_string_buffer(16384)
+        size = self.lib.fs_save(self.handle, output, len(output))
+        assert 0 < size <= len(output)
+        return output.raw[:size]
+
+    def step(self, record):
+        """应用一条 Server 正式帧记录，并核对该帧状态摘要。"""
+        command = fields(one(record, 1, b""))
+
         def signed(field):
-            value=one(command,field); return (value>>1)^-(value&1)
-        assert self.lib.fs_step(self.handle,signed(2),signed(3),one(command,4))==1
-        state=self.save(); digest=2166136261
-        for byte in state: digest=((digest^byte)*16777619)&0xffffffff
-        assert digest==one(record,3),'STATE_DIVERGENCE'
-    def close(self): self.lib.fs_close(self.handle)
+            value = one(command, field)
+            return (value >> 1) ^ -(value & 1)
+
+        ok = self.lib.fs_step(self.handle, signed(2), signed(3), one(command, 4))
+        assert ok == 1, "Native replay step failed"
+        state = self.save()
+        digest = 2166136261
+        for byte in state:
+            digest = ((digest ^ byte) * 16777619) & 0xFFFFFFFF
+        assert digest == one(record, 3), "STATE_DIVERGENCE"
+
+    def close(self):
+        """释放本实例唯一拥有的 Native handle。"""
+        self.lib.fs_close(self.handle)
+        self.handle = None
+
 
 def run():
-    first=second=reconnected=engine=None
+    """验证双连接隔离、权威帧推送、重连及整段 Replay 确定性。"""
+    first = second = reconnected = engine = None
     try:
-        first=Client(); a=first.request(1101,number(1,1001)); assert one(a,1)==b'OK'
-        second=Client(); b=second.request(1101,number(1,1001)); assert one(b,1)==b'OK'
-        battle=one(a,2); generation=one(a,4); token=one(a,3); assert len(token)==32
-        assert battle!=one(b,2)
-        engine=Native(); engine.restore(one(a,10)); frame=one(a,9)
-        # Server正式采用的输入是回放来源；测试不以发送的输入代替它。
-        for _ in range(16):
-            target=frame+3
-            command=number(1,target)+number(2,zigzag(1))+number(4,2)
-            first.send_request(1102,number(1,battle)+number(2,generation)+blob(3,command))
-            push=first.push(); assert one(push,1)==battle and one(push,2)==generation
-            assert one(push,4)==b'OK'
-            for raw in push.get(3,[]):
-                record=fields(raw); f=one(fields(one(record,1,b'')),1)
-                assert f==frame+1; engine.step(record); frame=f
-            other=second.push(); assert one(other,1)==one(b,2),'cross battle broadcast'
-        assert frame>=16
-        first.close(); first=None
-        reconnected=Client()
-        denied=reconnected.request(1104,number(1,battle)+blob(2,b'x'*32))
-        assert one(fields(one(denied,1,b'')),1)==b'NOT_FOUND'
-        recovered=reconnected.request(1104,number(1,battle)+blob(2,token))
-        current=fields(one(recovered,1,b'')); assert one(current,1)==b'OK'
-        assert one(current,4)==generation+1 and one(current,9)>=frame
-        engine.restore(one(current,10)); frame=one(current,9)
-        push=reconnected.push()
-        assert one(push,1)==battle and one(push,2)==generation+1
-        for raw in push.get(3,[]): engine.step(fields(raw))
-        replay=reconnected.request(1106,number(1,battle)+blob(2,token)+number(3,0))
-        assert one(replay,1)==b'OK' and one(replay,3)>0
-        initial=fields(one(replay,4,b'')); assert one(initial,3,b'')==b''
-        engine.restore(one(initial,10)); expected=0
-        for raw in replay.get(2,[]):
-            record=fields(raw); expected+=1
-            assert one(fields(one(record,1,b'')),1)==expected
-            engine.step(record)
-        assert expected==one(replay,3)
-        print('FRAME_INTEGRATION_OK frames=',expected,'generation=',one(current,4))
-    finally:
-        for value in [first,second,reconnected,engine]:
-            if value: value.close()
+        first = Client()
+        joined = first.request(1101, number(1, 1001))
+        assert one(joined, 1) == b"OK"
 
-if __name__=='__main__': run()
+        second = Client()
+        other_join = second.request(1101, number(1, 1001))
+        assert one(other_join, 1) == b"OK"
+        battle = one(joined, 2)
+        generation = one(joined, 4)
+        token = one(joined, 3)
+        assert len(token) == 32 and battle != one(other_join, 2)
+
+        engine = Native()
+        engine.restore(one(joined, 10))
+        frame = one(joined, 9)
+        # 每次仅发送未来意图；Replay 只采用收到的权威 FramePush record。
+        for _ in range(16):
+            target = frame + 3
+            command = number(1, target) + number(2, zigzag(1)) + number(4, 2)
+            first.send_request(1102, number(1, battle) + number(2, generation) + blob(3, command))
+            pushed = first.push()
+            assert one(pushed, 1) == battle and one(pushed, 2) == generation
+            assert one(pushed, 4) == b"OK"
+
+            for raw_record in pushed.get(3, []):
+                record = fields(raw_record)
+                record_frame = one(fields(one(record, 1, b"")), 1)
+                assert record_frame == frame + 1
+                engine.step(record)
+                frame = record_frame
+
+            isolated_push = second.push()
+            assert one(isolated_push, 1) == one(other_join, 2), "cross battle broadcast"
+        assert frame >= 16
+
+        first.close()
+        first = None
+        reconnected = Client()
+        denied = reconnected.request(1104, number(1, battle) + blob(2, b"x" * 32))
+        assert one(fields(one(denied, 1, b"")), 1) == b"NOT_FOUND"
+
+        recovered = reconnected.request(1104, number(1, battle) + blob(2, token))
+        current = fields(one(recovered, 1, b""))
+        assert one(current, 1) == b"OK"
+        assert one(current, 4) == generation + 1 and one(current, 9) >= frame
+        engine.restore(one(current, 10))
+        frame = one(current, 9)
+        pushed = reconnected.push()
+        assert one(pushed, 1) == battle and one(pushed, 2) == generation + 1
+        for raw_record in pushed.get(3, []):
+            engine.step(fields(raw_record))
+
+        replay = reconnected.request(1106, number(1, battle) + blob(2, token) + number(3, 0))
+        assert one(replay, 1) == b"OK" and one(replay, 3) > 0
+        initial = fields(one(replay, 4, b""))
+        assert one(initial, 3, b"") == b""
+        engine.restore(one(initial, 10))
+        expected = 0
+        for raw_record in replay.get(2, []):
+            record = fields(raw_record)
+            expected += 1
+            assert one(fields(one(record, 1, b"")), 1) == expected
+            engine.step(record)
+        assert expected == one(replay, 3)
+        print("FRAME_INTEGRATION_OK frames=", expected, "generation=", one(current, 4))
+    finally:
+        # 各资源仅由本测试对象拥有；失败断言也必须关闭已创建实例。
+        for resource in (first, second, reconnected, engine):
+            if resource is not None:
+                resource.close()
+
+
+if __name__ == "__main__":
+    run()
 ```
 
 WSL终端C执行：
@@ -2509,7 +3132,7 @@ python3 tests/frame_sync_integration.py
 
 此测试覆盖两独立Battle定向推送、输入采用后的Native重演、错误凭据拒绝、断线恢复代数更新、Checkpoint恢复、第一页日志重演以及回放不包含凭据。它不是完整的容量压测，也不是Unity表现验收。
 
-失败排查顺序：无监听先看启动日志；有监听握手失败看FlyWow握手模块和固定版本；Join超时看Registry和两端Cluster节点名；Join成功无push回第3节审计条件；STATE_DIVERGENCE先比资产/规则hash，再比规范化字段，不通过强制覆盖客户端状态掩盖固定规则错误。
+失败排查顺序：无监听先看启动日志；有监听握手失败看FlyWow握手模块和固定版本；Join超时看Registry和两端Cluster节点名；Join成功无push回第3节审计条件；STATE_DIVERGENCE先比地图资产hash与双方发布的程序版本，再比规范化字段，不通过强制覆盖客户端状态掩盖固定规则错误。
 
 ## 7. Windows构建同一Core，接入实际Unity客户端
 
@@ -2548,103 +3171,160 @@ using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
 namespace BattleNavigation.FrameSync
 {
+    /// <summary>拥有单场客户端预测模拟的Native句柄；仅主线程访问，Dispose释放。</summary>
     public sealed class FrameNative : IDisposable
     {
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr fs_open([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern void fs_close(IntPtr handle);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern int fs_step(FrameHandle handle,int x,int z,int skill);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern int fs_save(FrameHandle handle,byte[] bytes,int capacity);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern int fs_restore(FrameHandle handle,byte[] bytes,int count);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern uint fs_map_version(FrameHandle handle);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern uint fs_map_id(FrameHandle handle);
-        [DllImport("frame_core", CallingConvention=CallingConvention.Cdecl)] private static extern IntPtr fs_rules_hash();
+        // C ABI只返回稳定整数成功标记；Native错误统一映射为下方托管异常。
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr fs_open([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern void fs_close(IntPtr handle);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int fs_step(FrameHandle handle, int x, int z, int skill);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int fs_save(FrameHandle handle, byte[] bytes, int capacity);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int fs_restore(FrameHandle handle, byte[] bytes, int count);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint fs_map_version(FrameHandle handle);
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint fs_map_id(FrameHandle handle);
         private sealed class FrameHandle : SafeHandleZeroOrMinusOneIsInvalid
         {
-            public FrameHandle(IntPtr value) : base(true) { SetHandle(value); }
-            protected override bool ReleaseHandle() { fs_close(handle); return true; }
+            public FrameHandle(IntPtr value) : base(true)
+            {
+                SetHandle(value);
+            }
+            protected override bool ReleaseHandle()
+            {
+                fs_close(handle);
+                return true;
+            }
         }
         private FrameHandle handle; // SafeHandle为P/Invoke借用自动保活；仍只在主线程使用。
-        public string RulesHash => Marshal.PtrToStringAnsi(fs_rules_hash());
-        public uint MapId => fs_map_id(handle);
-        public uint MapVersion => fs_map_version(handle);
+        /// <summary>当前Native实例加载的地图ID；与MapVersion共同标识地图资产。</summary>
+        public uint         MapId      => fs_map_id(handle);
+        /// <summary>当前Native实例加载的地图版本。</summary>
+        public uint         MapVersion => fs_map_version(handle);
         /// <summary>读取UTF-8资产路径并拥有独占Native；失败抛MAP_LOAD，调用方主线程Dispose。</summary>
         public FrameNative(string path)
         {
-            handle=new FrameHandle(fs_open(path));
-            if(handle.IsInvalid) throw new InvalidDataException("MAP_LOAD");
+            handle = new FrameHandle(fs_open(path));
+            if (handle.IsInvalid)
+                throw new InvalidDataException("MAP_LOAD");
         }
         /// <summary>同步推进50ms；方向-1/0/1、技能0..3；无I/O，失败不改变旧State。</summary>
-        public void Step(int x,int z,int skill)
+        public void Step(int x, int z, int skill)
         {
-            if(fs_step(handle,x,z,skill)!=1) throw new InvalidOperationException("NATIVE_STEP");
+            if (fs_step(handle, x, z, skill) != 1)
+                throw new InvalidOperationException("NATIVE_STEP");
         }
         /// <summary>分配并返回本实例规范化状态副本，最大16384bytes；调用方拥有数组。</summary>
         public byte[] Save()
         {
-            var buffer=new byte[16384];
-            int size=fs_save(handle,buffer,buffer.Length);
-            if(size<=0) throw new InvalidOperationException("NATIVE_SAVE");
-            Array.Resize(ref buffer,size);
+            var buffer = new byte[16384];
+            int size   = fs_save(handle, buffer, buffer.Length);
+            if (size <= 0)
+                throw new InvalidOperationException("NATIVE_SAVE");
+            Array.Resize(ref buffer, size);
             return buffer;
         }
         /// <summary>同步借用字节到调用返回；全部验证后替换State，失败保持旧State。</summary>
         public void Restore(byte[] bytes)
         {
-            if(bytes==null || bytes.Length>16384 || fs_restore(handle,bytes,bytes.Length)!=1)
+            if (bytes == null || bytes.Length > 16384 ||
+        fs_restore(handle, bytes, bytes.Length) != 1)
                 throw new InvalidDataException("NATIVE_RESTORE");
         }
         public void Dispose()
         {
             handle?.Dispose(); // 幂等；SafeHandle critical finalizer兜底。
         }
+        /// <summary>计算状态诊断hash；不用于安全验证或程序版本协商。</summary>
+        /// <param name="bytes">由调用方拥有的规范化状态副本。</param>
+        /// <returns>32位FNV状态摘要。</returns>
         public static uint Hash(byte[] bytes)
         {
-            uint value=2166136261;
-            foreach(byte b in bytes) value=unchecked((value^b)*16777619);
+            uint value = 2166136261;
+            foreach (byte b in bytes)
+                value = unchecked((value ^ b) * 16777619);
             return value;
         }
     }
+    /// <summary>从Native规范化状态解码的单位只读表现数据，不是模拟状态owner。</summary>
     public sealed class FrameUnit
     {
-        public uint Id,Camp,MoveMode,Ready1,Ready2,Ready3;
-        public long X,Y,Z; // 毫米；转成Unity float只发生在表现边界。
-        public int Hp;
+        /// <summary>单位ID、阵营、移动模式和三个技能的剩余冷却帧。</summary>
+        public uint Id, Camp, MoveMode, Ready1, Ready2, Ready3;
+        /// <summary>逻辑坐标，单位为毫米；转换Unity单位只发生在表现边界。</summary>
+        public long X, Y, Z;
+        /// <summary>当前权威逻辑HP。</summary>
+        public int  Hp;
     }
+    /// <summary>从Native规范化状态解码的弹丸表现数据。</summary>
     public sealed class FrameBolt
     {
+        /// <summary>由Server模拟分配的弹丸ID。</summary>
         public uint Id;
-        public long X,Y,Z;
+        /// <summary>逻辑坐标，单位为毫米。</summary>
+        public long X, Y, Z;
     }
+    /// <summary>单次状态解码创建的托管快照；不持有Native资源。</summary>
     public sealed class FrameState
     {
-        public uint Frame,Winner;
-        public readonly List<FrameUnit> Units=new List<FrameUnit>();
-        public readonly List<FrameBolt> Bolts=new List<FrameBolt>();
-        public static FrameState Decode(byte[] bytes)
+        /// <summary>快照帧号和结束结果；Winner为0表示战斗仍在进行。</summary>
+        public uint     Frame, Winner;
+        public readonly List<FrameUnit> Units = new List<FrameUnit>();
+        public readonly List<FrameBolt> Bolts = new List<FrameBolt>();
+        /// <summary>验证版本、数量上限和完整消费长度后解码小端状态副本。</summary>
+        /// <param name="bytes">调用方拥有的Native状态副本，最大16384字节。</param>
+        /// <returns>新分配且由调用方拥有的托管快照。</returns>
+        /// <exception cref="InvalidDataException">格式、版本、容量或尾随字节无效。</exception>
+        public static FrameState        Decode(byte[] bytes)
         {
-            if(bytes==null || bytes.Length>16384) throw new InvalidDataException("STATE_SIZE");
-            using(var reader=new BinaryReader(new MemoryStream(bytes,false)))
+            if (bytes == null || bytes.Length > 16384)
+                throw new InvalidDataException("STATE_SIZE");
+            // BinaryReader按小端读取固定布局；每个计数先限界，避免恶意快照放大分配。
+            using (var reader = new BinaryReader(new MemoryStream(bytes, false)))
             {
-                if(reader.ReadUInt32()!=1) throw new InvalidDataException("STATE_VERSION");
-                var state=new FrameState { Frame=reader.ReadUInt32(),Winner=reader.ReadUInt32() };
+                if (reader.ReadUInt32() != 1)
+                    throw new InvalidDataException("STATE_VERSION");
+                var state =
+                    new FrameState { Frame = reader.ReadUInt32(), Winner = reader.ReadUInt32() };
                 reader.ReadUInt32(); // next_bolt属于逻辑状态，表现不使用。
-                uint units=reader.ReadUInt32();
-                if(units>64) throw new InvalidDataException("UNIT_LIMIT");
-                for(uint i=0;i<units;i++) state.Units.Add(new FrameUnit
+                uint units = reader.ReadUInt32();
+                if (units > 64)
+                    throw new InvalidDataException("UNIT_LIMIT");
+                for (uint i = 0; i < units; i++)
+                    state.Units.Add(new FrameUnit {
+                        Id       = reader.ReadUInt32(),
+                        Camp     = reader.ReadUInt32(),
+                        MoveMode = reader.ReadUInt32(),
+                        X        = reader.ReadInt64(),
+                        Y        = reader.ReadInt64(),
+                        Z        = reader.ReadInt64(),
+                        Hp       = reader.ReadInt32(),
+                        Ready1   = reader.ReadUInt32(),
+                        Ready2   = reader.ReadUInt32(),
+                        Ready3   = reader.ReadUInt32(),
+                    });
+                uint bolts = reader.ReadUInt32();
+                if (bolts > 128)
+                    throw new InvalidDataException("BOLT_LIMIT");
+                for (uint i = 0; i < bolts; i++)
                 {
-                    Id=reader.ReadUInt32(),Camp=reader.ReadUInt32(),MoveMode=reader.ReadUInt32(),X=reader.ReadInt64(),
-                    Y=reader.ReadInt64(),Z=reader.ReadInt64(),Hp=reader.ReadInt32(),
-                    Ready1=reader.ReadUInt32(),Ready2=reader.ReadUInt32(),Ready3=reader.ReadUInt32(),
-                });
-                uint bolts=reader.ReadUInt32();
-                if(bolts>128) throw new InvalidDataException("BOLT_LIMIT");
-                for(uint i=0;i<bolts;i++)
-                {
-                    uint id=reader.ReadUInt32();
-                    reader.ReadUInt32(); reader.ReadUInt32(); reader.ReadUInt32(); reader.ReadInt32();
-                    state.Bolts.Add(new FrameBolt { Id=id,X=reader.ReadInt64(),Y=reader.ReadInt64(),Z=reader.ReadInt64() });
+                    uint id = reader.ReadUInt32();
+                    reader.ReadUInt32();
+                    reader.ReadUInt32();
+                    reader.ReadUInt32();
+                    reader.ReadInt32();
+                    state.Bolts.Add(new FrameBolt { Id = id, X = reader.ReadInt64(),
+                                                    Y = reader.ReadInt64(),
+                        Z = reader.ReadInt64()
+                    });
                 }
-                if(reader.BaseStream.Position!=reader.BaseStream.Length) throw new InvalidDataException("STATE_TRAILING");
+                if (reader.BaseStream.Position != reader.BaseStream.Length)
+                    throw new InvalidDataException("STATE_TRAILING");
                 return state;
             }
         }
@@ -2673,158 +3353,225 @@ using Google.Protobuf;
 using FlyWow.Gateway;
 namespace BattleNavigation.FrameSync
 {
+    /// <summary>拥有一个TCP会话及其网络线程；后台线程只处理字节和Proto值。</summary>
     public sealed class FrameConnection : IDisposable
     {
+        // gate保护waiting；Command用于拒绝request_id正确但命令不匹配的响应。
         private sealed class Waiting
         {
-            public uint Command;
-            public TaskCompletionSource<Envelope> Result=new TaskCompletionSource<Envelope>(TaskCreationOptions.RunContinuationsAsynchronously);
+            public uint                           Command;
+            public TaskCompletionSource<Envelope> Result =
+                new TaskCompletionSource<Envelope>(
+                    TaskCreationOptions.RunContinuationsAsynchronously);
         }
-        private readonly TcpClient socket=new TcpClient();
-        private NetworkStream stream;
-        private readonly BlockingCollection<byte[]> outgoing=new BlockingCollection<byte[]>(128);
-        private readonly BlockingCollection<FramePushResponse> pushes=new BlockingCollection<FramePushResponse>(256);
-        private readonly Dictionary<ulong,Waiting> waiting=new Dictionary<ulong,Waiting>();
-        private readonly object gate=new object();
-        private Thread reader,writer;
-        private long nextRequest;
-        private int closed;
-        private volatile string fault;
-        public string Fault => fault;
-        public int PushDepth => pushes.Count;
+        private readonly TcpClient socket = new TcpClient();
+        private NetworkStream      stream;
+        // 入站调用生产、writer消费；128项满时关闭会话，防止内存无界增长。
+        private readonly BlockingCollection<byte[]> outgoing = new BlockingCollection<byte[]>(128);
+        // reader生产、Unity主线程消费；256项满时视为客户端过载并关闭。
+        private readonly BlockingCollection<FramePushResponse> pushes =
+            new BlockingCollection<FramePushResponse>(256);
+        // 控制请求只在锁内增删/查找；响应超时后移除，迟到响应直接丢弃。
+        private readonly Dictionary<ulong, Waiting> waiting = new Dictionary<ulong, Waiting>();
+        private readonly object                     gate    = new object();
+        private Thread                              reader, writer;
+        private long                                nextRequest;
+        private int                                 closed;
+        private volatile string                     fault;
+        /// <summary>会话终止原因；null表示当前没有观察到传输失败。</summary>
+        public string                               Fault     => fault;
+        /// <summary>待Unity主线程读取的推送数量，用于诊断有界队列积压。</summary>
+        public int                                  PushDepth => pushes.Count;
 
         /// <summary>后台连接与握手；超时3秒；成功调用方拥有连接并Dispose，不访问Unity对象。</summary>
-        public static async Task<FrameConnection> Connect(string host,int port)
+        public static async Task<FrameConnection> Connect(string host, int port)
         {
-            var connection=new FrameConnection();
-            try { await Task.Run(()=>connection.Open(host,port)); return connection; }
-            catch { connection.Dispose(); throw; }
+            var connection = new FrameConnection();
+            try
+            {
+                await Task.Run(() => connection.Open(host, port));
+                return connection;
+            }
+            catch
+            {
+                connection.Dispose();
+                throw;
+            }
         }
-        private void Open(string host,int port)
+        /// <summary>执行连接、固定协议握手并启动专用读写线程；仅Connect调用。</summary>
+        private void Open(string host, int port)
         {
-            if(!socket.ConnectAsync(host,port).Wait(3000)) throw new TimeoutException("CONNECT_TIMEOUT");
-            socket.NoDelay=true; // 小输入包不等待Nagle合并；TCP仍有队头阻塞。
-            stream=socket.GetStream();
-            stream.ReadTimeout=3000; stream.WriteTimeout=3000;
-            using(var handshake=new HandshakeClient())
+            if (!socket.ConnectAsync(host, port).Wait(3000))
+                throw new TimeoutException("CONNECT_TIMEOUT");
+            socket.NoDelay      = true; // 小输入包不等待Nagle合并；TCP仍有队头阻塞。
+            stream              = socket.GetStream();
+            stream.ReadTimeout  = 3000;
+            stream.WriteTimeout = 3000;
+            using (var handshake = new HandshakeClient())
             {
                 WriteFrame(handshake.Begin());
                 WriteFrame(handshake.Respond(ReadFrame(99)));
                 handshake.Complete(ReadFrame(33));
             }
-            stream.ReadTimeout=10000;
-            reader=new Thread(ReadLoop) { IsBackground=true,Name="FrameRead" };
-            writer=new Thread(WriteLoop) { IsBackground=true,Name="FrameWrite" };
-            reader.Start(); writer.Start();
+            stream.ReadTimeout = 10000;
+            reader             = new Thread(ReadLoop) { IsBackground = true, Name = "FrameRead" };
+            writer             = new Thread(WriteLoop) { IsBackground = true, Name = "FrameWrite" };
+            reader.Start();
+            writer.Start();
         }
+        // TCP不保留消息边界；Exact负责把短读累积成固定长度的自有数组。
         private byte[] Exact(int count)
         {
-            var result=new byte[count];
-            int offset=0;
-            while(offset<count)
+            var result = new byte[count];
+            int offset = 0;
+            while (offset < count)
             {
-                int n=stream.Read(result,offset,count-offset);
-                if(n==0) throw new EndOfStreamException("DISCONNECTED");
-                offset+=n;
+                int n = stream.Read(result, offset, count - offset);
+                if (n == 0)
+                    throw new EndOfStreamException("DISCONNECTED");
+                offset += n;
             }
             return result;
         }
-        private byte[] ReadFrame(int expected=0)
+        private byte[] ReadFrame(int expected = 0)
         {
-            var header=Exact(2);
-            int size=(header[0]<<8)|header[1];
-            if(size<1 || (expected!=0 && size!=expected)) throw new InvalidDataException("FRAME_LENGTH");
+            var header = Exact(2);
+            int size   = (header[0] << 8) | header[1];
+            if (size < 1 || (expected != 0 && size != expected))
+                throw new InvalidDataException("FRAME_LENGTH");
             return Exact(size);
         }
         private void WriteFrame(byte[] bytes)
         {
-            if(bytes.Length<1 || bytes.Length>65535) throw new InvalidDataException("FRAME_SIZE");
-            var frame=new byte[bytes.Length+2];
-            frame[0]=(byte)(bytes.Length>>8); frame[1]=(byte)bytes.Length;
-            Buffer.BlockCopy(bytes,0,frame,2,bytes.Length);
-            stream.Write(frame,0,frame.Length);
+            if (bytes.Length < 1 || bytes.Length > 65535)
+                throw new InvalidDataException("FRAME_SIZE");
+            var frame = new byte[bytes.Length + 2];
+            frame[0]  = (byte)(bytes.Length >> 8);
+            frame[1]  = (byte)bytes.Length;
+            Buffer.BlockCopy(bytes, 0, frame, 2, bytes.Length);
+            stream.Write(frame, 0, frame.Length);
         }
-        private ulong Enqueue(uint command,IMessage body)
+        private ulong Enqueue(uint command, IMessage body)
         {
-            if(Volatile.Read(ref closed)!=0) throw new IOException(fault??"CLOSED");
-            ulong id=checked((ulong)Interlocked.Increment(ref nextRequest));
-            EnqueueEnvelope(command,body,id);
+            if (Volatile.Read(ref closed) != 0)
+                throw new IOException(fault ?? "CLOSED");
+            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
+            EnqueueEnvelope(command, body, id);
             return id;
         }
-        private void EnqueueEnvelope(uint command,IMessage body,ulong id)
+        private void EnqueueEnvelope(uint command, IMessage body, ulong id)
         {
-            var bytes=new Envelope { ProtocolVersion=3,Command=command,RequestId=id,
-                Body=ByteString.CopyFrom(body.ToByteArray()) }.ToByteArray();
-            if(!outgoing.TryAdd(bytes)) { Fail("OUTGOING_LIMIT"); throw new IOException("OUTGOING_LIMIT"); }
+            var bytes = new Envelope { ProtocolVersion = 3, Command = command, RequestId = id,
+                                       Body = ByteString.CopyFrom(body.ToByteArray()) }
+                            .ToByteArray();
+            if (!outgoing.TryAdd(bytes))
+            {
+                Fail("OUTGOING_LIMIT");
+                throw new IOException("OUTGOING_LIMIT");
+            }
         }
         /// <summary>单向输入加入最多128项出站队列；不等待确认，满队列显式关闭。</summary>
-        public void SendInputs(FrameInputRequest body) { Enqueue((uint)CommandId.FrameInput,body); }
-        /// <summary>控制请求最多8个，等待3秒；await期间只持有纯Proto对象，错误抛异常。</summary>
-        public async Task<Envelope> Request(CommandId command,IMessage body)
+        public void SendInputs(FrameInputRequest body)
         {
-            var item=new Waiting { Command=(uint)command };
-            ulong id=checked((ulong)Interlocked.Increment(ref nextRequest));
-            lock(gate)
+            Enqueue((uint)CommandId.FrameInput, body);
+        }
+        /// <summary>控制请求最多8个，等待3秒；await期间只持有纯Proto对象，错误抛异常。</summary>
+        public async Task<Envelope> Request(CommandId command, IMessage body)
+        {
+            var   item = new Waiting { Command = (uint)command };
+            ulong id   = checked((ulong)Interlocked.Increment(ref nextRequest));
+            lock (gate)
             {
-                if(closed!=0) throw new IOException(fault??"CLOSED");
-                if(waiting.Count>=8) throw new IOException("CONTROL_LIMIT");
-                waiting.Add(id,item);
+                if (closed != 0)
+                    throw new IOException(fault ?? "CLOSED");
+                if (waiting.Count >= 8)
+                    throw new IOException("CONTROL_LIMIT");
+                waiting.Add(id, item);
             }
             try
             {
-                EnqueueEnvelope((uint)command,body,id);
-                if(await Task.WhenAny(item.Result.Task,Task.Delay(3000))!=item.Result.Task)
+                EnqueueEnvelope((uint)command, body, id);
+                if (await Task.WhenAny(item.Result.Task, Task.Delay(3000)) != item.Result.Task)
                     throw new TimeoutException("CONTROL_TIMEOUT");
                 return await item.Result.Task;
             }
-            finally { lock(gate) waiting.Remove(id); }
+            finally
+            {
+                lock (gate) waiting.Remove(id);
+            }
         }
-        public bool TryPush(out FramePushResponse push) { return pushes.TryTake(out push); }
+        /// <summary>非阻塞取出一个推送；仅Unity主线程调用，不持有网络锁。</summary>
+        public bool TryPush(out FramePushResponse push)
+        {
+            return pushes.TryTake(out push);
+        }
+        // Reader独占NetworkStream读取；按request_id分派响应，request_id=0进入有界推送队列。
         private void ReadLoop()
         {
             try
             {
-                while(closed==0)
+                while (closed == 0)
                 {
-                    var envelope=Envelope.Parser.ParseFrom(ReadFrame());
-                    if(envelope.ProtocolVersion!=3) throw new InvalidDataException("PROTOCOL_VERSION");
-                    if(envelope.RequestId==0)
+                    var envelope = Envelope.Parser.ParseFrom(ReadFrame());
+                    if (envelope.ProtocolVersion != 3)
+                        throw new InvalidDataException("PROTOCOL_VERSION");
+                    if (envelope.RequestId == 0)
                     {
-                        if(envelope.Command!=(uint)CommandId.FramePush) throw new InvalidDataException("PUSH_COMMAND");
-                        if(!pushes.TryAdd(FramePushResponse.Parser.ParseFrom(envelope.Body))) throw new IOException("PUSH_LIMIT");
+                        if (envelope.Command != (uint)CommandId.FramePush)
+                            throw new InvalidDataException("PUSH_COMMAND");
+                        if (!pushes.TryAdd(FramePushResponse.Parser.ParseFrom(envelope.Body)))
+                            throw new IOException("PUSH_LIMIT");
                         continue;
                     }
                     Waiting item;
-                    lock(gate) waiting.TryGetValue(envelope.RequestId,out item);
-                    if(item==null) continue; // 已超时结果丢弃，不污染新请求。
-                    if(item.Command!=envelope.Command) throw new InvalidDataException("RESPONSE_COMMAND");
+                    lock (gate) waiting.TryGetValue(envelope.RequestId, out item);
+                    if (item == null)
+                        continue; // 已超时结果丢弃，不污染新请求。
+                    if (item.Command != envelope.Command)
+                        throw new InvalidDataException("RESPONSE_COMMAND");
                     item.Result.TrySetResult(envelope);
                 }
             }
-            catch(Exception ex) { Fail(ex.Message); }
+            catch (Exception ex)
+            {
+                Fail(ex.Message);
+            }
         }
+        // Writer独占NetworkStream写入，保证多生产者发送仍按队列顺序串行化。
         private void WriteLoop()
         {
-            try { foreach(var bytes in outgoing.GetConsumingEnumerable()) WriteFrame(bytes); }
-            catch(Exception ex) { Fail(ex.Message); }
+            try
+            {
+                foreach (var bytes in outgoing.GetConsumingEnumerable())
+                    WriteFrame(bytes);
+            }
+            catch (Exception ex)
+            {
+                Fail(ex.Message);
+            }
         }
         private void Fail(string code)
         {
-            if(Interlocked.Exchange(ref closed,1)!=0) return;
-            fault=code;
+            if (Interlocked.Exchange(ref closed, 1) != 0)
+                return;
+            fault = code;
             outgoing.CompleteAdding();
             socket.Close(); // 解除read/write等待；不使用Thread.Abort。
-            lock(gate)
+            lock (gate)
             {
-                foreach(var item in waiting.Values) item.Result.TrySetException(new IOException(code));
+                foreach (var item in waiting.Values)
+                    item.Result.TrySetException(new IOException(code));
                 waiting.Clear();
             }
         }
+        /// <summary>幂等终止会话、关闭Socket并有限等待后台线程退出。</summary>
         public void Dispose()
         {
             Fail("CLOSED");
-            if(reader!=null && reader!=Thread.CurrentThread) reader.Join(1000);
-            if(writer!=null && writer!=Thread.CurrentThread) writer.Join(1000);
+            if (reader != null && reader != Thread.CurrentThread)
+                reader.Join(1000);
+            if (writer != null && writer != Thread.CurrentThread)
+                writer.Join(1000);
             // Collection可能仍被极少数退出路径借用，随此对象GC回收；Socket已同步关闭。
         }
     }
@@ -2851,312 +3598,481 @@ using Google.Protobuf;
 using UnityEngine;
 namespace BattleNavigation.FrameSync
 {
+    /// <summary>在Unity主线程采样输入、预测/校正并渲染；Server仍是战斗权威。</summary>
     public sealed class FrameBattleController : MonoBehaviour
     {
-        public string Host="127.0.0.1";
-        public int Port=19021;
-        public string ReplayPath=""; // 空串在线；非空从本机回放文件读取，不连Server。
-        private FrameConnection connection;
-        private FrameNative confirmed,predicted;
+        /// <summary>Frame Gateway主机和端口；只用于在线模式。</summary>
+        public string             Host       = "127.0.0.1";
+        public int                Port       = 19021;
+        /// <summary>空串表示在线；非空时离线读取该Replay路径。</summary>
+        public string             ReplayPath = "";
+        private FrameConnection   connection;
+        // confirmed只应用Server正式记录；predicted应用本地未来意图，两者不共享可变Native状态。
+        private FrameNative       confirmed, predicted;
         private FrameJoinResponse session;
-        private readonly SortedDictionary<uint,FrameCommand> pending=new SortedDictionary<uint,FrameCommand>();
-        private readonly Dictionary<uint,GameObject> actors=new Dictionary<uint,GameObject>();
-        private readonly Dictionary<uint,GameObject> bolts=new Dictionary<uint,GameObject>();
-        private FrameReplay replay;
-        private int replayIndex;
-        private float accumulated;
-        private int queuedSkill;
-        private bool ready,connecting,destroyed;
-        private string status="connecting";
-        private uint authorityFrame,predictedFrame,winner;
-        private int rollbackCount;
-        private float castPreviewUntil;
-        private string MapPath => Path.Combine(Application.streamingAssetsPath,"navigation/battle_1001.bmap");
+        // 未确认输入按目标帧排序；重连后由Install清除，拒绝输入也会从这里移除。
+        private readonly SortedDictionary<uint, FrameCommand> pending =
+            new SortedDictionary<uint, FrameCommand>();
+        private readonly Dictionary<uint, GameObject> actors = new Dictionary<uint, GameObject>();
+        private readonly Dictionary<uint, GameObject> bolts  = new Dictionary<uint, GameObject>();
+        private FrameReplay                           replay;
+        private int                                   replayIndex;
+        private float                                 accumulated;
+        private int                                   queuedSkill;
+        private bool                                  ready, connecting, destroyed;
+        private string                                status = "connecting";
+        private uint                                  authorityFrame, predictedFrame, winner;
+        private int                                   rollbackCount;
+        private float                                 castPreviewUntil;
+        private string                                MapPath =>
+            Path.Combine(Application.streamingAssetsPath, "navigation/battle_1001.bmap");
 
+        /// <summary>Unity启用入口；创建两个独立模拟，并选择在线连接或本地Replay。</summary>
         private async void Start()
         {
             try
             {
-                confirmed=new FrameNative(MapPath);
-                predicted=new FrameNative(MapPath);
-                if(ReplayPath.Length>0)
+                confirmed = new FrameNative(MapPath);
+                predicted = new FrameNative(MapPath);
+                if (ReplayPath.Length > 0)
                 {
-                    if(new FileInfo(ReplayPath).Length>1024*1024) throw new InvalidDataException("REPLAY_LIMIT");
-                    replay=FrameReplay.Parser.ParseFrom(File.ReadAllBytes(ReplayPath));
-                    if(replay.FormatVersion!=1) throw new InvalidDataException("REPLAY_VERSION");
-                    if(replay.Records.Count<1 || replay.Records.Count>3600 || replay.Initial==null || replay.Initial.Frame!=0)
+                    if (new FileInfo(ReplayPath).Length > 1024 * 1024)
+                        throw new InvalidDataException("REPLAY_LIMIT");
+                    replay = FrameReplay.Parser.ParseFrom(File.ReadAllBytes(ReplayPath));
+                    if (replay.FormatVersion != 1)
+                        throw new InvalidDataException("REPLAY_VERSION");
+                    if (replay.Records.Count < 1 || replay.Records.Count > 3600 ||
+                        replay.Initial == null || replay.Initial.Frame != 0)
                         throw new InvalidDataException("REPLAY_RANGE");
                     Install(replay.Initial);
-                    status="offline replay";
+                    status = "offline replay";
                 }
-                else await Connect(false);
+                else
+                    await Connect(false);
             }
-            catch(Exception ex) { StopWith(ex.Message); }
+            catch (Exception ex)
+            {
+                StopWith(ex.Message);
+            }
         }
+        /// <summary>建立新会话或使用现有凭据恢复；await后重验对象是否已销毁。</summary>
         private async Task Connect(bool resume)
         {
-            connecting=true; ready=false;
+            connecting = true;
+            ready      = false;
             connection?.Dispose();
-            var next=await FrameConnection.Connect(Host,Port);
-            if(destroyed) { next.Dispose(); return; }
-            connection=next;
-            FrameJoinResponse state;
-            if(resume)
+            var next = await FrameConnection.Connect(Host, Port);
+            if (destroyed)
             {
-                var envelope=await connection.Request(CommandId.FrameRecover,new FrameRecoverRequest
-                    { BattleId=session.BattleId,ResumeToken=session.ResumeToken });
-                state=FrameRecoverResponse.Parser.ParseFrom(envelope.Body).State;
+                next.Dispose();
+                return;
+            }
+            connection = next;
+            FrameJoinResponse state;
+            if (resume)
+            {
+                var       envelope =
+                    await connection.Request(CommandId.FrameRecover, new FrameRecoverRequest {
+                        BattleId   = session.BattleId,
+                        ResumeToken = session.ResumeToken
+                    });
+                state = FrameRecoverResponse.Parser.ParseFrom(envelope.Body).State;
             }
             else
             {
-                var envelope=await connection.Request(CommandId.FrameJoin,new FrameJoinRequest { ScenarioId=1001 });
-                state=FrameJoinResponse.Parser.ParseFrom(envelope.Body);
+                var envelope = await connection.Request(
+                    CommandId.FrameJoin,
+                    new FrameJoinRequest { ScenarioId = 1001 });
+                state        = FrameJoinResponse.Parser.ParseFrom(envelope.Body);
             }
-            if(destroyed) { next.Dispose(); return; }
+            if (destroyed)
+            {
+                next.Dispose();
+                return;
+            }
             Install(state);
-            connecting=false;
+            connecting = false;
         }
+        /// <summary>验证地图身份与Checkpoint帧号，再原子替换confirmed/predicted起点。</summary>
         private void Install(FrameJoinResponse state)
         {
-            if(state==null || state.Code!="OK") throw new IOException(state?.Code??"EMPTY_STATE");
+            if (state == null || state.Code != "OK")
+                throw new IOException(state?.Code ?? "EMPTY_STATE");
             string mapHash;
-            using(var sha=SHA256.Create()) mapHash=BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(MapPath))).Replace("-","").ToLowerInvariant();
-            if(mapHash!=state.MapHash || confirmed.RulesHash!=state.RulesHash ||
-                confirmed.MapId!=state.MapId || confirmed.MapVersion!=state.MapVersion) throw new InvalidDataException("ASSET_IDENTITY");
+            using (var sha = SHA256.Create()) mapHash =
+                BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(MapPath)))
+                    .Replace("-", "")
+                    .ToLowerInvariant();
+            if (mapHash != state.MapHash || confirmed.MapId != state.MapId ||
+                confirmed.MapVersion != state.MapVersion)
+                throw new InvalidDataException("ASSET_IDENTITY");
             confirmed.Restore(state.Checkpoint.ToByteArray());
             predicted.Restore(state.Checkpoint.ToByteArray());
-            session=state;
-            var view=FrameState.Decode(confirmed.Save());
-            if(view.Frame!=state.Frame) throw new InvalidDataException("CHECKPOINT_FRAME");
-            authorityFrame=predictedFrame=view.Frame; winner=view.Winner;
-            pending.Clear(); accumulated=0; queuedSkill=0;
-            ready=true; status="ready";
-            if(replay==null && winner==0) SeedLead();
+            session  = state;
+            var view = FrameState.Decode(confirmed.Save());
+            if (view.Frame != state.Frame)
+                throw new InvalidDataException("CHECKPOINT_FRAME");
+            authorityFrame = predictedFrame = view.Frame;
+            winner                          = view.Winner;
+            pending.Clear();
+            accumulated = 0;
+            queuedSkill = 0;
+            ready       = true;
+            status      = "ready";
+            if (replay == null && winner == 0)
+                SeedLead();
         }
         // 默认2帧=100ms输入提前量；本地在未来帧先执行，Server按deadline采用。
+        /// <summary>预先生成默认2个未来帧，使首次按键有本地响应时间。</summary>
         private void SeedLead()
         {
-            for(int i=0;i<2;i++) Predict(new FrameCommand { Frame=predictedFrame+1 });
+            for (int i = 0; i < 2; i++)
+                Predict(new FrameCommand { Frame = predictedFrame + 1 });
         }
+        /// <summary>在预测Native推进一帧并记录意图；不改变confirmed权威帧。</summary>
         private void Predict(FrameCommand input)
         {
-            predicted.Step(input.X,input.Z,(int)input.Skill);
-            predictedFrame=input.Frame;
-            pending[input.Frame]=input;
+            predicted.Step(input.X, input.Z, (int)input.Skill);
+            predictedFrame       = input.Frame;
+            pending[input.Frame] = input;
         }
 
+        /// <summary>在主线程限额消费推送，避免网络积压单帧占满Unity更新。</summary>
         private void DrainFrames()
         {
-            if(connection.Fault!=null) throw new IOException(connection.Fault);
-            int processed=0;
-            while(connection.TryPush(out var push))
+            if (connection.Fault != null)
+                throw new IOException(connection.Fault);
+            int processed = 0;
+            while (connection.TryPush(out var push))
             {
-                if(++processed>256) throw new IOException("PUSH_BUDGET");
+                if (++processed > 256)
+                    throw new IOException("PUSH_BUDGET");
                 Receive(push);
             }
         }
+        /// <summary>采样一次性技能按键；预览可撤销，技能意图只随一个目标帧发送。</summary>
         private void CaptureSkill()
         {
-            int skill=Input.GetKeyDown(KeyCode.L)?3:Input.GetKeyDown(KeyCode.K)?2:Input.GetKeyDown(KeyCode.J)?1:0;
-            if(skill==0) return;
-            queuedSkill=skill; castPreviewUntil=Time.unscaledTime+.12f;
+            int skill = Input.GetKeyDown(KeyCode.L)   ? 3
+                        : Input.GetKeyDown(KeyCode.K) ? 2
+                        : Input.GetKeyDown(KeyCode.J) ? 1
+                                                      : 0;
+            if (skill == 0)
+                return;
+            queuedSkill      = skill;
+            castPreviewUntil = Time.unscaledTime + .12f;
         }
+        /// <summary>按50ms固定逻辑步推进；每次Update最多补算4步，超限显式停止。</summary>
         private void AdvanceLocalClock()
         {
-            accumulated+=Time.unscaledDeltaTime;
-            int catchup=0;
-            while(accumulated>=.05f && winner==0)
+            accumulated += Time.unscaledDeltaTime;
+            int catchup = 0;
+            while (accumulated >= .05f && winner == 0)
             {
-                if(++catchup>4) throw new IOException("CLIENT_OVERLOAD");
-                accumulated-=.05f;
-                if(replay!=null) PlaybackStep(); else LocalStep();
+                if (++catchup > 4)
+                    throw new IOException("CLIENT_OVERLOAD");
+                accumulated -= .05f;
+                if (replay != null)
+                    PlaybackStep();
+                else
+                    LocalStep();
             }
         }
+        /// <summary>Unity主线程帧入口；依序收网络结果、采样输入、推进和渲染。</summary>
         private void Update()
         {
-            if(!ready || connecting) return;
+            if (!ready || connecting)
+                return;
             try
             {
-                if(replay==null) { DrainFrames(); CaptureSkill(); }
+                if (replay == null)
+                {
+                    DrainFrames();
+                    CaptureSkill();
+                }
                 AdvanceLocalClock();
                 Render(FrameState.Decode(predicted.Save()));
             }
-            catch(Exception ex) { StopWith(ex.Message); }
+            catch (Exception ex)
+            {
+                StopWith(ex.Message);
+            }
         }
+        /// <summary>把当前按键作为下一预测帧意图并异步排队；满窗口时拒绝继续预测。</summary>
         private void LocalStep()
         {
-            if(FrameState.Decode(predicted.Save()).Winner!=0) return; // 预测结束时等待权威确认。
-            if(predictedFrame-authorityFrame>=8 || pending.Count>=64) throw new IOException("PREDICTION_WINDOW");
-            int x=(Input.GetKey(KeyCode.D)?1:0)-(Input.GetKey(KeyCode.A)?1:0);
-            int z=(Input.GetKey(KeyCode.W)?1:0)-(Input.GetKey(KeyCode.S)?1:0);
-            var input=new FrameCommand { Frame=predictedFrame+1,X=x,Z=z,Skill=(uint)queuedSkill };
-            queuedSkill=0;
+            if (FrameState.Decode(predicted.Save()).Winner != 0)
+                return; // 预测结束时等待权威确认。
+            if (predictedFrame - authorityFrame >= 8 || pending.Count >= 64)
+                throw new IOException("PREDICTION_WINDOW");
+            int x       = (Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0);
+            int z       = (Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0);
+            var input   = new FrameCommand { Frame = predictedFrame + 1, X = x, Z = z,
+                                           Skill = (uint)queuedSkill };
+            queuedSkill = 0;
             Predict(input);
-            connection.SendInputs(new FrameInputRequest { BattleId=session.BattleId,
-                Generation=session.Generation,Inputs={ input } });
+            connection.SendInputs(new FrameInputRequest { BattleId   = session.BattleId,
+                                                          Generation = session.Generation,
+                                                          Inputs     = { input } });
         }
+        /// <summary>接收Server权威记录；验证连续帧和状态摘要后校正本地预测。</summary>
         private void Receive(FramePushResponse push)
         {
-            if(push.BattleId!=session.BattleId || push.Generation!=session.Generation) return;
-            if(push.Code!="OK")
+            if (push.BattleId != session.BattleId || push.Generation != session.Generation)
+                return;
+            if (push.Code != "OK")
             {
-                status=push.Code;
-                if(push.Code=="EMPTY_INPUT" || push.Code=="INPUT_BATCH_TOO_LARGE") return;
-                if(push.Code=="OVERLOAD" || push.Code=="INTERNAL") throw new IOException(push.Code);
+                status = push.Code;
+                if (push.Code == "EMPTY_INPUT" || push.Code == "INPUT_BATCH_TOO_LARGE")
+                    return;
+                if (push.Code == "OVERLOAD" || push.Code == "INTERNAL")
+                    throw new IOException(push.Code);
                 throw new InvalidDataException("FRAME_PUSH_CODE");
             }
 
             // 逐项拒绝结果带有frame；移除本地被拒输入，之后从Confirmed重演。
-            foreach(var result in push.InputResults)
+            foreach (var result in push.InputResults)
             {
-                if(result.Code=="OK") continue;
-                status="INPUT_" + result.Code + "_FRAME_" + result.Frame;
+                if (result.Code == "OK")
+                    continue;
+                status = "INPUT_" + result.Code + "_FRAME_" + result.Frame;
                 pending.Remove(result.Frame);
             }
 
-            foreach(var record in push.Records)
+            foreach (var record in push.Records)
             {
-                if(record.Input.Frame<=authorityFrame) continue;
-                if(record.Input.Frame!=authorityFrame+1) throw new InvalidDataException("FRAME_GAP");
-                confirmed.Step(record.Input.X,record.Input.Z,(int)record.Input.Skill);
-                if(FrameNative.Hash(confirmed.Save())!=record.Hash) throw new InvalidDataException("STATE_DIVERGENCE");
-                authorityFrame=record.Input.Frame;
+                if (record.Input.Frame <= authorityFrame)
+                    continue;
+                if (record.Input.Frame != authorityFrame + 1)
+                    throw new InvalidDataException("FRAME_GAP");
+                confirmed.Step(record.Input.X, record.Input.Z, (int)record.Input.Skill);
+                if (FrameNative.Hash(confirmed.Save()) != record.Hash)
+                    throw new InvalidDataException("STATE_DIVERGENCE");
+                authorityFrame = record.Input.Frame;
                 pending.Remove(authorityFrame);
             }
             Reconcile();
-            winner=push.Winner;
+            winner = push.Winner;
         }
+        /// <summary>以confirmed状态为新基线，重演未确认输入并统计预测状态变化。</summary>
         private void Reconcile()
         {
-            var before=predicted.Save();
-            uint oldFrame=predictedFrame;
-            uint target=Math.Max(predictedFrame,authorityFrame+2);
-            predicted.Restore(confirmed.Save()); predictedFrame=authorityFrame;
+            var  before   = predicted.Save();
+            uint oldFrame = predictedFrame;
+            uint target   = Math.Max(predictedFrame, authorityFrame + 2);
+            predicted.Restore(confirmed.Save());
+            predictedFrame = authorityFrame;
             ReplayPending(target);
-            if(oldFrame==predictedFrame && FrameNative.Hash(before)!=FrameNative.Hash(predicted.Save())) rollbackCount++;
+            if (oldFrame == predictedFrame &&
+                FrameNative.Hash(before) != FrameNative.Hash(predicted.Save()))
+                rollbackCount++;
         }
+        /// <summary>按目标帧重演尚未确认输入；无输入的空帧使用中性意图。</summary>
         private void ReplayPending(uint target)
         {
-            if(FrameState.Decode(predicted.Save()).Winner==0)
+            if (FrameState.Decode(predicted.Save()).Winner == 0)
             {
-                for(uint frame=authorityFrame+1;frame<=target;frame++)
+                for (uint frame = authorityFrame + 1; frame <= target; frame++)
                 {
-                    if(!pending.TryGetValue(frame,out var input)) input=new FrameCommand { Frame=frame };
-                    predicted.Step(input.X,input.Z,(int)input.Skill);
-                    predictedFrame=frame;
-                    if(FrameState.Decode(predicted.Save()).Winner!=0) break;
+                    if (!pending.TryGetValue(frame, out var input))
+                        input = new FrameCommand { Frame = frame };
+                    predicted.Step(input.X, input.Z, (int)input.Skill);
+                    predictedFrame = frame;
+                    if (FrameState.Decode(predicted.Save()).Winner != 0)
+                        break;
                 }
             }
         }
+        /// <summary>离线逐条应用正式Replay输入，并校验每帧状态摘要和帧连续性。</summary>
         private void PlaybackStep()
         {
-            if(replayIndex>=replay.Records.Count) throw new InvalidDataException("REPLAY_INCOMPLETE");
-            var record=replay.Records[replayIndex++];
-            if(record.Input.Frame!=predictedFrame+1) throw new InvalidDataException("REPLAY_FRAME_GAP");
-            predicted.Step(record.Input.X,record.Input.Z,(int)record.Input.Skill);
-            if(FrameNative.Hash(predicted.Save())!=record.Hash) throw new InvalidDataException("REPLAY_DIVERGENCE");
-            predictedFrame=authorityFrame=record.Input.Frame;
-            winner=FrameState.Decode(predicted.Save()).Winner;
+            if (replayIndex >= replay.Records.Count)
+                throw new InvalidDataException("REPLAY_INCOMPLETE");
+            var record = replay.Records[replayIndex++];
+            if (record.Input.Frame != predictedFrame + 1)
+                throw new InvalidDataException("REPLAY_FRAME_GAP");
+            predicted.Step(record.Input.X, record.Input.Z, (int)record.Input.Skill);
+            if (FrameNative.Hash(predicted.Save()) != record.Hash)
+                throw new InvalidDataException("REPLAY_DIVERGENCE");
+            predictedFrame = authorityFrame = record.Input.Frame;
+            winner                          = FrameState.Decode(predicted.Save()).Winner;
         }
-        private static Vector3 World(long x,long y,long z) { return new Vector3(x/1000f,y/1000f,z/1000f); }
-        private readonly List<Material> ownedMaterials=new List<Material>();
-        private bool savingReplay;
-        private void DestroyActor(GameObject actor)
+        /// <summary>把逻辑毫米坐标转换为Unity米；只供表现层使用，不回写模拟。</summary>
+        private static Vector3 World(long x, long y, long z)
         {
-            var material=actor.GetComponent<Renderer>().sharedMaterial;
-            ownedMaterials.Remove(material); Destroy(material); Destroy(actor);
+            return new Vector3(x / 1000f, y / 1000f, z / 1000f);
         }
-        private GameObject Actor(uint id,bool projectile)
+        private readonly List<Material> ownedMaterials = new List<Material>();
+        private bool                    savingReplay;
+        /// <summary>销毁由本Controller创建的实例材质与GameObject。</summary>
+        private void                    DestroyActor(GameObject actor)
         {
-            var index=projectile?bolts:actors;
-            if(index.TryGetValue(id,out var existing)) return existing;
-            var actor=GameObject.CreatePrimitive(projectile?PrimitiveType.Sphere:PrimitiveType.Capsule);
-            actor.name=(projectile?"Bolt_":"Unit_")+id;
+            var material = actor.GetComponent<Renderer>().sharedMaterial;
+            ownedMaterials.Remove(material);
+            Destroy(material);
+            Destroy(actor);
+        }
+        /// <summary>按逻辑ID复用表现对象；材质由Controller创建并统一释放。</summary>
+        private GameObject Actor(uint id, bool projectile)
+        {
+            var index = projectile ? bolts : actors;
+            if (index.TryGetValue(id, out var existing))
+                return existing;
+            var primitive = projectile ? PrimitiveType.Sphere : PrimitiveType.Capsule;
+            var actor     = GameObject.CreatePrimitive(primitive);
+            actor.name = (projectile ? "Bolt_" : "Unit_") + id;
             Destroy(actor.GetComponent<Collider>()); // 表现不驱动Native碰撞。
-            actor.transform.localScale=projectile?Vector3.one*.25f:new Vector3(.4f,1,.4f);
+            actor.transform.localScale = projectile ? Vector3.one * .25f : new Vector3(.4f, 1, .4f);
             ownedMaterials.Add(actor.GetComponent<Renderer>().material);
-            index.Add(id,actor);
+            index.Add(id, actor);
             return actor;
         }
+        /// <summary>只把已解码快照投影到GameObject；不从Transform回写模拟状态。</summary>
         private void Render(FrameState state)
         {
-            foreach(var unit in state.Units)
+            foreach (var unit in state.Units)
             {
-                var actor=Actor(unit.Id,false);
-                var official=replay!=null ? unit : FrameState.Decode(confirmed.Save()).Units.First(u=>u.Id==unit.Id);
-                actor.SetActive(official.Hp>0);
-                var goal=World(unit.X,unit.Y,unit.Z)+Vector3.up;
+                var actor = Actor(unit.Id, false);
+                var official =
+                    replay != null
+                        ? unit
+                        : FrameState.Decode(confirmed.Save()).Units.First(u => u.Id == unit.Id);
+                actor.SetActive(official.Hp > 0);
+                var goal = World(unit.X, unit.Y, unit.Z) + Vector3.up;
                 // 差异较大直接贴权威预测点，小差异100ms内收敛；只改显示Transform。
-                actor.transform.position=Vector3.Distance(actor.transform.position,goal)>2 ? goal :
-                    Vector3.Lerp(actor.transform.position,goal,1-Mathf.Exp(-Time.unscaledDeltaTime*30));
-                var color=unit.Camp==1?Color.green:Color.red;
-                if(unit.Id==1001 && Time.unscaledTime<castPreviewUntil) color=Color.yellow;
-                actor.GetComponent<Renderer>().material.color=color;
+                actor.transform.position =
+                    Vector3.Distance(actor.transform.position, goal) > 2
+                        ? goal
+                        : Vector3.Lerp(actor.transform.position, goal,
+                                       1 - Mathf.Exp(-Time.unscaledDeltaTime * 30));
+                var color = unit.Camp == 1 ? Color.green : Color.red;
+                if (unit.Id == 1001 && Time.unscaledTime < castPreviewUntil)
+                    color = Color.yellow;
+                actor.GetComponent<Renderer>().material.color = color;
             }
-            var present=new HashSet<uint>();
-            foreach(var bolt in state.Bolts)
+            var present = new HashSet<uint>();
+            foreach (var bolt in state.Bolts)
             {
                 present.Add(bolt.Id);
-                var actor=Actor(bolt.Id,true);
-                actor.transform.position=World(bolt.X,bolt.Y,bolt.Z)+Vector3.up;
-                actor.GetComponent<Renderer>().material.color=Color.cyan;
+                var actor                = Actor(bolt.Id, true);
+                actor.transform.position = World(bolt.X, bolt.Y, bolt.Z) + Vector3.up;
+                actor.GetComponent<Renderer>().material.color = Color.cyan;
             }
-            foreach(var id in bolts.Keys.ToArray())
-                if(!present.Contains(id)) { DestroyActor(bolts[id]); bolts.Remove(id); }
+            foreach (var id in bolts.Keys.ToArray())
+                if (!present.Contains(id))
+                {
+                    DestroyActor(bolts[id]);
+                    bolts.Remove(id);
+                }
         }
+        /// <summary>连接中断后尝试凭据恢复；失败进入停止状态，不伪造权威状态。</summary>
         private async void Recover()
         {
-            if(connecting || session==null || replay!=null) return;
-            try { await Connect(true); }
-            catch(Exception ex) { connecting=false; StopWith(ex.Message); }
-        }
-        private async void SaveReplay()
-        {
-            if(savingReplay || destroyed || replay!=null) return;
-            savingReplay=true;
+            if (connecting || session == null || replay != null)
+                return;
             try
             {
-                if(winner==0) throw new IOException("REPLAY_REQUIRES_FINISHED");
-                var file=new FrameReplay { FormatVersion=1 };
-                uint offset=0,total;
+                await Connect(true);
+            }
+            catch (Exception ex)
+            {
+                connecting = false;
+                StopWith(ex.Message);
+            }
+        }
+        /// <summary>保存初始Checkpoint和正式采用的输入记录；不保存被拒绝的本地意图。</summary>
+        private async void SaveReplay()
+        {
+            if (savingReplay || destroyed || replay != null)
+                return;
+            savingReplay = true;
+            try
+            {
+                if (winner == 0)
+                    throw new IOException("REPLAY_REQUIRES_FINISHED");
+                var  file   = new FrameReplay { FormatVersion = 1 };
+                uint offset = 0, total;
                 do
                 {
-                    var envelope=await connection.Request(CommandId.FrameReplay,new FrameReplayRequest
-                        { BattleId=session.BattleId,ResumeToken=session.ResumeToken,Offset=offset });
-                    if(destroyed) return;
-                    var page=FrameReplayResponse.Parser.ParseFrom(envelope.Body);
-                    if(page.Code!="OK") throw new IOException(page.Code);
-                    if(offset==0) file.Initial=page.Initial;
-                    file.Records.Add(page.Records); offset+=(uint)page.Records.Count; total=page.Total;
-                    if(total>3600 || (page.Records.Count==0 && offset<total)) throw new InvalidDataException("REPLAY_PAGE");
-                } while(offset<total);
-                string path=Path.Combine(Application.persistentDataPath,"frame_last.pb");
-                File.WriteAllBytes(path,file.ToByteArray()); status="saved "+path;
+                    var envelope = await connection.Request(
+                    CommandId.FrameReplay,
+                    new FrameReplayRequest
+                    {
+                        BattleId   = session.BattleId,
+                        ResumeToken = session.ResumeToken,
+                        Offset      = offset,
+                    });
+                    if (destroyed)
+                        return;
+                    var page = FrameReplayResponse.Parser.ParseFrom(envelope.Body);
+                    if (page.Code != "OK")
+                        throw new IOException(page.Code);
+                    if (offset == 0)
+                        file.Initial = page.Initial;
+                    file.Records.Add(page.Records);
+                    offset += (uint)page.Records.Count;
+                    total = page.Total;
+                    if (total > 3600 || (page.Records.Count == 0 && offset < total))
+                        throw new InvalidDataException("REPLAY_PAGE");
+                } while (offset < total);
+                string path = Path.Combine(Application.persistentDataPath, "frame_last.pb");
+                File.WriteAllBytes(path, file.ToByteArray());
+                status = "saved " + path;
             }
-            catch(Exception ex) { if(!destroyed) status=ex.Message; }
-            finally { savingReplay=false; }
+            catch (Exception ex)
+            {
+                if (!destroyed)
+                    status = ex.Message;
+            }
+            finally
+            {
+                savingReplay = false;
+            }
         }
-        private void StopWith(string code) { ready=false; connecting=false; status=code; connection?.Dispose(); }
+        /// <summary>停止当前会话并释放资源；code保留为可观察诊断原因。</summary>
+        private void StopWith(string code)
+        {
+            ready      = false;
+            connecting = false;
+            status     = code;
+            connection?.Dispose();
+        }
+        /// <summary>绘制连接、帧号、预测窗口和回滚计数等教学诊断信息。</summary>
         private void OnGUI()
         {
-            GUILayout.BeginArea(new Rect(10,10,520,250),GUI.skin.box);
-            GUILayout.Label($"FrameSync {status} server={authorityFrame} predicted={predictedFrame} rollback={rollbackCount} winner={winner}");
-            GUILayout.Label("WASD移动，J近战，K表现弹丸，L逻辑火球；黄闪是本地施法预备反馈，HP由权威帧确认");
-            if(predicted!=null)
+            GUILayout.BeginArea(new Rect(10, 10, 520, 250), GUI.skin.box);
+            GUILayout.Label(
+                $"FrameSync {status} server={authorityFrame} " +
+                $"predicted={predictedFrame} rollback={rollbackCount} " +
+                $"winner={winner}");
+            GUILayout.Label(
+                "WASD移动，J近战，K表现弹丸，L逻辑火球；黄闪是本地施法预备反馈，HP由权威帧确认");
+            if (predicted != null)
             {
-                var view=FrameState.Decode(replay!=null?predicted.Save():confirmed.Save());
-                foreach(var unit in view.Units) GUILayout.Label($"unit={unit.Id} hp={unit.Hp} mode={unit.MoveMode} y={unit.Y}mm skillReady={unit.Ready1}/{unit.Ready2}/{unit.Ready3}");
+                var view = FrameState.Decode(replay != null ? predicted.Save() : confirmed.Save());
+                foreach (var unit in view.Units)
+                    GUILayout.Label(
+                        $"unit={unit.Id} hp={unit.Hp} mode={unit.MoveMode} y={unit.Y}mm " +
+                        $"skillReady={unit.Ready1}/{unit.Ready2}/{unit.Ready3}");
             }
-            if(GUILayout.Button("重连 / 权威状态恢复")) Recover();
-            if(GUILayout.Button("保存结束战斗输入回放")) SaveReplay();
+            if (GUILayout.Button("重连 / 权威状态恢复"))
+                Recover();
+            if (GUILayout.Button("保存结束战斗输入回放"))
+                SaveReplay();
             GUILayout.EndArea();
         }
+        /// <summary>Unity销毁入口；阻止await续体安装新对象并释放所有拥有资源。</summary>
         private void OnDestroy()
         {
-            destroyed=true; ready=false;
-            connection?.Dispose(); confirmed?.Dispose(); predicted?.Dispose();
-            foreach(var actor in actors.Values) DestroyActor(actor);
-            foreach(var bolt in bolts.Values) DestroyActor(bolt);
+            destroyed = true;
+            ready     = false;
+            connection?.Dispose();
+            confirmed?.Dispose();
+            predicted?.Dispose();
+            foreach (var actor in actors.Values)
+                DestroyActor(actor);
+            foreach (var bolt in bolts.Values)
+                DestroyActor(bolt);
         }
     }
 }
@@ -3210,9 +4126,9 @@ Controller保留两个Native实例：confirmed只执行Server正式帧，predict
 
 ### 9.2 离线播放
 
-退出Play；Inspector将ReplayPath设置为刚保存文件的完整路径，再进入Play。无需连接Gateway，Controller验证格式版本、大小、地图hash、规则hash、初始Checkpoint，再按50ms逐条执行输入并核对每帧hash。你看到的是重新模拟的状态，不是旧Event Log根据墙钟播放动画。
+退出Play；Inspector将ReplayPath设置为刚保存文件的完整路径，再进入Play。无需连接Gateway，Controller验证格式版本、文件大小、地图hash和初始Checkpoint，再按50ms逐条执行输入并核对每帧hash。你看到的是重新模拟的状态，不是旧Event Log根据墙钟播放动画。
 
-修改回放输入或hash应得到REPLAY_DIVERGENCE；删除中间帧应得到REPLAY_FRAME_GAP；换BMAP或Native规则应得到ASSET_IDENTITY。不同规则版本的回放需要对应历史Core/资产包，本课不会拿当前规则“尽量播放”后仍声称结果正确。
+修改回放输入或hash应得到REPLAY_DIVERGENCE；删除中间帧应得到REPLAY_FRAME_GAP；更换BMAP应得到ASSET_IDENTITY。Replay必须使用与创建记录时兼容的客户端程序版本；程序版本由发布包管理，不从源码字节推导。
 
 ## 10. 审计、失败验证与性能记录
 
@@ -3271,7 +4187,7 @@ if ($differences) { $differences; throw '跨平台Golden不一致' }
 'FRAME_CROSS_PLATFORM_OK'
 ```
 
-要求逐行相同的frame/hash，不只比较最后赢家。不一致时比资产SHA、rules hash、源码换行、整型溢出/取整、导航tie-break和序列化字段。Windows源码应保留LF；规则身份以源码字节计算，CRLF转换会导致规则hash不一致。
+要求逐行相同的frame/hash，不只比较最后赢家。不一致时先确认客户端与Server使用兼容的发布版本，再比地图资产SHA、整型溢出/取整、导航tie-break和序列化字段。逐帧状态hash只用于定位模拟分歧，不充当程序版本身份。
 
 ### 10.4 性能与网络，不用样例规模代替预算
 
