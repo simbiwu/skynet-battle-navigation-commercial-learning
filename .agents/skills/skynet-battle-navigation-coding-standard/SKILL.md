@@ -9,7 +9,7 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 
 本仓库复用 FlyWow 的编码基线。规则来源为当前固定 submodule 中的 `server/third_party/skynet-flywow/AGENTS.md`、`.agents/skills/skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 及相关模块的格式配置。这里将其适用于本仓库源码和课程示例；项目自身的目录、依赖、API、协议、运行路径与架构合同仍以本仓库规则为准，不照搬 FlyWow 的模块边界或运行配置。
 
-编写或评审源码与可复制代码时，先应用本 Skill，再按文件所在模块采用对应格式配置。只落实当前需求需要的合同与工程处理，不为了满足规则机械增加注释、Helper、抽象、配置或功能。
+开始新增、修改或评审源码、脚本、协议、配置、测试及课程可复制代码前，必须先读取固定 FlyWow submodule 的 `AGENTS.md`、`.agents/skills/skynet-flywow-coding-standard/SKILL.md`，以及目标文件适用的格式配置。然后应用本 Skill 和本仓库合同；只落实当前需求需要的工程处理，不为了满足规则机械增加注释、Helper、抽象、配置或功能。
 
 ## FlyWow 格式与课程代码
 

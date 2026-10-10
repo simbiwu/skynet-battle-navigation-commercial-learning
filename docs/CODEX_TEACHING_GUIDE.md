@@ -277,7 +277,7 @@ SceneView
 .agents/skills/skynet-battle-navigation-coding-standard/SKILL.md
 ```
 
-该 Skill 已吸收当前 FlyWow submodule 的编码基线。实际写代码前仍应按需查阅 FlyWow 的 `AGENTS.md`、`skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 和代码所在模块的 `.clang-format`，以确认当前固定版本的具体规则。
+该 Skill 已吸收当前 FlyWow submodule 的编码基线。编写或评审教程可复制代码前，必须读取 FlyWow 的 `AGENTS.md`、`skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 和代码所在模块的 `.clang-format`，以确认当前固定版本的具体规则。
 
 课程代码统一使用 UTF-8、LF、末尾换行和 4 空格缩进。C++ 采用所在模块格式配置；FlyWow Navigation/Lua Binding 为 Allman、100 列、禁止单行函数/控制流。Lua table、Proto message 与配置 record 分行清楚呈现；不把多个独立动作塞进一行。C#、CMake 和其它语言遵循本仓库对应工具或约定，不套用 C++ 格式参数。
 
