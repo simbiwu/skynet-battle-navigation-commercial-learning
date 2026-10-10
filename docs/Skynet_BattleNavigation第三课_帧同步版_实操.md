@@ -145,24 +145,55 @@ Server 必须运行这套 Core，才能决定正式战斗结果、拒绝过期�
 
 初始预测提前两帧，Server 创建后给两个 Tick 的准备时间。提前量是明确的调度参数，不是用 `Time.deltaTime` 推断正式帧号。最多允许比确认帧前进 8 帧；网络停顿超过窗口时停止继续猜测，并通过恢复入口获取新的正式状态。课程默认两帧提前量适合本地及稳定低 RTT 验收，不保证所有公网 RTT；最后一节要求在实际延迟条件下记录窗口失败与恢复行为。
 
-### 1.3 缺输入、迟到与追赶
+### 1.3 缺输入、迟到与批量到达
+
+每条输入都带目标帧号。Server 检查的是“这条输入对应的帧还能不能接受”，不是“消息现在才到，所以把它立即应用到当前帧”。输入先进入有限的未来窗口，等该帧截止时，Core 才把正式输入推进为一帧战斗结果。
 
 |情况|正式规则|
 |---|---|
-|某帧按截止时间收到输入|采用它，`supplied=true`|
-|缺输入|最多保持上次方向两帧，之后停止；技能永不沿用|
-|输入帧不大于已完成帧|`LATE`，不能改写历史|
-|未来帧超过当前帧+8|`INPUT_WINDOW`|
-|同一未来帧重复相同输入|幂等 `OK`|
-|同一未来帧不同输入|`CONFLICT`，首个接受值保持不变|
-|Worker 落后墙钟|最多连续补 4 帧；逐帧执行和记录，不扩大 dt、不跳帧|
-|超过追赶预算|本场显式 `OVERLOAD`，停止并保留短期诊断/回放状态|
+|目标帧仍未截止，且位于当前帧之后 8 帧以内|接受并暂存；目标帧到来时再使用|
+|目标帧截止时没有输入|生成正式补缺输入；方向最多沿用两帧，之后停止；技能永不沿用|
+|消息到达时该帧截止时间已过|该条输入返回 LATE，不能改写历史；Timer 执行晚也不重新开放截止时间|
+|目标帧大于当前帧+8|该条输入返回 INPUT_WINDOW|
+|同一帧重复相同输入|该条结果为 OK，幂等，不增加第二份 pending|
+|同一帧收到不同输入|该条结果为 CONFLICT；先接受的输入保持不变|
+|一个请求里的输入条数为 0|请求级 EMPTY_INPUT 拒绝，不产生逐项结果|
+|一个请求里的输入条数超过 8|整批以请求级 INPUT_BATCH_TOO_LARGE 拒绝，不接受其中任何一条|
 
-这里不会为了等一个连接而阻塞整个 Worker。一个 Worker 拥有多场 Battle，每场各自保存输入截止、当前帧与 Native 实例。
+#### 批量只改变传输方式，不改变每条输入的目标帧
+
+TCP 字节流可能因为网络调度、延迟和缓冲，让多条应用消息在短时间内连续到达。客户端也可以把多条不同帧的 FrameCommand 放进一个 FrameInputRequest，减少消息数量。无论哪一种情况，Server 都不能把它们当成“当前帧连续执行几次”；每条命令仍按自己的 frame 字段判断截止时间和未来窗口。
+
+本课每个 FrameInputRequest 最多装 8 条命令。批次长度合法时，Server 按数组顺序逐条处理，允许部分接受。FramePushResponse 增加 input_results；其中每项包含目标 frame 和该项结果 code，顺序与请求中的输入一致。外层 code 表示整条请求是否可处理，不代表批内所有输入成功：
+
+- 外层 code=OK：请求格式和批次大小合法；逐项结果看 input_results。
+- 每项 code=OK：这条输入已进入 pending，或它是此前已接受输入的相同重传。这只表示输入被暂存，不代表该帧已经模拟或成为正式结果。
+- 每项 code=LATE/INPUT_WINDOW/CONFLICT/BAD_INPUT/FINISHED：对应 frame 的这条输入被拒绝；其他输入仍按各自结果处理。
+- 外层 code=EMPTY_INPUT：批次为空；不处理输入，input_results 为空。
+- 外层 code=INPUT_BATCH_TOO_LARGE：批次超过 8 条；整批拒绝，input_results 为空。
+
+举例：Server 当前帧为 100，一批输入依次是第 99、102、109 帧。第 99 帧已过时，第 102 帧仍在未来窗口，第 109 帧超过 100+8。响应外层 code 为 OK，逐项结果为：
+
+~~~text
+frame 99  -> LATE
+frame 102 -> OK
+frame 109 -> INPUT_WINDOW
+~~~
+
+只有第 102 帧被暂存。它到截止时是否成为本帧正式输入，要看随后服务器发出的 FrameRecord。FrameRecord 的 input 和 supplied 才是客户端确认正式时间线的依据；批次接收结果不是战斗结果。
+
+#### 延迟、输入积压与模拟过载是三种不同情况
+
+- **网络输入积压**：旧帧可能过期，新帧可能仍在窗口内；按上面的逐帧结果处理。积压不允许倒回模拟。
+- **空输入请求**：返回 EMPTY_INPUT；它与超限批次是不同的请求错误。
+- **单条请求过大**：整批 INPUT_BATCH_TOO_LARGE 拒绝；客户端应拆分后重试，不能原样无限重试。
+- **Server Worker 模拟落后墙钟**：这是计算追赶问题，不是客户端输入批次。最多连续补 4 帧；每一帧仍单独执行和记录，不扩大 dt、不跳帧。超过追赶预算，本场显式 OVERLOAD 并停止。
+
+一个 Worker 拥有多场 Battle，每场各自保存输入截止、当前帧与 Native 实例。它不能为了等某个连接而暂停其他 Battle，也不能把迟到输入塞进已经结束的帧。
 
 ### 1.4 传输选择
 
-本版复用已经存在的 FlyWow TCP 长连接、应用握手与 Protobuf。TCP 保证字节流有序到达，不保证低延迟：丢包会导致队头阻塞。帧号、缺输入规则、窗口、确认与恢复仍由 Battle 定义，不能把 TCP 的可靠性当作业务确认。
+本版复用已经存在的 FlyWow TCP 长连接、应用握手与 Protobuf。TCP 保证字节流有序到达，不保证低延迟：丢包会导致队头阻塞。TCP 底层把字节合并或拆分，不会改变 Gateway framing 后的应用消息边界；若多个 FrameInputRequest 连续到达，仍逐条按各自目标帧处理。若一个请求显式携带多条 FrameCommand，则按 1.3 的逐项结果合同处理。帧号、缺输入规则、窗口、确认与恢复仍由 Battle 定义，不能把 TCP 的可靠性当作业务确认。
 
 本课不会另外创造一套 UDP 会话/加密/拥塞控制。商业产品能选择可靠流或成熟的数据报传输，取决于目标网络与玩法；帧同步并不由 TCP/UDP 决定。这里明确保留 TCP 的队头阻塞风险，最后给出实际延迟/丢包验证步骤，不宣称本机验收证明所有公网实时场景。
 
@@ -1401,12 +1432,17 @@ message FrameInputRequest {
   uint32 generation = 2;
   repeated FrameCommand inputs = 3; // 最多8条；一帧只允许一个不可变输入。
 }
+message FrameInputResult {
+  uint32 frame = 1; // 对应请求中的目标帧；用于定位批内结果。
+  string code = 2;  // OK/BAD_INPUT/LATE/INPUT_WINDOW/CONFLICT/FINISHED。
+}
 message FramePushResponse {
   uint32 battle_id = 1;
   uint32 generation = 2;
-  repeated FrameRecord records = 3; // 按帧严格连续；一正常推送当前帧。
-  string code = 4;                 // OK/LATE/INPUT_WINDOW/CONFLICT/OVERLOAD/INTERNAL。
-  uint32 winner = 5;               // 0进行中，1/2阵营胜利，3平局。
+  repeated FrameRecord records = 3;       // 按帧严格连续；一正常推送当前帧。
+  string code = 4;                        // 请求级：OK/EMPTY_INPUT/INPUT_BATCH_TOO_LARGE/OVERLOAD/INTERNAL。
+  uint32 winner = 5;                      // 0进行中，1/2阵营胜利，3平局。
+  repeated FrameInputResult input_results = 6; // 输入请求的逐项结果；顺序与inputs一致。
 }
 message FrameRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
 message FrameRecoverResponse { FrameJoinResponse state = 1; }
@@ -1778,12 +1814,13 @@ local function snapshot(battle, initial)
     }
 end
 --- 推送目标连接；request_id=0表示无请求关联；不等待客户端收到。
-local function push(battle, records, code)
+local function push(battle, records, code, input_results)
     skynet.send(dispatcher, "lua", "frame_push",
     {
         session = battle.session,
         data    = { battle_id = battle.id, generation = battle.generation,
-                    records = records, code = code, winner = battle.core.winner },
+                    records = records, code = code, winner = battle.core.winner,
+                    input_results = input_results or {} },
     })
 end
 --- 检查当前连接和会话代数；旧连接迟到输入不可进入新会话。
@@ -1834,12 +1871,25 @@ end
 local function inputs(args)
     local battle = battles[args.battle_id]
     if not owns(battle, args) then return end
+
     local batch = args.request.inputs or {}
-    if #batch > config.input_batch then push(battle, {}, "INPUT_BATCH"); return end
-    for _, input in ipairs(batch) do
-        local code = admit(battle, input)
-        if code ~= "OK" then push(battle, {}, code) end
+    if #batch == 0 then
+        push(battle, {}, "EMPTY_INPUT")
+        return
     end
+    if #batch > config.input_batch then
+        push(battle, {}, "INPUT_BATCH_TOO_LARGE")
+        return
+    end
+
+    -- 每条输入独立判定；外层OK表示请求可处理，不表示批内全部成功。
+    local input_results = {}
+    for _, input in ipairs(batch) do
+        input_results[#input_results + 1] =
+            { frame = input.frame or 0, code = admit(battle, input) }
+    end
+
+    push(battle, {}, "OK", input_results)
 end
 --- 一页Replay最多256帧；只有有效凭据才能读取，离线initial不包含凭据。
 local function replay(args)
@@ -2936,9 +2986,19 @@ namespace BattleNavigation.FrameSync
             if(push.Code!="OK")
             {
                 status=push.Code;
+                if(push.Code=="EMPTY_INPUT" || push.Code=="INPUT_BATCH_TOO_LARGE") return;
                 if(push.Code=="OVERLOAD" || push.Code=="INTERNAL") throw new IOException(push.Code);
-                return; // LATE/CONFLICT只是拒绝；正式帧仍会确认实际采用输入。
+                throw new InvalidDataException("FRAME_PUSH_CODE");
             }
+
+            // 逐项拒绝结果带有frame；移除本地被拒输入，之后从Confirmed重演。
+            foreach(var result in push.InputResults)
+            {
+                if(result.Code=="OK") continue;
+                status="INPUT_" + result.Code + "_FRAME_" + result.Frame;
+                pending.Remove(result.Frame);
+            }
+
             foreach(var record in push.Records)
             {
                 if(record.Input.Frame<=authorityFrame) continue;
@@ -3161,7 +3221,10 @@ Controller保留两个Native实例：confirmed只执行Server正式帧，predict
 |先跑新Gateway测试但保留旧条件|定向push断言失败|证明测试抓得到旧错误|
 |恢复旧epoch或不存在目标id|不写任一客户端|Gateway unit断言|
 |握手未完成推送|丢弃|ready开关单测；真实连接不得先拿业务消息|
-|发送已执行帧/未来9帧/同帧不同意图|LATE/INPUT_WINDOW/CONFLICT|正式历史与首个pending保持|
+|一批内发送已截止/窗口内/未来9帧输入|逐项返回LATE/OK/INPUT_WINDOW|仅窗口内输入进入pending；FrameRecord确认正式采用|
+|批次为空|请求级EMPTY_INPUT|不处理输入，input_results为空|
+|批次超过8条|请求级INPUT_BATCH_TOO_LARGE，整批拒绝|不接受任何批内输入|
+|同一批重复同帧相同/不同输入|逐项OK/CONFLICT|首条有效输入保持不变|
 |恢复后旧generation发输入|拒绝，不影响新会话|Worker owns判定|
 |另一连接操作本场但不提供token|不能写本场意图|epoch/id/generation归属|
 |满Worker容量后Join|BUSY|不创建额外Native实例|
