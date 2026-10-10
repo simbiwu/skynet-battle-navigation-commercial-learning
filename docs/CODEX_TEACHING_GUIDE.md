@@ -269,6 +269,20 @@ SceneView
 
 不要用大段源码注释替代教程正文，也不要在正文重复每一行代码的语法含义。
 
+### 10.1 可复制代码的工程规范
+
+教程中可复制的源码与测试片段必须遵守仓库 Skill：
+
+```text
+.agents/skills/skynet-battle-navigation-coding-standard/SKILL.md
+```
+
+该 Skill 已吸收当前 FlyWow submodule 的编码基线。实际写代码前仍应按需查阅 FlyWow 的 `AGENTS.md`、`skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 和代码所在模块的 `.clang-format`，以确认当前固定版本的具体规则。
+
+课程代码统一使用 UTF-8、LF、末尾换行和 4 空格缩进。C++ 采用所在模块格式配置；FlyWow Navigation/Lua Binding 为 Allman、100 列、禁止单行函数/控制流。Lua table、Proto message 与配置 record 分行清楚呈现；不把多个独立动作塞进一行。C#、CMake 和其它语言遵循本仓库对应工具或约定，不套用 C++ 格式参数。
+
+函数按阅读成本和真实边界拆分，不按固定行数机械拆分。注释使用中文说明必要的业务语义、WHY、ownership、生命周期、失败和并发合同；避免逐行翻译、重复显而易见的代码或填充式文件头。命名和目录遵循本仓库现有合同；FlyWow 的格式规范不意味着照搬其专属模块结构、路径或 Runtime 配置。
+
 ## 11. Lua Gateway 的可读性合同
 
 Gateway、Proxy、Battle Dispatch 和其他跨 Service Lua 代码统一使用 LuaDoc。教程展示源码时，应保留同一 LuaDoc 块中的职责、参数、返回、ownership、yield、失败和 WHY 说明。
