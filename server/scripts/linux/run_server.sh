@@ -7,8 +7,13 @@
 # 默认：start、debug、restart、stop 未指定进程时同时作用于 Gateway 和 Battle。
 # 选择：--gateway 只选择 Gateway，--battle 只选择 Battle；两者同时传入表示选择全部。
 # 调试：debug 启用 LuaPanda；debug --gdb 只允许选择一个进程，由 GDB 控制该进程。
+# Native 构建链：build -> run_build -> prepare_runtime -> FlyWow scripts/build_flywow.sh -> 各模块 CMakeLists。
+# 调用示例：从 Server 根目录运行 ./scripts/linux/run_server.sh build；只构建单个模块时调用 FlyWow 构建脚本。
+# 修改指引：源码清单在各模块 CMakeLists；统一 Native 输出目录在 FlyWow scripts/build_flywow.sh。
 # 不负责：不实现编译器、协议生成器、Native 业务逻辑或 Skynet Service。
 set -euo pipefail
+
+# 下面是 Bash 变量；BUILD_TYPE 可从调用环境覆盖，其余路径由脚本位置推导。
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd -- "$SERVER_ROOT/.." && pwd)"
@@ -21,6 +26,7 @@ REGISTRY="$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua"
 PROTO="$SHARED_ROOT/protocol/navigation_query.proto"
 DESCRIPTOR="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
+# 读取外部 BUILD_TYPE；未设置时统一使用 RelWithDebInfo。
 BUILD_TYPE="$(printenv BUILD_TYPE || printf RelWithDebInfo)"
 LUA_PANDA_HOST="$(printenv LUA_PANDA_HOST || printf 127.0.0.1)"
 ACTION=start
@@ -91,7 +97,7 @@ parse_args() {
         fail "--gdb 只能选择一个进程"
     fi
 }
-# 所有启动/构建入口共用同一条准备链，保证协议、Native、路径和 descriptor 不会各自漂移。
+# build 和 start 共用这条准备链：先准备工具与协议，再构建 FlyWow Native，最后核对运行资产。
 prepare_runtime() {
     "$SCRIPT_DIR/bootstrap_skynet.sh"
     "$SCRIPT_DIR/bootstrap_protocol_tools.sh"
@@ -101,8 +107,9 @@ prepare_runtime() {
     # 生成协议运行时产物。
     mkdir -p "$(dirname "$REGISTRY")"
     python3 "$FLYWOW_DIR/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
-    # 构建 FlyWow Native 模块并校验 descriptor。
-    # FlyWow 的公开构建入口一次构建所需 Native 模块，统一写入 submodule/build/native。
+    # 调用 FlyWow 的统一入口；省略模块参数表示构建全部模块。
+    # 若要只构建 Navigation，可单独调用：bash third_party/skynet-flywow/scripts/build_flywow.sh third_party/skynet navigation。
+    # 模块的 C++ 源文件清单由各模块 CMakeLists 维护，最终产物统一写入 submodule/build/native。
     BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_DIR/scripts/build_flywow.sh" \
         "$SERVER_ROOT/third_party/skynet"
     # Lua/C 搜索路径已在 process config 明确列出，不生成或注入额外配置文件。
@@ -112,7 +119,7 @@ prepare_runtime() {
         fail "共享运行资产不完整"
     log "PREPARE_OK"
 }
-# build 只做可复现准备和检查，不启动长期运行的 Skynet 进程。
+# build 只做可复现准备和检查，不启动长期运行的 Skynet 进程；Native 编译和模块测试在 prepare_runtime 内完成。
 run_build() {
     prepare_runtime
     "$SCRIPT_DIR/check_lua_varargs.sh"
