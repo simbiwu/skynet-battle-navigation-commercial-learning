@@ -89,7 +89,7 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 
 ### 1.2 输入序列、席位、帧号的关系
 
-`seat_id` 由加入 Battle 时的服务端绑定分配，不能仅凭客户端提交的 `unit_id` 当作权限。本课使用 `seat_id + frame` 作为同帧幂等键：首次合法输入生效，相同内容重复提交返回成功，不同内容返回 `CONFLICT`。输入必须由 Gateway 当前会话与 Battle 授权共同校验。客户端不可以指定获胜方、受到的伤害、Server 帧时间或 Worker 索引。
+`seat_id` 由加入 Battle 时的服务端绑定分配，不能仅凭客户端提交的 `unit_instance_id` 当作权限。本课使用 `seat_id + frame` 作为同帧幂等键：首次合法输入生效，相同内容重复提交返回成功，不同内容返回 `CONFLICT`。输入必须由 Gateway 当前会话与 Battle 授权共同校验。客户端不可以指定获胜方、受到的伤害、Server 帧时间或 Worker 索引。
 
 一条完整正式记录中保留各玩家的实际采用输入及 `supplied` 标志。正式记录顺序先按逻辑帧递增，再按固定 Seat 顺序处理；用 `pairs()` 遍历玩家表决定模拟顺序是禁用写法，因为 Lua table 迭代顺序不能成为跨端的确定性合同。
 
@@ -169,7 +169,7 @@ Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`�
     -> 创建Battle Native Engine + 私有NavigationContext
     -> 初始地面单位按ID登记DynamicOccupancy
     -> 需要寻路时 FindPathToRange (本场动态阻挡事实)
-    -> 保存Path / Cursor / target_id / 下一次规划帧
+    -> 保存Path / Cursor / target_instance_id / 下一次规划帧
     -> 正常Tick调用 AdvancePath (内部MoveUnit复验并提交footprint)
     -> 阻挡/目标变化/规划到期 -> 定时重规划
     -> Checkpoint V3保存路线点+Cursor+节流状态
@@ -242,44 +242,89 @@ xLua 在这里仅负责加载现有 Lua 配置并转换为 C# POD 记录，不�
 - `server/config/navigation_profiles.lua` 聚合 FlyWow Navigation 使用的 `NavigationProfile`，具体记录位于 `server/config/navigation_profiles/`。
 - `server/config/battle.lua` 已组装并向 Battle 启动入口提供这两份配置；Skynet 启动时加载并保存 UnitProfile 只读副本，并调用 `battle_nav.load_navigation_profiles`。
 
-本课需要的移动模式、移动速度、最大 HP 和飞行边界等通用单位属性，扩展现有 UnitProfile；地面导航半径、台阶、坡度和 Area 通行参数继续留在现有 NavigationProfile。所有地面与飞行单位都使用同一套 UnitProfile 记录格式，通过 `movement.mode` 区分移动方式；只有需要地面导航的 Unit 才需要 NavigationProfile。实例 ID 区分战斗对象，`unit_id` 查询静态单位配置，不再新增 `unit_id`。
+本课需要的移动模式、移动速度、最大 HP 和飞行边界等通用单位属性，扩展现有 UnitProfile；地面导航半径、台阶、坡度和 Area 通行参数继续留在现有 NavigationProfile。所有地面与飞行单位都使用同一套 UnitProfile 记录格式，通过 `movement.mode` 区分移动方式；只有需要地面导航的 Unit 才需要 NavigationProfile。Battle实例使用 `instance_id`；`UnitProfile.unit_id` 是静态UnitProfile配置查询键。两者用途不同，不再把实例ID简称为 `id`。
 
 Unity 在本课接入 Lua Runtime 后，加载同一套 Lua 配置模块。发布 Unity 构建时包含这些 Lua 源文件；它们仍只有一个权威来源，不手工维护第二份 CFG、JSON 或 C# Profile 表。两端在创建 Native Battle Engine 前读取并检查配置，再把有效记录交给 Native。Native 在启动阶段校验所有记录，并把这一批 Unit、Navigation、Skill 配置作为一份只读表保存在进程内；创建 Battle 时，Engine 固定持有该表。这里的“保存只读表”仅指进程内配置副本，不是向客户端发送网络快照。Native Core 不解析 Lua 文件，也不在 Tick 中读取配置。
 
 下面三份配置文件是本课的最终改动。UnitProfile 统一包含地面和飞行单位的通用属性；NavigationProfile 继续复用已有 FlyWow 配置，只为地面单位提供导航参数；Skill 配置放在本课帧同步 Lua 配置中，由两端读取同一份记录。
 
-server/config/unit_profiles.lua：
+以下 LuaDoc 是配置 record 的字段合同。实际值仍由每个 Profile 文件提供；注释中的单位和含义适用于所有记录。
 
 ```lua
-return
+---@class UnitMovementProfile
+---@field mode string "ground"：地面移动；"air"：单位自己控制高度的飞行移动。
+---@field speed_mm_per_tick integer 单个移动轴每个逻辑Tick的基础位移，单位毫米；本课Tick为50ms，多轴输入会确定性归一化。
+
+---@class UnitFlightProfile
+---@field min_air_clearance_mm integer 单位高于当前位置地表的最小间隙，单位毫米。
+---@field max_air_altitude_mm integer 单位相对当前位置地表的最大高度，单位毫米；不是固定世界高度。
+
+---@class UnitCombatProfile
+---@field attack_range_mm integer 普通攻击的中心点XZ最大距离，单位毫米；不把导航半径加进攻击距离。
+
+---@class UnitProfile
+---@field unit_id integer 静态UnitProfile配置查询键；Battle实例使用独立的instance_id。
+---@field movement UnitMovementProfile 移动模式与每Tick移动距离。
+---@field max_hp integer 战斗开始时的初始HP及允许达到的最大HP。
+---@field flight UnitFlightProfile? 只供空中单位填写；地面单位省略。
+---@field combat UnitCombatProfile 战斗基础属性。
+```
+
+`server/config/unit_profiles.lua`：
+
+```lua
+--- 职责：聚合本进程要使用的 UnitProfile；数组顺序不作为 Profile ID。
+---@type UnitProfile[]
+local unit_profiles =
 {
     (require "config.unit_profiles.profile1"),
     (require "config.unit_profiles.profile2"),
 }
+return unit_profiles
 ```
 
-server/config/unit_profiles/profile1.lua：
+`server/config/unit_profiles/profile1.lua`：
 
 ```lua
+---@type UnitProfile
 return
 {
-    unit_id = 1,
-    movement = { mode = "ground", speed_mm_per_tick = 150 },
-    max_hp = 100,
-    combat = { attack_range_mm = 900 },
+    unit_id = 1, -- 静态UnitProfile配置查询键；不是战斗中的单位实例ID。
+    movement =
+    {
+        mode              = "ground", -- 地面单位按地图高度移动，并使用对应NavigationProfile。
+        speed_mm_per_tick = 150,       -- 单轴每个50ms逻辑Tick的基础位移，毫米。
+    },
+    max_hp = 100, -- 初始HP和最大HP。
+    combat =
+    {
+        attack_range_mm = 900, -- 双方中心点XZ距离上限，毫米；不加导航半径。
+    },
 }
 ```
 
-server/config/unit_profiles/profile2.lua：
+`server/config/unit_profiles/profile2.lua`：
 
 ```lua
+---@type UnitProfile
 return
 {
-    unit_id = 2,
-    movement = { mode = "air", speed_mm_per_tick = 1000 },
-    max_hp = 100,
-    flight = { min_air_clearance_mm = 200, max_air_altitude_mm = 10000 },
-    combat = { attack_range_mm = 9000 },
+    unit_id = 2, -- 静态UnitProfile配置查询键；不是战斗中的单位实例ID。
+    movement =
+    {
+        mode              = "air", -- 空中移动，不申请地面NavigationProfile。
+        speed_mm_per_tick = 1000,   -- 单轴每个50ms逻辑Tick的基础位移，毫米。
+    },
+    max_hp = 100, -- 初始HP和最大HP。
+    flight =
+    {
+        min_air_clearance_mm = 200,   -- 与当前位置地表至少相隔200毫米。
+        max_air_altitude_mm  = 10000, -- 最高在当前位置地表上方10000毫米，不是固定高度。
+    },
+    combat =
+    {
+        attack_range_mm = 9000, -- 双方中心点XZ距离上限，毫米；不加导航半径。
+    },
 }
 ```
 
@@ -289,7 +334,7 @@ NavigationProfile 仍从 config.navigation_profiles 读取，并用相同的 uni
 
 #### FlyWow Navigation 的 CMake 目标归属
 
-**操作：完整替换 `server/third_party/skynet-flywow/navigation/native/CMakeLists.txt`，删除 `server/third_party/skynet-flywow/navigation/native/grid_map/CMakeLists.txt`。** `grid_map` 是完整 Navigation 的内部实现，不单独构建、发布；因此完整静态库的源文件、测试和 Benchmark 都由 Navigation 模块根 CMake 管理。
+**操作：完整替换 `server/third_party/skynet-flywow/navigation/native/CMakeLists.txt`。** Navigation 的地图、路径、动态占位与 Context 实现文件直接放在 `native/`；测试和 Benchmark 分别放在 `native/tests/` 与 `native/benchmark/`，由 Navigation 模块根 CMake 一并构建。
 
 该 CMake 定义一个真实静态库 `flywow_navigation_core`，以及一个不产生文件、只作为消费者名称的别名 `FlyWow::Navigation`。Skynet Lua 需要 Binding 时才启用 `flywow_navigation_lua`，产物名为 `flywow_navigation_native.so`。C++ 消费者链接 `FlyWow::Navigation`；Lua 运行时加载 Native .so；不会把三个名称当作三个库同时链接。
 
@@ -297,7 +342,7 @@ NavigationProfile 仍从 config.navigation_profiles 读取，并用相同的 uni
 
 ```cmake
 # 职责：定义完整 FlyWow Navigation Native 库、Lua Binding、测试与 Benchmark。
-# 边界：Grid Map 是 Navigation 的内部实现；不单独构建或发布 Grid 库。
+# 边界：地图与寻路实现属于 Navigation Native；不单独构建或发布 Grid 库。
 # 使用方式：
 # - 同一 CMake 构建树中的 C++ 消费者通过 FlyWow::Navigation 链接静态库。
 # - Skynet Lua 构建时设置 FLYWOW_NAVIGATION_LUA=ON，并提供 SKYNET_ROOT；
@@ -313,23 +358,23 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 enable_testing()
 find_package(Threads REQUIRED)
 
-# 完整 Navigation 核心只有一个静态库目标；Grid Map 源码只是其中一部分。
+# 完整 Navigation 核心只有一个静态库目标；地图、寻路与运行时状态源码共同组成 Navigation 核心。
 add_library(flywow_navigation_core STATIC
-    grid_map/bmap_reader.cpp
-    grid_map/grid_map.cpp
-    grid_map/map_registry.cpp
-    grid_map/nav_result.cpp
-    grid_map/dynamic_occupancy.cpp
-    grid_map/navigation_context.cpp
-    grid_map/navigation_profile_registry.cpp
-    grid_map/grid_pathfinder.cpp
+    bmap_reader.cpp
+    grid_map.cpp
+    map_registry.cpp
+    nav_result.cpp
+    dynamic_occupancy.cpp
+    navigation_context.cpp
+    navigation_profile_registry.cpp
+    grid_pathfinder.cpp
 )
 
 # 静态库还会链接进 Lua MODULE，因此 Linux 下需要位置无关的目标文件。
 set_target_properties(flywow_navigation_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-# 对外头文件目前位于 grid_map；通过 PUBLIC 传递给链接 Navigation 的消费者。
-target_include_directories(flywow_navigation_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/grid_map")
+# 对外头文件位于 native 根目录；通过 PUBLIC 传递给链接 Navigation 的消费者。
+target_include_directories(flywow_navigation_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
 target_link_libraries(flywow_navigation_core PUBLIC Threads::Threads)
 
 # 给消费者稳定的模块级名称；ALIAS 不会生成第二份库文件。
@@ -343,7 +388,7 @@ else()
 endif()
 
 # 测试和 Benchmark 通过公开别名链接，验证的就是消费者看到的 Navigation 目标。
-add_executable(grid_map_test grid_map/tests/grid_map_test.cpp)
+add_executable(grid_map_test tests/grid_map_test.cpp)
 target_link_libraries(grid_map_test PRIVATE FlyWow::Navigation)
 if(MSVC)
     target_compile_options(grid_map_test PRIVATE /UNDEBUG)
@@ -352,7 +397,7 @@ else()
 endif()
 add_test(NAME grid_map_test COMMAND grid_map_test)
 
-add_executable(navigation_test grid_map/tests/navigation_test.cpp)
+add_executable(navigation_test tests/navigation_test.cpp)
 target_link_libraries(navigation_test PRIVATE FlyWow::Navigation)
 if(MSVC)
     target_compile_options(navigation_test PRIVATE /W4 /permissive- /UNDEBUG)
@@ -362,7 +407,7 @@ endif()
 add_test(NAME navigation_test COMMAND navigation_test)
 
 # Benchmark 只构建，不注册为自动测试，避免把性能采样混入正确性门禁。
-add_executable(navigation_benchmark grid_map/benchmark/navigation_benchmark.cpp)
+add_executable(navigation_benchmark benchmark/navigation_benchmark.cpp)
 target_link_libraries(navigation_benchmark PRIVATE FlyWow::Navigation)
 if(MSVC)
     target_compile_options(navigation_benchmark PRIVATE /W4 /permissive-)
@@ -395,7 +440,7 @@ if(FLYWOW_NAVIGATION_LUA)
     add_library(flywow_navigation_lua MODULE navigation_binding.cpp)
     target_include_directories(flywow_navigation_lua PRIVATE
         "${CMAKE_CURRENT_SOURCE_DIR}"
-        "${CMAKE_CURRENT_SOURCE_DIR}/grid_map"
+        "${CMAKE_CURRENT_SOURCE_DIR}"
         "${SKYNET_LUA_DIR}"
     )
     target_link_libraries(flywow_navigation_lua PRIVATE FlyWow::Navigation flywow_lua_binding)
@@ -507,8 +552,8 @@ constexpr std::size_t   kMaxState  = 65535;
 
 struct PlayerInput
 {
-    std::uint32_t seat_id = 0; // 固定为1；由Worker会话授权后生成。
-    std::uint32_t unit_id = 0; // 固定席位1控制1001；仅本Battle配置。
+    std::uint32_t seat_id          = 0; // 固定为1；由Worker会话授权后生成。
+    std::uint32_t unit_instance_id = 0; // 固定席位1控制1001；这是Battle实例ID。
     std::int32_t  x       = 0; // -1/0/1，向X轴移动。
     std::int32_t  z       = 0; // -1/0/1，向Z轴移动。
     std::int32_t  skill   = 0; // 0空，1近战，2表现弹丸，3逻辑弹丸。
@@ -546,8 +591,8 @@ struct ProfileSnapshot
 
 struct Unit
 {
-    std::uint32_t id            = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
-    std::uint32_t unit_id       = 0; // 静态原型ID；地面和空中单位都必须引用有效记录。
+    std::uint32_t instance_id    = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
+    std::uint32_t unit_profile_id = 0; // UnitProfile静态配置查询键；用于查找单位规则。
     std::uint32_t camp          = 0; // 1玩家阵营，2敌方阵营。
     std::uint32_t movement_mode = 0; // 从Profile派生并随Checkpoint校验的运行时缓存。
     std::int64_t  x             = 0; // 整数毫米世界坐标。
@@ -560,8 +605,8 @@ struct Unit
 struct Bolt
 {
     std::uint32_t id      = 0;
-    std::uint32_t caster  = 0;
-    std::uint32_t target  = 0;
+    std::uint32_t caster_instance_id  = 0;
+    std::uint32_t target_instance_id  = 0;
     std::uint32_t expires = 0;
     std::int32_t  damage  = 0; // 0表示纯表现弹丸。
     std::int64_t  x       = 0;
@@ -571,8 +616,8 @@ struct Bolt
 
 struct Route
 {
-    std::uint32_t           unit_id          = 0; // 当前路径唯一跟随者；不借用其他Unit的cursor。
-    std::uint32_t           target_id        = 0; // 当前追击目标；变化触发重新规划。
+    std::uint32_t           unit_instance_id = 0; // 当前路径唯一跟随者；不借用其他Unit的cursor。
+    std::uint32_t           target_instance_id = 0; // 当前追击目标；变化触发重新规划。
     std::int64_t            planned_target_x = 0; // 上次A*看到的目标坐标；决定是否重规划。
     std::int64_t            planned_target_y = 0;
     std::int64_t            planned_target_z = 0;
@@ -589,9 +634,9 @@ struct State
     std::uint32_t      frame     = 0;
     std::uint32_t      winner    = 0; // 0继续，1/2胜方，3平局。
     std::uint32_t      next_bolt = 1;
-    std::vector<Unit>  units;  // 始终按id严格升序。
+    std::vector<Unit>  units;  // 始终按instance_id严格升序。
     std::vector<Bolt>  bolts;  // 始终按id严格升序。
-    std::vector<Route> routes; // 始终按unit_id严格升序。
+    std::vector<Route> routes; // 始终按unit_instance_id严格升序。
 };
 
 class Engine final
@@ -639,7 +684,7 @@ class Engine final
     void        moveBolts(std::vector<std::int32_t> &damage);
     void        finish(const std::vector<std::int32_t> &damage);
     std::size_t targetOf(const Unit &unit, std::uint32_t move_mask) const;
-    Route      &routeFor(std::uint32_t unit_id);
+    Route      &routeFor(std::uint32_t unit_instance_id);
     std::unique_ptr<flywow_navigation::NavigationContext> buildContext(const State &state) const;
 };
 } // namespace lesson_frame
@@ -654,7 +699,7 @@ class Engine final
 struct FsPlayerInput
 {
     std::uint32_t seat_id;
-    std::uint32_t unit_id;
+    std::uint32_t unit_instance_id;
     std::int32_t  x;
     std::int32_t  z;
     std::int32_t  skill;
@@ -693,6 +738,7 @@ static_assert(sizeof(FsUnitProfile) == 24, "Unit profile ABI changed");
 static_assert(sizeof(FsNavigationProfile) == 784, "Navigation profile ABI changed");
 static_assert(sizeof(FsSkillProfile) == 32, "Skill profile ABI changed");
 static_assert(sizeof(FsPlayerInput) == 20, "Frame ABI struct size must remain 20 bytes");
+// 仅改输入字段名；字段顺序和值不变，因此 C ABI 与 Checkpoint V3 字节布局不变。
 
 extern "C"
 {
@@ -725,7 +771,7 @@ extern "C"
 
 **操作：新建或整文件覆盖。** 本文件把上一帧状态和本帧正式输入推进为新状态，同时维护 FlyWow 路径和动态占位。
 
-按执行顺序精读：`fs_load_profiles → fs_open → Engine::reset → stepFrame → runFrame → save/restore`。第一遍先掌握四件事：实例通过 `unit_id` 查询同一张静态表、移动模式和速度等参数来自该表、Path/Cursor 跨帧复用、恢复时状态与导航事实一起提交。
+按执行顺序精读：`fs_load_profiles → fs_open → Engine::reset → stepFrame → runFrame → save/restore`。第一遍先掌握四件事：每个 `Unit.instance_id` 标识一个战斗实例；`Unit.unit_profile_id` 只用于查询静态 UnitProfile。移动模式和速度等参数来自该表、Path/Cursor 跨帧复用、恢复时状态与导航事实一起提交。
 
 玩家实例 `1001` 和地面敌人实例 `2002` 都引用 Profile `1`；飞行敌人 `2001` 引用 Profile `2`。三者都必须通过同一个 `profileFor` 查询到完整记录。地面单位把记录中的 Navigation 参数交给 FlyWow；飞行单位从同一记录读取飞行边界。任何单位都没有“无 Profile”哨兵值。
 
@@ -875,7 +921,7 @@ bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std:
     const auto query = map_->QueryWorld({x, from_y, z});
     if (!query.ok() || !query.value.IsWalkable())
         return false;
-    const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
+    const auto &profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
     const auto  required =
         flywow_navigation::RequiredClearanceCells(profile, map_->metadata().cell_size_mm);
     if (query.value.clearance_cells < required)
@@ -887,7 +933,7 @@ bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std:
 bool Engine::sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t target_y,
                        std::int64_t &new_y) const
 {
-    const auto &profile = profileFor(profiles_->units, unit.unit_id);
+    const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
     const auto  query   = map_->QueryWorld({x, 0, z});
     if (!query.ok() ||
         target_y <
@@ -902,18 +948,21 @@ std::unique_ptr<flywow_navigation::NavigationContext>
 Engine::buildContext(const State &candidate) const
 {
     auto next_context = std::make_unique<flywow_navigation::NavigationContext>(map_);
-    // 单位按ID升序；恢复碰撞事实时不允许依赖unordered_map遍历顺序。
+    // 单位按instance_id升序；恢复占位不依赖unordered_map遍历顺序。
     for (const auto &unit : candidate.units)
     {
         if (unit.movement_mode != 1 || unit.hp <= 0)
             continue;
-        const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
+        const auto &navigation_profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
         const auto  grid    = map_->WorldToGrid(position(unit));
         if (!grid.ok())
             throw std::runtime_error("STATE_GRID");
-        if (next_context->occupancy().IsFootprintBlocked(profile, grid.value, {unit.id}))
+        // 占位用Battle实例ID索引；navigation_profile是该实例使用的静态导航规则。
+        if (next_context->occupancy().IsFootprintBlocked(
+                navigation_profile, grid.value, {unit.instance_id}))
             throw std::runtime_error("STATE_OCCUPANCY_CONFLICT");
-        const auto result = next_context->occupancy().Move({unit.id}, profile, grid.value);
+        const auto result = next_context->occupancy().Move(
+            {unit.instance_id}, navigation_profile, grid.value);
         if (!result.ok() || !result.value)
             throw std::runtime_error("STATE_OCCUPANCY_COMMIT");
     }
@@ -924,16 +973,16 @@ void Engine::reset()
 {
     State candidate;
     Unit  player;
-    player.id         = 1001;
-    player.unit_id = 1;
+    player.instance_id         = 1001;
+    player.unit_profile_id = 1;
     player.camp       = 1;
     player.x          = -11000;
     player.z          = 4000;
     candidate.units.push_back(player);
 
     Unit flying_enemy;
-    flying_enemy.id         = 2001;
-    flying_enemy.unit_id = 2;
+    flying_enemy.instance_id         = 2001;
+    flying_enemy.unit_profile_id = 2;
     flying_enemy.camp       = 2;
     flying_enemy.x          = 11000;
     flying_enemy.y          = 2000;
@@ -941,8 +990,8 @@ void Engine::reset()
     candidate.units.push_back(flying_enemy);
 
     Unit ground_enemy;
-    ground_enemy.id         = 2002;
-    ground_enemy.unit_id = 1;
+    ground_enemy.instance_id         = 2002;
+    ground_enemy.unit_profile_id = 1;
     ground_enemy.camp       = 2;
     ground_enemy.x          = 11000;
     ground_enemy.z          = -4000;
@@ -950,7 +999,7 @@ void Engine::reset()
 
     for (auto &unit : candidate.units)
     {
-        const auto &profile   = profileFor(profiles_->units, unit.unit_id);
+        const auto &profile   = profileFor(profiles_->units, unit.unit_profile_id);
         unit.movement_mode    = profile.movement_mode;
         unit.hp               = profile.max_hp;
         std::int64_t ground_y = unit.y;
@@ -982,17 +1031,17 @@ std::size_t Engine::targetOf(const Unit &unit, std::uint32_t move_mask) const
             best    = index;
         }
     }
-    return best; // 严格升序遍历，距离相同时ID较小者获胜。
+    return best; // 严格升序遍历，距离相同时instance_id较小者获胜。
 }
 
-Route &Engine::routeFor(std::uint32_t unit_id)
+Route &Engine::routeFor(std::uint32_t unit_instance_id)
 {
-    auto it = std::lower_bound(state_.routes.begin(), state_.routes.end(), unit_id,
+    auto it = std::lower_bound(state_.routes.begin(), state_.routes.end(), unit_instance_id,
                                [](const Route &route, std::uint32_t value)
-                               { return route.unit_id < value; });
-    if (it == state_.routes.end() || it->unit_id != unit_id)
+                               { return route.unit_instance_id < value; });
+    if (it == state_.routes.end() || it->unit_instance_id != unit_instance_id)
         it = state_.routes.insert(it, Route{});
-    it->unit_id = unit_id;
+    it->unit_instance_id = unit_instance_id;
     return *it;
 }
 
@@ -1000,7 +1049,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
 {
     if (x == 0 && z == 0)
         return false;
-    const auto  &unit_profile = profileFor(profiles_->units, unit.unit_id);
+    const auto  &unit_profile = profileFor(profiles_->units, unit.unit_profile_id);
     const auto   stride = strideForAxes(unit_profile.move_stride_mm_per_tick, (x != 0) + (z != 0));
     const auto   target_x = unit.x + x * stride;
     const auto   target_z = unit.z + z * stride;
@@ -1008,7 +1057,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
     if (!sampleGround(unit, target_x, target_z, target_y, target_y))
         return false;
     const auto                              &navigation = unit_profile.navigation;
-    const flywow_navigation::NavigationAgent agent{{unit.id}, &navigation};
+    const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
     const auto                               result = flywow_navigation::GridPathfinder::MoveUnit(
         *context_, agent, position(unit), {target_x, target_y, target_z}, policy());
     if (!result.ok() || !result.value)
@@ -1021,7 +1070,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
 
 void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
 {
-    const auto  &profile  = profileFor(profiles_->units, unit.unit_id);
+    const auto  &profile  = profileFor(profiles_->units, unit.unit_profile_id);
     const auto   axes     = (x != 0) + (z != 0) + (y != 0);
     const auto   stride   = strideForAxes(profile.move_stride_mm_per_tick, axes);
     std::int64_t result_y = unit.y;
@@ -1038,11 +1087,11 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
 {
     if (distance2(unit, target) <= 900 * 900)
         return;
-    auto &route = routeFor(unit.id);
-    if (route.target_id != target.id)
+    auto &route = routeFor(unit.instance_id);
+    if (route.target_instance_id != target.instance_id)
     {
         route.valid     = false;
-        route.target_id = target.id;
+        route.target_instance_id = target.instance_id;
         route.repath_at = state_.frame;
     }
 
@@ -1052,8 +1101,8 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     // 冷却到期只代表允许重规划；有效路径且目标未移动时继续复用。
     if (state_.frame >= route.repath_at && (!route.valid || target_moved))
     {
-        const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
-        const flywow_navigation::NavigationAgent agent{{unit.id}, &profile};
+        const auto &navigation_profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
+        const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation_profile};
         // 目标单位占位本身不能作为终点；找其附近允许站立的位置。
         // FindPathToRange沿用FlyWow的真实动态A*查询实现。
         auto candidate = flywow_navigation::GridPathfinder::FindPathToRange(
@@ -1077,9 +1126,9 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     flywow_navigation::PathFollowCursor cursor;
     cursor.next_point_index                             = route.next_point;
     cursor.segment_progress_mm                          = route.progress_mm;
-    const auto                              &profile    = profileFor(profiles_->units, unit.unit_id);
+    const auto                              &profile    = profileFor(profiles_->units, unit.unit_profile_id);
     const auto                              &navigation = profile.navigation;
-    const flywow_navigation::NavigationAgent agent{{unit.id}, &navigation};
+    const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
     const auto result = flywow_navigation::GridPathfinder::AdvancePath(
         *context_, agent, path, cursor, position(unit), profile.move_stride_mm_per_tick, policy());
     if (!result.ok())
@@ -1104,7 +1153,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
 
 void Engine::chaseAir(Unit &unit, const Unit &target)
 {
-    const auto &profile    = profileFor(profiles_->units, unit.unit_id);
+    const auto &profile    = profileFor(profiles_->units, unit.unit_profile_id);
     const auto  horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
     const auto  desired_y  = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
     const std::int32_t x = sign(target.x - unit.x), z = sign(target.z - unit.z);
@@ -1137,7 +1186,7 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
         damage[index] += skill.damage;
     if (state_.bolts.size() == kMaxBolts)
         return; // 纯表现弹丸满槽不撤销已结算伤害。
-    state_.bolts.push_back({state_.next_bolt++, unit.id, state_.units[index].id, state_.frame + 60,
+    state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 60,
                             skill.effect == 2 ? 0 : skill.damage, unit.x, unit.y, unit.z});
 }
 
@@ -1148,7 +1197,7 @@ void Engine::moveBolts(std::vector<std::int32_t> &damage)
     for (auto bolt : state_.bolts)
     {
         const auto it = std::find_if(state_.units.begin(), state_.units.end(), [&](const Unit &unit)
-                                     { return unit.id == bolt.target && unit.hp > 0; });
+                                     { return unit.instance_id == bolt.target_instance_id && unit.hp > 0; });
         if (it == state_.units.end() || bolt.expires <= state_.frame)
             continue;
         const auto dx = it->x - bolt.x, dy = it->y - bolt.y, dz = it->z - bolt.z;
@@ -1175,7 +1224,7 @@ void Engine::finish(const std::vector<std::int32_t> &damage)
         unit.hp    = std::max(0, unit.hp - damage[i]);
         if (unit.hp == 0 && unit.movement_mode == 1)
         {
-            const auto released = context_->occupancy().Release({unit.id});
+            const auto released = context_->occupancy().Release({unit.instance_id});
             if (!released.ok())
                 throw std::runtime_error("NAV_RELEASE_FAILED");
         }
@@ -1192,31 +1241,32 @@ void Engine::runFrame(const PlayerInput *inputs)
 {
     ++state_.frame;
     std::vector<std::int32_t>  damage(state_.units.size(), 0);
-    // 先冻结AI追击目标ID：移动先后不得改变本帧每人的目标选择。
-    std::vector<std::uint32_t> targets(state_.units.size(), 0);
+    // 先冻结AI追击目标实例ID：移动先后不得改变本帧每人的目标选择。
+    std::vector<std::uint32_t> target_instance_ids(state_.units.size(), 0);
     for (std::size_t index = 0; index < state_.units.size(); ++index)
     {
-        if (state_.units[index].id == 1001 || state_.units[index].hp <= 0)
+        if (state_.units[index].instance_id == 1001 || state_.units[index].hp <= 0)
             continue;
         const auto target_index = targetOf(state_.units[index], 3);
         if (target_index != state_.units.size())
-            targets[index] = state_.units[target_index].id;
+            target_instance_ids[index] = state_.units[target_index].instance_id;
     }
-    // 全部单位按ID升序执行；玩家1001由正式帧输入驱动，其余单位由Core规则驱动。
+    // 全部单位按instance_id升序执行；玩家1001由正式帧输入驱动，其余单位由Core规则驱动。
     for (auto &unit : state_.units)
     {
         if (unit.hp <= 0)
             continue;
-        if (unit.id == 1001)
+        if (unit.instance_id == 1001)
         {
             const auto &input = inputs[0];
             moveGround(unit, input.x, input.z);
         }
         else
         {
-            const auto id = targets[static_cast<std::size_t>(&unit - state_.units.data())];
+            const auto target_instance_id =
+                target_instance_ids[static_cast<std::size_t>(&unit - state_.units.data())];
             const auto it = std::find_if(state_.units.begin(), state_.units.end(),
-                                         [&](const Unit &other) { return other.id == id; });
+                                         [&](const Unit &other) { return other.instance_id == target_instance_id; });
             if (it == state_.units.end())
                 continue;
             if (unit.movement_mode == 1)
@@ -1231,7 +1281,7 @@ void Engine::runFrame(const PlayerInput *inputs)
         if (unit.hp <= 0)
             continue;
         std::int32_t skill_id = 0;
-        if (unit.id == 1001)
+        if (unit.instance_id == 1001)
             skill_id = inputs[0].skill;
         else
         {
@@ -1251,7 +1301,7 @@ void Engine::runFrame(const PlayerInput *inputs)
 void Engine::stepFrame(std::uint32_t frame, const PlayerInput *inputs, std::size_t count)
 {
     if (poisoned_ || state_.winner != 0 || frame != state_.frame + 1 || frame > kMaxFrames ||
-        !inputs || count != 1 || inputs[0].seat_id != 1 || inputs[0].unit_id != 1001)
+        !inputs || count != 1 || inputs[0].seat_id != 1 || inputs[0].unit_instance_id != 1001)
         throw std::runtime_error("FRAME_INPUT");
     for (std::size_t i = 0; i < count; ++i)
     {
@@ -1293,8 +1343,8 @@ std::string Engine::save() const
     put(out, state_.units.size(), 4);
     for (const auto &unit : state_.units)
     {
-        put(out, unit.id, 4);
-        put(out, unit.unit_id, 4);
+        put(out, unit.instance_id, 4);
+        put(out, unit.unit_profile_id, 4);
         put(out, unit.camp, 4);
         put(out, unit.movement_mode, 4);
         put(out, static_cast<std::uint64_t>(unit.x), 8);
@@ -1308,8 +1358,8 @@ std::string Engine::save() const
     for (const auto &bolt : state_.bolts)
     {
         put(out, bolt.id, 4);
-        put(out, bolt.caster, 4);
-        put(out, bolt.target, 4);
+        put(out, bolt.caster_instance_id, 4);
+        put(out, bolt.target_instance_id, 4);
         put(out, bolt.expires, 4);
         put(out, static_cast<std::uint32_t>(bolt.damage), 4);
         put(out, static_cast<std::uint64_t>(bolt.x), 8);
@@ -1319,8 +1369,8 @@ std::string Engine::save() const
     put(out, state_.routes.size(), 4);
     for (const auto &route : state_.routes)
     {
-        put(out, route.unit_id, 4);
-        put(out, route.target_id, 4);
+        put(out, route.unit_instance_id, 4);
+        put(out, route.target_instance_id, 4);
         put(out, static_cast<std::uint64_t>(route.planned_target_x), 8);
         put(out, static_cast<std::uint64_t>(route.planned_target_y), 8);
         put(out, static_cast<std::uint64_t>(route.planned_target_z), 8);
@@ -1362,8 +1412,8 @@ void Engine::restore(const std::string &bytes)
     for (std::uint64_t i = 0; i < units; ++i)
     {
         Unit unit;
-        unit.id            = static_cast<std::uint32_t>(get(bytes, offset, 4));
-        unit.unit_id    = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.instance_id            = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.unit_profile_id    = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.camp          = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.movement_mode = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.x             = signed64(get(bytes, offset, 8));
@@ -1377,22 +1427,22 @@ void Engine::restore(const std::string &bytes)
         requirePosition(unit.z);
         if (unit.hp < 0 || unit.camp < 1 || unit.camp > 2 || unit.movement_mode < 1 ||
             unit.movement_mode > 2 ||
-            (!candidate.units.empty() && candidate.units.back().id >= unit.id))
+            (!candidate.units.empty() && candidate.units.back().instance_id >= unit.instance_id))
             throw std::runtime_error("STATE_UNIT");
         for (const auto ready : unit.ready)
             if (ready > candidate.frame + 24)
                 throw std::runtime_error("STATE_READY");
         candidate.units.push_back(unit);
     }
-    if (candidate.units[0].id != 1001 || candidate.units[1].id != 2001 ||
-        candidate.units[2].id != 2002)
+    if (candidate.units[0].instance_id != 1001 || candidate.units[1].instance_id != 2001 ||
+        candidate.units[2].instance_id != 2002)
         throw std::runtime_error("STATE_UNIT_IDS");
-    if (candidate.units[0].unit_id != 1 || candidate.units[1].unit_id != 2 ||
-        candidate.units[2].unit_id != 1)
+    if (candidate.units[0].unit_profile_id != 1 || candidate.units[1].unit_profile_id != 2 ||
+        candidate.units[2].unit_profile_id != 1)
         throw std::runtime_error("STATE_PROFILE_IDS");
     for (const auto &unit : candidate.units)
     {
-        const auto &profile = profileFor(profiles_->units, unit.unit_id);
+        const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
         if (unit.movement_mode != profile.movement_mode || unit.hp > profile.max_hp)
             throw std::runtime_error("STATE_PROFILE_MISMATCH");
     }
@@ -1403,8 +1453,8 @@ void Engine::restore(const std::string &bytes)
     {
         Bolt bolt;
         bolt.id      = static_cast<std::uint32_t>(get(bytes, offset, 4));
-        bolt.caster  = static_cast<std::uint32_t>(get(bytes, offset, 4));
-        bolt.target  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.caster_instance_id  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.target_instance_id  = static_cast<std::uint32_t>(get(bytes, offset, 4));
         bolt.expires = static_cast<std::uint32_t>(get(bytes, offset, 4));
         bolt.damage  = signed32(get(bytes, offset, 4));
         bolt.x       = signed64(get(bytes, offset, 8));
@@ -1413,13 +1463,13 @@ void Engine::restore(const std::string &bytes)
         requirePosition(bolt.x);
         requirePosition(bolt.y);
         requirePosition(bolt.z);
-        const auto unitExists = [&](std::uint32_t unit_id)
+        const auto unitExists = [&](std::uint32_t unit_instance_id)
         {
             return std::any_of(candidate.units.begin(), candidate.units.end(),
-                               [&](const Unit &unit) { return unit.id == unit_id; });
+                               [&](const Unit &unit) { return unit.instance_id == unit_instance_id; });
         };
-        if (!bolt.id || bolt.id >= candidate.next_bolt || !unitExists(bolt.caster) ||
-            !unitExists(bolt.target) || (bolt.damage != 0 && bolt.damage != 20) ||
+        if (!bolt.id || bolt.id >= candidate.next_bolt || !unitExists(bolt.caster_instance_id) ||
+            !unitExists(bolt.target_instance_id) || (bolt.damage != 0 && bolt.damage != 20) ||
             bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 ||
             (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
             throw std::runtime_error("STATE_BOLT");
@@ -1431,8 +1481,8 @@ void Engine::restore(const std::string &bytes)
     for (std::uint64_t i = 0; i < routes; ++i)
     {
         Route route;
-        route.unit_id          = static_cast<std::uint32_t>(get(bytes, offset, 4));
-        route.target_id        = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.unit_instance_id          = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.target_instance_id        = static_cast<std::uint32_t>(get(bytes, offset, 4));
         route.planned_target_x = signed64(get(bytes, offset, 8));
         route.planned_target_y = signed64(get(bytes, offset, 8));
         route.planned_target_z = signed64(get(bytes, offset, 8));
@@ -1448,9 +1498,9 @@ void Engine::restore(const std::string &bytes)
         const auto path_length_mm = get(bytes, offset, 8);
         const auto partial        = get(bytes, offset, 4);
         if (valid > 1 || partial > 1 || points > 1024 || route.next_point > points ||
-            route.repath_at > candidate.frame + kRepathDelay || route.unit_id == 0 ||
-            route.target_id == 0 ||
-            (!candidate.routes.empty() && candidate.routes.back().unit_id >= route.unit_id))
+            route.repath_at > candidate.frame + kRepathDelay || route.unit_instance_id == 0 ||
+            route.target_instance_id == 0 ||
+            (!candidate.routes.empty() && candidate.routes.back().unit_instance_id >= route.unit_instance_id))
             throw std::runtime_error("STATE_ROUTE");
         route.valid = valid != 0;
         std::vector<flywow_navigation::WorldPosition> path_points;
@@ -1618,7 +1668,7 @@ extern "C" LESSON_FRAME_API int fs_step_frame(void *handle, std::uint32_t frame,
             return 0;
         lesson_frame::PlayerInput inputs[1];
         for (std::uint32_t i = 0; i < count; ++i)
-            inputs[i] = {players[i].seat_id, players[i].unit_id, players[i].x, players[i].z,
+            inputs[i] = {players[i].seat_id, players[i].unit_instance_id, players[i].x, players[i].z,
                          players[i].skill};
         static_cast<lesson_frame::Engine *>(handle)->stepFrame(frame, inputs, count);
         return 1;
@@ -1892,7 +1942,7 @@ int stepFrame(lua_State *state)
         LuaTable entry;
         if (!inputs.readTable(static_cast<std::int64_t>(index + 1), entry) ||
             !entry.readValue("seat_id", players[index].seat_id) ||
-            !entry.readValue("unit_id", players[index].unit_id) ||
+            !entry.readValue("unit_instance_id", players[index].unit_instance_id) ||
             !entry.readValue("x", players[index].x) || !entry.readValue("z", players[index].z) ||
             !entry.readValue("skill", players[index].skill))
             return lua.pushError("INPUT_FIELDS", "missing or invalid seat fields");
@@ -2654,7 +2704,7 @@ message FrameJoinResponse {
   uint32 map_version = 7;
   string map_hash = 8;      // 发布BMAP SHA-256；不包含rules源码Hash。
   uint32 frame = 9;
-  bytes checkpoint = 10;   // 创建或恢复时的当前StateV2。
+  bytes checkpoint = 10;   // 创建或恢复时的Checkpoint V3。
   uint32 tick_ms = 11;
   uint32 future_window = 12;
   uint32 input_lead = 13;
@@ -2761,7 +2811,7 @@ local MAX_MISSING_HOLD = 2
 ---@field frame integer 已完成的权威帧号。
 ---@field winner integer 0运行、1玩家胜、2敌方胜、3平局。
 ---@field seats integer[] 固定值[1]。
----@field units table<integer,integer> seat_id -> 本席位可控单位ID。
+---@field seat_unit_instance_ids table<integer,integer> seat_id -> 本席位可控单位实例ID。
 ---@field pending table<integer,table<integer,FrameInput>> 未来窗口的席位输入。
 ---@field last_input table<integer,FrameInput> 各席位上一正式方向。
 ---@field missing table<integer,integer> 各席位连续缺输入次数。
@@ -2801,13 +2851,13 @@ local function copy_input(input)
 end
 
 --- 创建独占Runtime；Native预载MapRegistry。失败清理临时Engine。
----@param options table {map_id,window,max_frames,seat_units} 由Worker显式传入。
+---@param options table {map_id,window,max_frames,seat_unit_instance_ids} 由Worker显式传入。
 ---@return FrameRuntime|nil runtime 成功实例，失败为nil。
 ---@return table|nil err 稳定错误Record。
 function M.create(options)
     assert(options.window >= 1 and options.window <= 32)
     assert(options.max_frames > 0)
-    assert(#options.seat_units == MAX_SEATS)
+    assert(#options.seat_unit_instance_ids == MAX_SEATS)
 
     local engine, open_err = native.open(options.map_id)
     if not engine then return nil, open_err or { code = "NATIVE_OPEN" } end
@@ -2828,7 +2878,7 @@ function M.create(options)
         frame      = frame,
         winner     = winner,
         seats      = { 1 },
-        units      = { [1] = options.seat_units[1] },
+        seat_unit_instance_ids = { [1] = options.seat_unit_instance_ids[1] },
         pending    = {},
         last_input = { [1] = { x = 0, z = 0 } },
         missing    = { [1] = 0 },
@@ -2846,7 +2896,7 @@ end
 ---@param input FrameInput 网络已解析且不持有外部buffer的值record。
 ---@return string code OK/LATE/INPUT_WINDOW/CONFLICT/BAD_INPUT/FINISHED。
 function M.accept(runtime, seat_id, input)
-    if not runtime.units[seat_id] then return "NO_SEAT" end
+    if not runtime.seat_unit_instance_ids[seat_id] then return "NO_SEAT" end
     if not valid_input(input) then return "BAD_INPUT" end
     if runtime.winner ~= 0 then return "FINISHED" end
     if input.frame <= runtime.frame then return "LATE" end
@@ -2895,7 +2945,7 @@ local function prepare_frame(runtime, frame)
         adopted[#adopted + 1] =
         {
             seat_id = seat_id,
-            unit_id = runtime.units[seat_id],
+            unit_instance_id = runtime.seat_unit_instance_ids[seat_id],
             x = final.x,
             z = final.z,
             skill = final.skill,
@@ -3083,7 +3133,7 @@ local function create(args)
         map_id      = asset.map_id,
         window      = conf.future_window,
         max_frames  = conf.max_frames,
-        seat_units  = { 1001 },
+        seat_unit_instance_ids = { 1001 },
     })
     if not runtime then return { code = err and err.code or "NATIVE_OPEN" } end
 
@@ -3639,12 +3689,12 @@ local initial = assert(first:save())
 assert(initial == second:save())
 assert(first:step_frame(1,
 {
-    { seat_id = 1, unit_id = 1001, x = 1, z = 0, skill = 0 },
+    { seat_id = 1, unit_instance_id = 1001, x = 1, z = 0, skill = 0 },
 }))
 assert(first:save() ~= second:save())
 local bad, err = first:step_frame(2,
 {
-    { seat_id = 1, unit_id = 1001, x = 9, z = 0, skill = 0 },
+    { seat_id = 1, unit_instance_id = 1001, x = 9, z = 0, skill = 0 },
 })
 assert(bad == nil and err and err.code)
 local stable = assert(first:save())
@@ -3678,7 +3728,7 @@ assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap",
                       require "config.navigation_profiles",
                        require "config.frame_sync".skills))
 local runtime = assert(core.create({ map_id = 1001, window = 8, max_frames = 3600,
-                                     seat_units = { 1001 } }))
+                                     seat_unit_instance_ids = { 1001 } }))
 local first = { frame = 1, x = 1, z = 0, skill = 0 }
 assert(core.accept(runtime, 1, first) == "OK")
 first.x = -1 -- 证明Runtime保存了值的拷贝，不是网络table地址。
@@ -4085,15 +4135,15 @@ namespace BattleNavigation.FrameSync
     public struct FsPlayerInput
     {
         public uint SeatId;
-        public uint UnitId;
+        public uint UnitInstanceId;
         public int X;
         public int Z;
         public int Skill;
 
-        public FsPlayerInput(uint seatId, uint unitId, int x, int z, int skill)
+        public FsPlayerInput(uint seatId, uint unitInstanceId, int x, int z, int skill)
         {
             SeatId = seatId;
-            UnitId = unitId;
+            UnitInstanceId = unitInstanceId;
             X = x;
             Z = z;
             Skill = skill;
@@ -4282,8 +4332,8 @@ namespace BattleNavigation.FrameSync
 
     public sealed class FrameUnit
     {
-        public uint Id;
-        public uint ProfileId;
+        public uint InstanceId;
+        public uint UnitProfileId;
         public uint Camp;
         public uint MoveMode;
         public uint Ready1;
@@ -4336,13 +4386,13 @@ namespace BattleNavigation.FrameSync
                 {
                     throw new InvalidDataException("UNIT_LIMIT");
                 }
-                uint previousUnitId = 0;
+                uint previousInstanceId = 0;
                 for (uint i = 0; i < unitCount; i++)
                 {
                     var unit = new FrameUnit
                     {
-                        Id = reader.ReadUInt32(),
-                        ProfileId = reader.ReadUInt32(),
+                        InstanceId = reader.ReadUInt32(),
+                        UnitProfileId = reader.ReadUInt32(),
                         Camp = reader.ReadUInt32(),
                         MoveMode = reader.ReadUInt32(),
                         X = reader.ReadInt64(),
@@ -4353,11 +4403,11 @@ namespace BattleNavigation.FrameSync
                         Ready2 = reader.ReadUInt32(),
                         Ready3 = reader.ReadUInt32(),
                     };
-                    if (unit.Id <= previousUnitId)
+                    if (unit.InstanceId <= previousInstanceId)
                     {
                         throw new InvalidDataException("STATE_UNIT_ORDER");
                     }
-                    previousUnitId = unit.Id;
+                    previousInstanceId = unit.InstanceId;
                     result.Units.Add(unit);
                 }
 
@@ -4395,7 +4445,7 @@ namespace BattleNavigation.FrameSync
                 for (uint i = 0; i < routeCount; i++)
                 {
                     uint unitId = reader.ReadUInt32();
-                    reader.ReadUInt32(); // target_unit_id
+                    reader.ReadUInt32(); // target_unit_instance_id
                     reader.ReadInt64(); // planned_target_x
                     reader.ReadInt64(); // planned_target_y
                     reader.ReadInt64(); // planned_target_z
@@ -4906,11 +4956,11 @@ namespace BattleNavigation.FrameSync
             }
         }
 
-        private const uint LocalUnitId = 1001;
+        private const uint LocalUnitInstanceId = 1001;
 
         private FsPlayerInput[] BuildInputs(FrameCommand local)
         {
-            return new[] { new FsPlayerInput(1, LocalUnitId, local.X, local.Z, (int)local.Skill) };
+            return new[] { new FsPlayerInput(1, LocalUnitInstanceId, local.X, local.Z, (int)local.Skill) };
         }
 
         private static FsPlayerInput[] AuthoritativeInputs(FrameRecord record)
@@ -5147,8 +5197,8 @@ namespace BattleNavigation.FrameSync
             var official = replay == null ? FrameState.Decode(confirmed.Save()) : view;
             foreach (FrameUnit unit in view.Units)
             {
-                var actor = GetActor(unit.Id, false);
-                var confirmed_unit = official.Units.First(u => u.Id == unit.Id);
+                var actor = GetActor(unit.InstanceId, false);
+                var confirmed_unit = official.Units.First(u => u.InstanceId == unit.InstanceId);
                 actor.SetActive(confirmed_unit.Hp > 0);
                 Vector3 target = World(unit.X, unit.Y, unit.Z) + Vector3.up;
                 float distance = Vector3.Distance(actor.transform.position, target);
@@ -5156,7 +5206,7 @@ namespace BattleNavigation.FrameSync
                     Vector3.Lerp(actor.transform.position, target,
                         1f - Mathf.Exp(-Time.unscaledDeltaTime * 30f));
                 Color color = unit.Camp == 1 ? Color.green : Color.red;
-                if (unit.Id == LocalUnitId && Time.unscaledTime < preview_until)
+                if (unit.InstanceId == LocalUnitInstanceId && Time.unscaledTime < preview_until)
                 {
                     color = Color.yellow;
                 }

@@ -12,6 +12,8 @@
 
 2026-10-11 命名收口：CMake 对外链接目标统一为 `FlyWow::Navigation`，FlyWow 内部静态库目标为 `flywow_navigation_core`；帧同步教程和构建链路文档已同步该合同，C++ 命名空间保持 `flywow_navigation`。
 
+2026-10-12 单位标识命名：Battle运行时单位统一使用 `instance_id` / `unit_instance_id`；`Unit.unit_profile_id` 对应 `UnitProfile.unit_id`，两者用于静态配置查询。同步帧同步文档、Native Core、Lua Runtime与Unity C# 输入字段；只改源代码标识符，C ABI字段顺序/尺寸和Checkpoint V3编码顺序/值保持不变。
+
 2026-10-11 CMake 归属收口：完整静态库、公开别名、Lua Binding、测试和 Benchmark 由 `navigation/native/CMakeLists.txt` 管理；删除 `grid_map/CMakeLists.txt`，Grid Map 仅作为 Navigation 内部实现源。`FlyWow::Navigation` 是构建树内 alias，不产生独立库文件；`flywow_navigation_lua` 生成供 Skynet 加载的 `flywow_navigation_native.so`。
 
 ## 用户最新约束

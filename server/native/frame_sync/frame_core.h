@@ -1,11 +1,14 @@
-// 职责：定义帧同步整数模拟、可恢复状态与稳定 C ABI；属于宿主 Battle，不属于 FlyWow。
-// 输入/输出：已发布只读地图与单帧玩家意图 -> 逻辑状态；不读取网络、墙钟或 Unity 表现状态。
-// ownership：Engine 共享持有不可变 GridMap，并独占 NavigationContext 与 State；C handle 由调用方成对 open/close。
+// 职责：第三课跨 Unity/Skynet 的确定性帧模拟及唯一 C ABI。
+// 边界：宿主 Battle Native；不使用 Lua、Unity、Skynet、Socket 或墙钟。
+// 输入/输出：已预热 immutable BMAP + 完整席位输入 -> State/Checkpoint。
+// ownership：每个 Engine 独占 State 与 NavigationContext；地图由 FlyWow
+// Registry 共享。
 #pragma once
 
-#include "grid_map.h"
-#include "navigation_context.h"
-
+#include "grid_pathfinder.h"
+#include "map_registry.h"
+#include "navigation_profile.h"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -14,87 +17,116 @@
 
 namespace lesson_frame
 {
-constexpr std::size_t   kMaxUnits  = 64;   // 每场允许持有的单位总数；超限时拒绝初始化或恢复。
-constexpr std::size_t   kMaxBolts  = 128;  // 每场在途逻辑弹丸上限；满槽时拒绝逻辑弹丸施法。
-constexpr std::uint32_t kMaxFrames = 3600; // 50ms/tick 下为 180 秒；到期时以平局结束。
-constexpr std::uint32_t kTickMs    = 50;   // 固定逻辑步长；渲染帧率不改变它。
+constexpr std::uint32_t kTickMs    = 50;   // 固定模拟时间；不随真实调度时间改变。
+constexpr std::uint32_t kMaxFrames = 3600; // 180秒；限制每场Replay长度。
+constexpr std::uint32_t kMaxUnits  = 16;   // 当前课例单位/AI数量上限。
+constexpr std::uint32_t kMaxBolts  = 128;  // 当前课例弹丸上限。
+constexpr std::uint32_t kMaxRoutes = 16;   // 最多为每个单位保持一条路径。
+constexpr std::size_t   kMaxState  = 65535;
 
-/// 单帧玩家意图；方向分量取 -1、0、1，skill 使用下方固定业务编号。
-struct Input
+struct PlayerInput
 {
-    std::int32_t x     = 0; // 世界 X 方向；-1/0/1 表示负向/不动/正向，不是坐标。
-    std::int32_t z     = 0; // 世界 Z 方向；-1/0/1 表示负向/不动/正向，不是坐标。
-    std::int32_t y     = 0; // 飞行高度意图：-1 下降、0 保持、1 上升；地面单位忽略。
-    std::int32_t skill = 0; // 0 不施法；1 近战；2 表现弹丸；3 逻辑火球。
+    std::uint32_t seat_id          = 0; // 固定为1；由Worker会话授权后生成。
+    std::uint32_t unit_instance_id = 0; // 固定席位1控制1001；这是Battle实例ID。
+    std::int32_t  x       = 0; // -1/0/1，向X轴移动。
+    std::int32_t  z       = 0; // -1/0/1，向Z轴移动。
+    std::int32_t  skill   = 0; // 0空，1近战，2表现弹丸，3逻辑弹丸。
 };
 
-/// Battle 单位的权威逻辑状态；位置为带符号 64 位世界毫米。
+struct UnitProfile
+{
+    std::uint32_t unit_id                  = 0;
+    std::uint32_t movement_mode            = 0;       // 1地面，2空中；所有单位从配置读取。
+    std::uint32_t move_stride_mm_per_tick = 0;       // 基础每Tick位移；对角方向按整数比例归一化。
+    std::int32_t  max_hp                  = 0;       // 单位静态最大生命值；当前HP属于战斗状态。
+    std::uint32_t min_air_clearance_mm    = 0;       // 空中单位离当前地表的最小间隙。
+    std::uint32_t max_air_altitude_mm     = 0;       // 空中单位相对当前地表的最高高度。
+    flywow_navigation::NavigationProfile navigation; // 地面参数视图；源自本行配置。
+};
+
+using UnitProfileTable = std::vector<UnitProfile>;
+
+struct Skill
+{
+    std::int64_t  range_mm    = 0;
+    std::uint32_t cooldown    = 0;
+    std::int32_t  damage      = 0;
+    std::uint32_t target_mask = 0; // 1地面、2空中、3均可。
+    std::uint32_t effect      = 0; // 1即时、2表现弹丸、3逻辑弹丸。
+};
+
+using SkillTable = std::array<Skill, 3>;
+
+struct ProfileSnapshot
+{
+    UnitProfileTable units;
+    SkillTable       skills;
+};
+
 struct Unit
 {
-    std::uint32_t id        = 0;   // Battle 内稳定且唯一的实例 ID；单位按 ID 排序推进。
-    std::uint32_t camp      = 0;   // 阵营编号：1 为玩家方，2 为敌方。
-    std::uint32_t move_mode = 1;   // 移动规则：1 受地表约束，2 可主动升降的空中单位。
-    std::int64_t  x         = 0;   // 世界 X 坐标，单位 mm。
-    std::int64_t  y         = 0;   // 世界高度，单位 mm；地面单位由地图采样确定。
-    std::int64_t  z         = 0;   // 世界 Z 坐标，单位 mm。
-    std::int32_t  hp        = 100; // 当前生命值；0 表示死亡。
-    std::uint32_t ready[3]  = {};  // 技能 1/2/3 最早可再次施放的逻辑帧号。
+    std::uint32_t instance_id     = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
+    std::uint32_t unit_profile_id = 0; // 静态UnitProfile查询键；所有单位都必须引用有效记录。
+    std::uint32_t camp          = 0; // 1玩家阵营，2敌方阵营。
+    std::uint32_t movement_mode = 0; // 从Profile派生并随Checkpoint校验的运行时缓存。
+    std::int64_t  x             = 0; // 整数毫米世界坐标。
+    std::int64_t  y             = 0;
+    std::int64_t  z             = 0;
+    std::int32_t  hp            = 0;
+    std::uint32_t ready[3]      = {}; // 下一次允许施放的逻辑帧。
 };
 
-/// 在途逻辑弹丸；其 ID、位置和到期时间都是可恢复的 Battle 状态。
 struct Bolt
 {
-    std::uint32_t id      = 0; // 本场单调递增的弹丸实例 ID。
-    std::uint32_t caster  = 0; // 发射单位 ID；必须引用现存 Unit。
-    std::uint32_t target  = 0; // 目标单位 ID；必须引用现存 Unit。
-    std::uint32_t expires = 0; // 到期逻辑帧；到期或目标死亡后移除。
-    std::int32_t  damage  = 0; // 0 仅供表现；20 在到达目标时提交逻辑伤害。
-    std::int64_t  x       = 0; // 世界 X 坐标，单位 mm。
-    std::int64_t  y       = 0; // 世界高度，单位 mm。
-    std::int64_t  z       = 0; // 世界 Z 坐标，单位 mm。
+    std::uint32_t id      = 0;
+    std::uint32_t caster_instance_id = 0;
+    std::uint32_t target_instance_id = 0;
+    std::uint32_t expires = 0;
+    std::int32_t  damage  = 0; // 0表示纯表现弹丸。
+    std::int64_t  x       = 0;
+    std::int64_t  y       = 0;
+    std::int64_t  z       = 0;
 };
 
-/// 完整可恢复逻辑状态；不包含指针、渲染对象、墙钟、随机全局状态或 Socket。
+struct Route
+{
+    std::uint32_t           unit_instance_id = 0; // 当前路径唯一跟随者；不借用其他Unit的cursor。
+    std::uint32_t           target_instance_id = 0; // 当前追击目标；变化触发重新规划。
+    std::int64_t            planned_target_x = 0; // 上次A*看到的目标坐标；决定是否重规划。
+    std::int64_t            planned_target_y = 0;
+    std::int64_t            planned_target_z = 0;
+    std::uint32_t           repath_at        = 0;     // 允许再次A*的逻辑帧；防重复/失败刷查询。
+    std::uint32_t           blocked_frames   = 0;     // 路线动态阻挡持续Tick数。
+    std::uint32_t           next_point       = 1;     // 对应PathFollowCursor::next_point_index。
+    std::uint64_t           progress_mm      = 0;     // 当前路径线段已消费的整数毫米。
+    bool                    valid            = false; // 路线已规划且包含合法跟随点。
+    flywow_navigation::Path path; // FlyWow原始Path；帧间复用，Checkpoint只编码其值。
+};
+
 struct State
 {
-    std::uint32_t     frame     = 0; // 已完成的逻辑帧；初始 Checkpoint 为 0。
-    std::uint32_t     winner    = 0; // 0 进行中；1/2 对应胜方阵营；3 表示平局。
-    std::uint32_t     next_bolt = 1; // 下一个弹丸 ID；恢复后继续单调递增。
-    std::vector<Unit> units;         // 按稳定 ID 严格升序；数量不超过 kMaxUnits。
-    std::vector<Bolt> bolts;         // 按实例 ID 严格升序；数量不超过 kMaxBolts。
+    std::uint32_t      frame     = 0;
+    std::uint32_t      winner    = 0; // 0继续，1/2胜方，3平局。
+    std::uint32_t      next_bolt = 1;
+    std::vector<Unit>  units;  // 始终按instance_id严格升序。
+    std::vector<Bolt>  bolts;  // 始终按id严格升序。
+    std::vector<Route> routes; // 始终按unit_instance_id严格升序。
 };
 
-/// 单场无锁、无 yield 的模拟 Engine；调用方必须串行调用其可变方法。
-class Engine
+class Engine final
 {
   public:
-    /// 创建本场模拟并共享持有不可变地图；地图无效或出生点不可用时抛出异常。
-    /// @param map 已验证的只读地图；Engine 与调用方共同持有其生命周期。
     explicit Engine(std::shared_ptr<const flywow_navigation::GridMap> map);
-
-    /// 按课程玩法初始化单位；失败时保留调用前状态并抛出异常。
-    void reset();
-
-    /// 推进一个固定逻辑帧；非法输入、结束状态或导航失败时不提交半帧状态。
-    /// @param input 当前帧玩家意图；方向分量为 -1/0/1，skill 为 0..3。
-    void step(Input input);
-
-    /// 生成显式小端的规范化状态副本，可用于 Checkpoint 与确定性比较。
-    /// @return 调用方拥有的序列化字节串。
-    std::string save() const;
-
-    /// 验证完整候选状态后一次性替换当前状态。
-    /// @param bytes 借用的规范化状态字节；函数返回后不保留其引用。
-    /// @throws 状态格式、版本或业务约束不合法时抛出异常，旧状态保持不变。
-    void restore(const std::string &bytes);
-
-    /// 只读借用当前状态；引用在 Engine 下一次成功变更或析构前有效。
+    /// 每帧包含唯一玩家席位的正式输入；AI由Core推进，失败不发布半帧。
+    void         stepFrame(std::uint32_t frame, const PlayerInput *inputs, std::size_t count);
+    /// 规范化Checkpoint V3，小端逐字段编码，不序列化指针或A* scratch。
+    std::string  save() const;
+    /// 验证后原子替换 State 与 Occupancy；失败旧状态不变。
+    void         restore(const std::string &bytes);
     const State &state() const noexcept
     {
         return state_;
     }
-
-    /// 返回当前地图身份；不执行 I/O。
     std::uint32_t mapId() const noexcept
     {
         return map_->metadata().map_id;
@@ -105,66 +137,104 @@ class Engine
     }
 
   private:
-    std::shared_ptr<const flywow_navigation::GridMap> map_;
-    flywow_navigation::NavigationContext
-          context_; // 当前 Engine 独占 A* scratch；不属于可恢复 State。
-    State state_;
+    std::shared_ptr<const flywow_navigation::GridMap>     map_;
+    // Engine创建时固定同一批Unit、Navigation、Skill配置；Tick不读文件。
+    std::shared_ptr<const ProfileSnapshot>               profiles_;
+    std::unique_ptr<flywow_navigation::NavigationContext> context_; // Battle-local scratch/占位。
+    State                                                 state_;
+    bool poisoned_ = false; // 异常补偿失败时拒绝继续推进。
 
-    void  stepUnchecked(Input input);
-    void  chaseAir(const Unit &unit, const Unit &other, Input &input) const;
-    void  chaseGround(const Unit &unit, const Unit &other, Input &input);
-    bool  sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t &y) const;
-    void  move(Unit &unit, Input input);
-    bool  sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y, std::int64_t &y) const;
-    Input ai(const Unit &unit);
-    void  cast(Unit &unit, std::int32_t skill, std::vector<std::int32_t> &damage);
-    void  projectiles(std::vector<std::int32_t> &damage);
-    std::size_t target(const Unit &unit, std::uint32_t target_modes = 3) const;
+    void        reset();
+    void        runFrame(const PlayerInput *inputs);
+    bool        sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t from_y,
+                             std::int64_t &new_y) const;
+    bool        sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t target_y,
+                          std::int64_t &new_y) const;
+    bool        moveGround(Unit &unit, std::int32_t x, std::int32_t z);
+    void        moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y);
+    void        chaseGround(Unit &unit, const Unit &target);
+    void        chaseAir(Unit &unit, const Unit &target);
+    void        cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &damage);
+    void        moveBolts(std::vector<std::int32_t> &damage);
     void        finish(const std::vector<std::int32_t> &damage);
+    std::size_t targetOf(const Unit &unit, std::uint32_t move_mask) const;
+    Route      &routeFor(std::uint32_t unit_instance_id);
+    std::unique_ptr<flywow_navigation::NavigationContext> buildContext(const State &state) const;
 };
 } // namespace lesson_frame
 
 #if defined(_WIN32)
-#define SKYNET_BATTLE_NAV_FRAME_API __declspec(dllexport)
+#define LESSON_FRAME_API __declspec(dllexport)
 #else
-#define SKYNET_BATTLE_NAV_FRAME_API __attribute__((visibility("default")))
+#define LESSON_FRAME_API __attribute__((visibility("default")))
 #endif
+
+// C ABI不传std::vector或std::string，不让C++异常穿过P/Invoke/Lua。
+struct FsPlayerInput
+{
+    std::uint32_t seat_id;
+    std::uint32_t unit_instance_id;
+    std::int32_t  x;
+    std::int32_t  z;
+    std::int32_t  skill;
+};
+
+// C ABI配置记录是从现有Lua UnitProfile/NavigationProfile复制出的值，
+// 不包含Lua对象、指针或平台相关容器；宿主负责读取Lua和初步类型检查。
+struct FsUnitProfile
+{
+    std::uint32_t unit_id;
+    std::uint32_t movement_mode; // 1地面，2空中。
+    std::uint32_t move_stride_mm_per_tick;
+    std::int32_t  max_hp;
+    std::uint32_t min_air_clearance_mm;
+    std::uint32_t max_air_altitude_mm;
+};
+struct FsNavigationProfile
+{
+    std::uint32_t unit_id;
+    std::int32_t  radius_mm;
+    std::int32_t  max_step_mm;
+    std::uint32_t max_slope_permille;
+    std::uint8_t  area_allowed[256];       // 已应用Lua默认值。
+    std::uint16_t area_cost_permille[256]; // 已应用Lua默认值。
+};
+struct FsSkillProfile
+{
+    std::uint32_t skill_id;
+    std::uint64_t range_mm;
+    std::uint32_t cooldown_ticks;
+    std::int32_t  damage;
+    std::uint32_t target_mask;
+    std::uint32_t effect;
+};
+static_assert(sizeof(FsUnitProfile) == 24, "Unit profile ABI changed");
+static_assert(sizeof(FsNavigationProfile) == 784, "Navigation profile ABI changed");
+static_assert(sizeof(FsSkillProfile) == 32, "Skill profile ABI changed");
+static_assert(sizeof(FsPlayerInput) == 20, "Frame ABI struct size must remain 20 bytes");
 
 extern "C"
 {
-    /// 加载已发布地图并创建独占 Engine；不保存调用方传入的路径指针。
-    /// @param path UTF-8 BMAP 文件路径；必须以 NUL 结尾。
-    /// @return 成功时返回调用方独占的 handle；失败时返回 nullptr。
-    SKYNET_BATTLE_NAV_FRAME_API void *fs_open(const char *path);
-
-    /// 释放由 fs_open 返回的 Engine handle；空指针可安全传入。
-    /// @param handle fs_open 返回且尚未关闭的 handle；重复关闭非空 handle 属于调用方错误。
-    SKYNET_BATTLE_NAV_FRAME_API void fs_close(void *handle);
-
-    /// 校验意图并推进一帧；不成功时返回 0 且不提交半帧结果。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param x 世界 X 方向分量，取 -1、0、1。
-    /// @param z 世界 Z 方向分量，取 -1、0、1。
-    /// @param skill 0 不施法、1 近战、2 表现弹丸、3 逻辑火球。
-    /// @return 成功返回 1；参数、状态或领域操作失败返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_step(void *handle, int x, int z, int skill);
-
-    /// 将当前状态写入调用方缓冲；不会保存缓冲指针。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param out 调用方提供的输出缓冲区。
-    /// @param capacity out 的字节容量；小于完整状态长度时失败。
-    /// @return 成功返回写入字节数；失败返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_save(void *handle, unsigned char *out, int capacity);
-
-    /// 验证候选 Checkpoint 后恢复 Engine；失败时保留旧状态。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param bytes 借用的规范化状态字节，仅在本次调用期间读取。
-    /// @param count bytes 的有效字节数。
-    /// @return 成功返回 1；无效 handle、长度或状态返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_restore(void *handle, const unsigned char *bytes, int count);
-
-    /// 返回地图身份；空 handle 返回 0。该值不是运行时版本握手。
-    /// @param handle 当前 Battle 的 Engine handle。
-    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_version(void *handle);
-    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_id(void *handle);
-} // extern "C"
+    /// 加载验证过的BMAP并发布到进程MapRegistry；启动/部署阶段调用，有同步磁盘I/O。
+    LESSON_FRAME_API int   fs_preload_map(const char *path);
+    /// 接收宿主从Lua读取的Unit、Navigation、Skill记录，校验后一次替换进程配置表。
+    /// 失败返回0且旧表不变；已创建Engine继续持有旧表，新Engine固定完整新表。
+    LESSON_FRAME_API int   fs_load_profiles(const FsUnitProfile *units, std::uint32_t unit_count,
+                                                const FsNavigationProfile *navigation,
+                                                std::uint32_t navigation_count,
+                                                const FsSkillProfile *skills,
+                                                std::uint32_t skill_count);
+    /// 按已加载map_id创建独占Engine，并固定完整配置表；无磁盘I/O。
+    LESSON_FRAME_API void *fs_open(std::uint32_t map_id);
+    /// 仅同一owner调用；nullptr安全，重复释放非空handle非法。
+    LESSON_FRAME_API void  fs_close(void *handle);
+    /// 校验连续帧、seat/unit映射和输入值；成功1，失败0且旧状态不变。
+    LESSON_FRAME_API int   fs_step_frame(void *handle, std::uint32_t frame,
+                                         const FsPlayerInput *players, std::uint32_t count);
+    /// 缓冲由调用方拥有，成功返回字节数，失败0，最大65535字节。
+    LESSON_FRAME_API int   fs_save(void *handle, unsigned char *output, int capacity);
+    /// 恢复候选Checkpoint；失败0，不产生半步提交。
+    LESSON_FRAME_API int   fs_restore(void *handle, const unsigned char *bytes, int count);
+    LESSON_FRAME_API std::uint32_t fs_map_id(void *handle);
+    LESSON_FRAME_API std::uint32_t fs_map_version(void *handle);
+}
