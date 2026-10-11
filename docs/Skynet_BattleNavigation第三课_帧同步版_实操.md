@@ -139,7 +139,7 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 | K（表现弹丸） | 伤害在施放时结算，飞行仅是表现 | 不得落地时再次伤害 |
 | L（逻辑弹丸） | 到达目标或超时决定结果 | Core 维护弹丸完整状态 |
 
-技能定义作为一份 Battle 创建时冻结的不可变数据，例如技能 ID、范围、冷却、伤害、目标类型、效果类型。不要把 `damage=20`、`cooldown=24` 随意散落到 Native 分支、Lua 和 C# 三处；两端共享规则定义的同一内容。首版可以将配置离线生成进 C++ 头或只读二进制配置表，不为此引入 Unity Lua VM。
+Unit、Navigation 和技能业务配置以项目现有 Lua 配置为唯一来源；技能数值放在本课已有的 config.frame_sync.lua。Skynet 直接加载 Lua 配置；Unity 在本课接入 Lua Runtime 后加载同一套配置模块。配置脚本只返回纯数据，不依赖服务端 Service、文件系统或运行时副作用。Native Core 不读取第二份手工配置；Skynet 和 Unity 在启动阶段读取同一批 Lua 数据并通过 C ABI 传入，Native 校验后保存一份进程内只读配置表，Battle 创建时固定引用它。这里说的是配置在进程内的保存方式，不会把这张表作为网络消息发给客户端。
 
 服务端 Skynet Lua 热更只能修改本服务端拥有的业务/调度；影响模拟结果的规则更新必须同时覆盖两端，已开始的 Battle 保持其创建时规则，不允许热更后半场突然改变技能伤害。Native 行为变化通过标准客户端/服务端构建发布；本课不实现 Native DLL 原地热替换。
 
@@ -191,7 +191,11 @@ Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`�
 | 整文件写入 | `server/native/frame_sync/frame_core.h` |
 | 整文件写入 | `server/native/frame_sync/frame_core.cpp` |
 | 整文件写入 | `server/native/frame_sync/frame_binding.cpp` |
-| 新建 | `shared/battle/unit_profiles.cfg` |
+| 整文件覆盖 | `server/config/unit_profiles.lua` |
+| 整文件覆盖 | `server/config/unit_profiles/profile1.lua` |
+| 新建 | `server/config/unit_profiles/profile2.lua` |
+| 只读并沿用 | `server/config/navigation_profiles.lua` |
+| 只读并沿用 | `server/config/navigation_profiles/profile1.lua` |
 | 整文件写入 | `server/native/frame_sync/frame_test.cpp` |
 | 整文件写入 | `server/scripts/lessons/prepare_frame_sync.py` |
 | 整文件写入 | `shared/protocol/navigation_query.proto` |
@@ -207,7 +211,8 @@ Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`�
 | 整文件写入 | `server/tests/frame_binding_test.lua` |
 | 整文件写入 | `server/tests/frame_runtime_test.lua` |
 | 整文件写入 | `server/tests/frame_sync_integration.py` |
-| 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs` |
+| 新建 | unity/BattleNavigation/Assets/BattleNavigation/client/FrameLuaProfileLoader.cs |
+| 整文件写入 | unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs |
 | 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs` |
 | 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameBattleController.cs` |
 
@@ -217,27 +222,68 @@ Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`�
 
 每个文件的职责、Owner、输入/输出及失败语义先在段落里说明；紧接着是其最终全文。可以逐文件复制，不需要翻到另一章节合并同一文件的第二段代码；Gateway 源码变更按专节由学习者亲自完成和审计。
 
-### 5.0 `shared/battle/unit_profiles.cfg`
+### 5.0.1 Unity 接入 xLua Lua 5.4
 
-**操作：新建文件。** 这是本课唯一的 Unit Profile 配置源。每个单位原型只对应一条记录；地面寻路参数、移动速度、飞行边界等字段都在这条记录中。Skynet 和 Unity 启动时都把同一份文件交给 `fs_preload_unit_profiles`，Core 校验后发布不可变快照；每场 Engine 固定持有创建时的快照。
+**操作：安装本课固定的 xLua 发行包，并新增配置加载器。** Unity 工程当前没有 Lua Runtime。本课固定使用 xLua v2.1.16_ndkr21b_with_win 发布中的 Lua 5.4 插件包；从 Tencent/xLua 官方 Release 下载对应 lua54_...tgz，不能下载 GitHub 自动生成的 Source code 压缩包。导入 Assets/XLua 与 Lua 5.4 Windows x64 Native Plugin 后，在 Editor 做一次最小 LuaEnv.DoString 冒烟验证。该版本固定在工程决策 D043；不得静默更换 Lua 后端或插件版本。
 
-单位实例 `1001`、`2001`、`2002` 分别引用 Profile `1`、`2`、`1`。`profile_id` 只标识静态原型配置；实例 ID 标识战斗中的对象。飞行单位也必须引用有效 Profile，不能用 `0` 表示“没有 Profile”。飞行高度是单位动态状态，Profile 只定义速度、离地间隙和相对地面的最高飞行范围。
+xLua 在这里仅负责加载现有 Lua 配置并转换为 C# POD 记录，不运行战斗规则。Unity 的 C++ 帧模拟仍由 frame_core.dll 执行；Lua 只作为配置源，不进入预测/回滚热路径。
 
-```text
-FWUP1 2
-1 1 150 100 200 600 1000 0 0 4
-0 1 1000
-1 1 3000
-2 1 1000
-3 1 1500
-2 2 150 100 0 0 0 200 10000 0
+配置目录 server/config/ 按原层级复制到 Assets/StreamingAssets/config/。自定义 Loader 把 require "config.unit_profiles" 映射为 StreamingAssets/config/unit_profiles.lua，嵌套 require "config.unit_profiles.profile1" 同样按模块路径加载。文件缺失、Lua 报错或字段类型不符，Unity 启动失败，不回退到 C# 默认表。
+
+官方依据：[xLua Lua 5.4 Windows Release](https://github.com/Tencent/xLua/releases/tag/v2.1.16_ndkr21b_with_win)、[xLua 自定义 Loader 文档](https://github.com/Tencent/xLua/blob/master/Assets/XLua/Doc/XLua%E6%95%99%E7%A8%8B.md)。
+
+### 5.0.2 复用现有 Lua UnitProfile 与 NavigationProfile
+
+**操作：只读现有配置，并在本课步骤中扩展已有记录。不要新建独立 CFG；本课扩展现有 UnitProfile Lua 记录。**
+
+本课复用仓库已有的配置来源：
+
+- `server/config/unit_profiles.lua` 聚合通用 `UnitProfile`，具体记录位于 `server/config/unit_profiles/`。
+- `server/config/navigation_profiles.lua` 聚合 FlyWow Navigation 使用的 `NavigationProfile`，具体记录位于 `server/config/navigation_profiles/`。
+- `server/config/battle.lua` 已组装并向 Battle 启动入口提供这两份配置；Skynet 启动时加载并保存 UnitProfile 只读副本，并调用 `battle_nav.load_navigation_profiles`。
+
+本课需要的移动模式、移动速度、最大 HP 和飞行边界等通用单位属性，扩展现有 UnitProfile；地面导航半径、台阶、坡度和 Area 通行参数继续留在现有 NavigationProfile。所有地面与飞行单位都使用同一套 UnitProfile 记录格式，通过 `movement.mode` 区分移动方式；只有需要地面导航的 Unit 才需要 NavigationProfile。实例 ID 区分战斗对象，`unit_id` 查询静态单位配置，不再新增 `unit_id`。
+
+Unity 在本课接入 Lua Runtime 后，加载同一套 Lua 配置模块。发布 Unity 构建时包含这些 Lua 源文件；它们仍只有一个权威来源，不手工维护第二份 CFG、JSON 或 C# Profile 表。两端在创建 Native Battle Engine 前读取并检查配置，再把有效记录交给 Native。Native 在启动阶段校验所有记录，并把这一批 Unit、Navigation、Skill 配置作为一份只读表保存在进程内；创建 Battle 时，Engine 固定持有该表。这里的“保存只读表”仅指进程内配置副本，不是向客户端发送网络快照。Native Core 不解析 Lua 文件，也不在 Tick 中读取配置。
+
+下面三份配置文件是本课的最终改动。UnitProfile 统一包含地面和飞行单位的通用属性；NavigationProfile 继续复用已有 FlyWow 配置，只为地面单位提供导航参数；Skill 配置放在本课帧同步 Lua 配置中，由两端读取同一份记录。
+
+server/config/unit_profiles.lua：
+
+```lua
+return
+{
+    (require "config.unit_profiles.profile1"),
+    (require "config.unit_profiles.profile2"),
+}
 ```
 
-每条 Profile 主记录字段依次为：`profile_id`、移动模式（`1` 地面、`2` 空中）、每 Tick 基础移动距离（毫米）、最大 HP、导航半径（毫米）、最大台阶（毫米）、最大坡度（千分比）、飞行离地间隙（毫米）、相对地表的最大飞行高度（毫米）、Area 条目数。随后按 Area 条目数读取 `area_id / allowed(0|1) / cost_permille`。地面 Profile 的飞行字段为 0；空中 Profile 的地面导航字段和 Area 条目数为 0。空中 Profile 仍在同一张表中，只是不调用地面寻路。
+server/config/unit_profiles/profile1.lua：
 
-文件上限 64 KiB、最多 128 条 Profile，每条最多 256 个 Area。重复或为 0 的 Profile ID、重复 Area、模式与字段不匹配、数值越界、截断或尾部多余内容均拒绝加载。加载器把同一行中的地面导航字段映射到 FlyWow 公开 `NavigationProfile` 参数，传给 `GridPathfinder`；这只是调用 API 所需的数据形状，不是第二份配置或第二张 Profile 表。文件校验和 Unit Profile 快照由课程 Core 持有，FlyWow 继续拥有导航算法与导航 API。
+```lua
+return
+{
+    unit_id = 1,
+    movement = { mode = "ground", speed_mm_per_tick = 150 },
+    max_hp = 100,
+    combat = { attack_range_mm = 900 },
+}
+```
 
-后续增加单位静态属性时，扩展这条 Unit Profile 记录和同一加载校验；不再另建飞行 Profile、战斗 Profile 等并行表。`profile.navigation` 是把本行地面字段保持成 FlyWow API 所需的参数形状，只有一个 `profile_id` 和一条配置记录。场景初始 roster 只写实例引用哪个 `profile_id`；速度、最大 HP、移动模式、地面通行与飞行边界都不能在模拟代码里另写一份。
+server/config/unit_profiles/profile2.lua：
+
+```lua
+return
+{
+    unit_id = 2,
+    movement = { mode = "air", speed_mm_per_tick = 1000 },
+    max_hp = 100,
+    flight = { min_air_clearance_mm = 200, max_air_altitude_mm = 10000 },
+    combat = { attack_range_mm = 9000 },
+}
+```
+
+NavigationProfile 仍从 config.navigation_profiles 读取，并用相同的 unit_id 匹配。帧同步 Skill 参数由 config.frame_sync.skills 提供。Skynet Binding 和 Unity xLua 都把三张 Lua 表转换为相同的 C ABI 记录；Native 再将整批记录校验后保存在一份只读配置表中。
 
 ### 5.1 CMake 构建边界与宿主接入
 
@@ -412,9 +458,7 @@ endif()
 
 enable_testing()
 add_test(NAME frame_native
-         COMMAND frame_test
-         "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap"
-         "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/battle/unit_profiles.cfg")
+         COMMAND frame_test "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap"
 
 option(LESSON_FRAME_LUA "构建Skynet Lua 5.4.7 Binding；Windows Unity构建时设OFF" ON)
 if(LESSON_FRAME_LUA)
@@ -445,6 +489,7 @@ endif()
 #include "grid_pathfinder.h"
 #include "map_registry.h"
 #include "navigation_profile.h"
+#include <array>
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -471,8 +516,8 @@ struct PlayerInput
 
 struct UnitProfile
 {
-    std::uint32_t profile_id              = 0;
-    std::uint32_t movement_mode           = 0;       // 1地面，2空中；所有单位从配置读取。
+    std::uint32_t unit_id                  = 0;
+    std::uint32_t movement_mode            = 0;       // 1地面，2空中；所有单位从配置读取。
     std::uint32_t move_stride_mm_per_tick = 0;       // 基础每Tick位移；对角方向按整数比例归一化。
     std::int32_t  max_hp                  = 0;       // 单位静态最大生命值；当前HP属于战斗状态。
     std::uint32_t min_air_clearance_mm    = 0;       // 空中单位离当前地表的最小间隙。
@@ -482,10 +527,27 @@ struct UnitProfile
 
 using UnitProfileTable = std::vector<UnitProfile>;
 
+struct Skill
+{
+    std::int64_t  range_mm    = 0;
+    std::uint32_t cooldown    = 0;
+    std::int32_t  damage      = 0;
+    std::uint32_t target_mask = 0; // 1地面、2空中、3均可。
+    std::uint32_t effect      = 0; // 1即时、2表现弹丸、3逻辑弹丸。
+};
+
+using SkillTable = std::array<Skill, 3>;
+
+struct ProfileSnapshot
+{
+    UnitProfileTable units;
+    SkillTable       skills;
+};
+
 struct Unit
 {
     std::uint32_t id            = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
-    std::uint32_t profile_id    = 0; // 静态原型ID；地面和空中单位都必须引用有效记录。
+    std::uint32_t unit_id       = 0; // 静态原型ID；地面和空中单位都必须引用有效记录。
     std::uint32_t camp          = 0; // 1玩家阵营，2敌方阵营。
     std::uint32_t movement_mode = 0; // 从Profile派生并随Checkpoint校验的运行时缓存。
     std::int64_t  x             = 0; // 整数毫米世界坐标。
@@ -557,8 +619,8 @@ class Engine final
 
   private:
     std::shared_ptr<const flywow_navigation::GridMap>     map_;
-    // Engine创建时固定本Core发布的只读快照；Tick不读文件，也不临时构造Profile。
-    std::shared_ptr<const UnitProfileTable>               profiles_;
+    // Engine创建时固定同一批Unit、Navigation、Skill配置；Tick不读文件。
+    std::shared_ptr<const ProfileSnapshot>               profiles_;
     std::unique_ptr<flywow_navigation::NavigationContext> context_; // Battle-local scratch/占位。
     State                                                 state_;
     bool poisoned_ = false; // 异常补偿失败时拒绝继续推进。
@@ -597,16 +659,53 @@ struct FsPlayerInput
     std::int32_t  z;
     std::int32_t  skill;
 };
+
+// C ABI配置记录是从现有Lua UnitProfile/NavigationProfile复制出的值，
+// 不包含Lua对象、指针或平台相关容器；宿主负责读取Lua和初步类型检查。
+struct FsUnitProfile
+{
+    std::uint32_t unit_id;
+    std::uint32_t movement_mode; // 1地面，2空中。
+    std::uint32_t move_stride_mm_per_tick;
+    std::int32_t  max_hp;
+    std::uint32_t min_air_clearance_mm;
+    std::uint32_t max_air_altitude_mm;
+};
+struct FsNavigationProfile
+{
+    std::uint32_t unit_id;
+    std::int32_t  radius_mm;
+    std::int32_t  max_step_mm;
+    std::uint32_t max_slope_permille;
+    std::uint8_t  area_allowed[256];       // 已应用Lua默认值。
+    std::uint16_t area_cost_permille[256]; // 已应用Lua默认值。
+};
+struct FsSkillProfile
+{
+    std::uint32_t skill_id;
+    std::uint64_t range_mm;
+    std::uint32_t cooldown_ticks;
+    std::int32_t  damage;
+    std::uint32_t target_mask;
+    std::uint32_t effect;
+};
+static_assert(sizeof(FsUnitProfile) == 24, "Unit profile ABI changed");
+static_assert(sizeof(FsNavigationProfile) == 784, "Navigation profile ABI changed");
+static_assert(sizeof(FsSkillProfile) == 32, "Skill profile ABI changed");
 static_assert(sizeof(FsPlayerInput) == 20, "Frame ABI struct size must remain 20 bytes");
 
 extern "C"
 {
     /// 加载验证过的BMAP并发布到进程MapRegistry；启动/部署阶段调用，有同步磁盘I/O。
     LESSON_FRAME_API int   fs_preload_map(const char *path);
-    /// 启动时读取完整Unit Profile配置文件，校验后原子发布单一只读表。
-    /// 失败返回0；旧表不变；已创建Engine继续持有自己的配置快照。
-    LESSON_FRAME_API int   fs_preload_unit_profiles(const char *path);
-    /// 按已加载map_id创建独占Engine，并固定Unit Profile快照；无磁盘I/O。
+    /// 接收宿主从Lua读取的Unit、Navigation、Skill记录，校验后一次替换进程配置表。
+    /// 失败返回0且旧表不变；已创建Engine继续持有旧表，新Engine固定完整新表。
+    LESSON_FRAME_API int   fs_load_profiles(const FsUnitProfile *units, std::uint32_t unit_count,
+                                                const FsNavigationProfile *navigation,
+                                                std::uint32_t navigation_count,
+                                                const FsSkillProfile *skills,
+                                                std::uint32_t skill_count);
+    /// 按已加载map_id创建独占Engine，并固定完整配置表；无磁盘I/O。
     LESSON_FRAME_API void *fs_open(std::uint32_t map_id);
     /// 仅同一owner调用；nullptr安全，重复释放非空handle非法。
     LESSON_FRAME_API void  fs_close(void *handle);
@@ -626,15 +725,15 @@ extern "C"
 
 **操作：新建或整文件覆盖。** 本文件把上一帧状态和本帧正式输入推进为新状态，同时维护 FlyWow 路径和动态占位。
 
-按执行顺序精读：`fs_preload_unit_profiles → fs_open → Engine::reset → stepFrame → runFrame → save/restore`。第一遍先掌握四件事：实例通过 `profile_id` 查询同一张静态表、移动模式和速度等参数来自该表、Path/Cursor 跨帧复用、恢复时状态与导航事实一起提交。
+按执行顺序精读：`fs_load_profiles → fs_open → Engine::reset → stepFrame → runFrame → save/restore`。第一遍先掌握四件事：实例通过 `unit_id` 查询同一张静态表、移动模式和速度等参数来自该表、Path/Cursor 跨帧复用、恢复时状态与导航事实一起提交。
 
 玩家实例 `1001` 和地面敌人实例 `2002` 都引用 Profile `1`；飞行敌人 `2001` 引用 Profile `2`。三者都必须通过同一个 `profileFor` 查询到完整记录。地面单位把记录中的 Navigation 参数交给 FlyWow；飞行单位从同一记录读取飞行边界。任何单位都没有“无 Profile”哨兵值。
 
-完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。配置文件缺失、非法或战斗 roster 引用了不存在的 Profile 时，启动或创建 Engine 应失败。
+完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。Lua 配置缺失、非法或战斗 roster 引用了不存在的 UnitProfile 时，进程启动或创建 Engine 应失败。
 
 `chaseGround` 的重规划间隔只限制查询频率。已有路径有效、追击目标未换且位置未变时，每个 Tick 调用 `AdvancePath` 消费最多 150 mm，保持路径和 Cursor；目标移动或路径失效才在允许的帧重新规划。上次规划的目标坐标、下一可规划帧和 Cursor 都写入 Checkpoint，恢复后保持相同决策。
 
-完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。配置文件缺失、非法或缺少地面单位引用的 Profile 时，启动或创建 Engine 应失败。
+完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。Lua 配置缺失、非法或地面 Unit 缺少对应 NavigationProfile 时，启动或创建 Engine 应失败。
 
 ```cpp
 // 职责：实现第三课帧同步确定性模拟、FlyWow导航复用、Checkpoint V3与C ABI。
@@ -649,14 +748,13 @@ extern "C"
 #include <array>
 #include <atomic>
 #include <cstring>
-#include <fstream>
 #include <limits>
 #include <stdexcept>
 #include <utility>
 
 namespace
 {
-std::shared_ptr<const lesson_frame::UnitProfileTable> g_unit_profiles;
+std::shared_ptr<const lesson_frame::ProfileSnapshot> g_profiles;
 }
 
 namespace lesson_frame
@@ -677,17 +775,6 @@ std::int64_t strideForAxes(std::uint32_t base_stride, std::int32_t axis_count)
     return (static_cast<std::uint64_t>(base_stride) * scale_permille + 500) / 1000;
 }
 
-struct Skill
-{
-    std::int64_t  range_mm;
-    std::uint32_t cooldown;
-    std::int32_t  damage;
-    std::uint32_t target_mask; // 1地面、2空中、3均可。
-    std::uint32_t effect;      // 1即时、2表现弹丸、3逻辑弹丸。
-};
-constexpr std::array<Skill, 3> kSkills{
-    {{900, 12, 14, 1, 1}, {9000, 24, 12, 3, 2}, {9000, 24, 20, 3, 3}}};
-
 std::int32_t sign(std::int64_t n)
 {
     return (n > 0) - (n < 0);
@@ -705,13 +792,13 @@ flywow_navigation::WorldPosition position(const Unit &unit)
 {
     return {unit.x, unit.y, unit.z};
 }
-const UnitProfile &profileFor(const UnitProfileTable &profiles, std::uint32_t profile_id)
+const UnitProfile &profileFor(const UnitProfileTable &profiles, std::uint32_t unit_id)
 {
-    // 配置发布前按 profile_id 排序；所有单位只查这一张不可变表。
-    const auto found = std::lower_bound(profiles.begin(), profiles.end(), profile_id,
+    // 配置发布前按 unit_id 排序；所有单位只查这一张不可变表。
+    const auto found = std::lower_bound(profiles.begin(), profiles.end(), unit_id,
                                         [](const UnitProfile &profile, std::uint32_t id)
-                                        { return profile.profile_id < id; });
-    if (found == profiles.end() || found->profile_id != profile_id)
+                                        { return profile.unit_id < id; });
+    if (found == profiles.end() || found->unit_id != unit_id)
     {
         throw std::runtime_error("UNIT_PROFILE_NOT_FOUND");
     }
@@ -773,14 +860,12 @@ void validatePoint(const flywow_navigation::WorldPosition &point)
 
 Engine::Engine(std::shared_ptr<const flywow_navigation::GridMap> map)
     : map_(std::move(map)),
-      profiles_(std::atomic_load_explicit(&g_unit_profiles, std::memory_order_acquire))
+      profiles_(std::atomic_load_explicit(&g_profiles, std::memory_order_acquire))
 {
     if (!map_ || map_->metadata().cell_size_mm < 100)
         throw std::runtime_error("MAP_INVALID");
-    if (!profiles_ || profiles_->empty())
-    {
-        throw std::runtime_error("UNIT_PROFILES_NOT_LOADED");
-    }
+    if (!profiles_ || profiles_->units.empty())
+        throw std::runtime_error("PROFILES_NOT_LOADED");
     reset();
 }
 
@@ -790,7 +875,7 @@ bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std:
     const auto query = map_->QueryWorld({x, from_y, z});
     if (!query.ok() || !query.value.IsWalkable())
         return false;
-    const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+    const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
     const auto  required =
         flywow_navigation::RequiredClearanceCells(profile, map_->metadata().cell_size_mm);
     if (query.value.clearance_cells < required)
@@ -802,7 +887,7 @@ bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std:
 bool Engine::sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t target_y,
                        std::int64_t &new_y) const
 {
-    const auto &profile = profileFor(*profiles_, unit.profile_id);
+    const auto &profile = profileFor(profiles_->units, unit.unit_id);
     const auto  query   = map_->QueryWorld({x, 0, z});
     if (!query.ok() ||
         target_y <
@@ -822,7 +907,7 @@ Engine::buildContext(const State &candidate) const
     {
         if (unit.movement_mode != 1 || unit.hp <= 0)
             continue;
-        const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+        const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
         const auto  grid    = map_->WorldToGrid(position(unit));
         if (!grid.ok())
             throw std::runtime_error("STATE_GRID");
@@ -840,7 +925,7 @@ void Engine::reset()
     State candidate;
     Unit  player;
     player.id         = 1001;
-    player.profile_id = 1;
+    player.unit_id = 1;
     player.camp       = 1;
     player.x          = -11000;
     player.z          = 4000;
@@ -848,7 +933,7 @@ void Engine::reset()
 
     Unit flying_enemy;
     flying_enemy.id         = 2001;
-    flying_enemy.profile_id = 2;
+    flying_enemy.unit_id = 2;
     flying_enemy.camp       = 2;
     flying_enemy.x          = 11000;
     flying_enemy.y          = 2000;
@@ -857,7 +942,7 @@ void Engine::reset()
 
     Unit ground_enemy;
     ground_enemy.id         = 2002;
-    ground_enemy.profile_id = 1;
+    ground_enemy.unit_id = 1;
     ground_enemy.camp       = 2;
     ground_enemy.x          = 11000;
     ground_enemy.z          = -4000;
@@ -865,7 +950,7 @@ void Engine::reset()
 
     for (auto &unit : candidate.units)
     {
-        const auto &profile   = profileFor(*profiles_, unit.profile_id);
+        const auto &profile   = profileFor(profiles_->units, unit.unit_id);
         unit.movement_mode    = profile.movement_mode;
         unit.hp               = profile.max_hp;
         std::int64_t ground_y = unit.y;
@@ -915,7 +1000,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
 {
     if (x == 0 && z == 0)
         return false;
-    const auto  &unit_profile = profileFor(*profiles_, unit.profile_id);
+    const auto  &unit_profile = profileFor(profiles_->units, unit.unit_id);
     const auto   stride = strideForAxes(unit_profile.move_stride_mm_per_tick, (x != 0) + (z != 0));
     const auto   target_x = unit.x + x * stride;
     const auto   target_z = unit.z + z * stride;
@@ -936,7 +1021,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
 
 void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
 {
-    const auto  &profile  = profileFor(*profiles_, unit.profile_id);
+    const auto  &profile  = profileFor(profiles_->units, unit.unit_id);
     const auto   axes     = (x != 0) + (z != 0) + (y != 0);
     const auto   stride   = strideForAxes(profile.move_stride_mm_per_tick, axes);
     std::int64_t result_y = unit.y;
@@ -967,7 +1052,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     // 冷却到期只代表允许重规划；有效路径且目标未移动时继续复用。
     if (state_.frame >= route.repath_at && (!route.valid || target_moved))
     {
-        const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+        const auto &profile = profileFor(profiles_->units, unit.unit_id).navigation;
         const flywow_navigation::NavigationAgent agent{{unit.id}, &profile};
         // 目标单位占位本身不能作为终点；找其附近允许站立的位置。
         // FindPathToRange沿用FlyWow的真实动态A*查询实现。
@@ -992,7 +1077,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     flywow_navigation::PathFollowCursor cursor;
     cursor.next_point_index                             = route.next_point;
     cursor.segment_progress_mm                          = route.progress_mm;
-    const auto                              &profile    = profileFor(*profiles_, unit.profile_id);
+    const auto                              &profile    = profileFor(profiles_->units, unit.unit_id);
     const auto                              &navigation = profile.navigation;
     const flywow_navigation::NavigationAgent agent{{unit.id}, &navigation};
     const auto result = flywow_navigation::GridPathfinder::AdvancePath(
@@ -1019,7 +1104,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
 
 void Engine::chaseAir(Unit &unit, const Unit &target)
 {
-    const auto &profile    = profileFor(*profiles_, unit.profile_id);
+    const auto &profile    = profileFor(profiles_->units, unit.unit_id);
     const auto  horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
     const auto  desired_y  = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
     const std::int32_t x = sign(target.x - unit.x), z = sign(target.z - unit.z);
@@ -1034,7 +1119,7 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
 {
     if (skill_id == 0)
         return;
-    const Skill &skill = kSkills[static_cast<std::size_t>(skill_id - 1)];
+    const Skill &skill = profiles_->skills[static_cast<std::size_t>(skill_id - 1)];
     const auto   index = targetOf(unit, skill.target_mask);
     if (index == state_.units.size() || state_.frame < unit.ready[skill_id - 1] ||
         distance2(unit, state_.units[index]) > skill.range_mm * skill.range_mm)
@@ -1209,7 +1294,7 @@ std::string Engine::save() const
     for (const auto &unit : state_.units)
     {
         put(out, unit.id, 4);
-        put(out, unit.profile_id, 4);
+        put(out, unit.unit_id, 4);
         put(out, unit.camp, 4);
         put(out, unit.movement_mode, 4);
         put(out, static_cast<std::uint64_t>(unit.x), 8);
@@ -1278,7 +1363,7 @@ void Engine::restore(const std::string &bytes)
     {
         Unit unit;
         unit.id            = static_cast<std::uint32_t>(get(bytes, offset, 4));
-        unit.profile_id    = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.unit_id    = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.camp          = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.movement_mode = static_cast<std::uint32_t>(get(bytes, offset, 4));
         unit.x             = signed64(get(bytes, offset, 8));
@@ -1302,12 +1387,12 @@ void Engine::restore(const std::string &bytes)
     if (candidate.units[0].id != 1001 || candidate.units[1].id != 2001 ||
         candidate.units[2].id != 2002)
         throw std::runtime_error("STATE_UNIT_IDS");
-    if (candidate.units[0].profile_id != 1 || candidate.units[1].profile_id != 2 ||
-        candidate.units[2].profile_id != 1)
+    if (candidate.units[0].unit_id != 1 || candidate.units[1].unit_id != 2 ||
+        candidate.units[2].unit_id != 1)
         throw std::runtime_error("STATE_PROFILE_IDS");
     for (const auto &unit : candidate.units)
     {
-        const auto &profile = profileFor(*profiles_, unit.profile_id);
+        const auto &profile = profileFor(profiles_->units, unit.unit_id);
         if (unit.movement_mode != profile.movement_mode || unit.hp > profile.max_hp)
             throw std::runtime_error("STATE_PROFILE_MISMATCH");
     }
@@ -1409,87 +1494,92 @@ extern "C" LESSON_FRAME_API int fs_preload_map(const char *path)
     }
 }
 
-extern "C" LESSON_FRAME_API int fs_preload_unit_profiles(const char *path)
+extern "C" LESSON_FRAME_API int fs_load_profiles(
+    const FsUnitProfile *units, std::uint32_t unit_count,
+    const FsNavigationProfile *navigation, std::uint32_t navigation_count,
+    const FsSkillProfile *skills, std::uint32_t skill_count)
 {
+    using lesson_frame::ProfileSnapshot;
     using lesson_frame::UnitProfile;
-    using lesson_frame::UnitProfileTable;
-
     try
     {
-        if (!path || !*path)
-            return 0;
-        std::ifstream input(path, std::ios::binary | std::ios::ate);
-        if (!input || input.tellg() <= 0 || input.tellg() > 65536)
-            return 0;
-        input.seekg(0);
-        std::string   signature;
-        std::uint32_t count = 0;
-        if (!(input >> signature >> count) || signature != "FWUP1" || count == 0 || count > 128)
+        if (!units || unit_count == 0 || unit_count > 128 ||
+            (navigation_count != 0 && !navigation) || navigation_count > unit_count ||
+            !skills || skill_count != 3)
             return 0;
 
-        auto profiles = std::make_shared<UnitProfileTable>();
-        profiles->reserve(count);
-        for (std::uint32_t index = 0; index < count; ++index)
+        auto snapshot = std::make_shared<ProfileSnapshot>();
+        snapshot->units.reserve(unit_count);
+        for (std::uint32_t i = 0; i < unit_count; ++i)
         {
-            UnitProfile   profile{};
-            std::uint64_t id = 0, mode = 0, stride = 0, max_hp = 0, radius = 0, step = 0, slope = 0;
-            std::uint64_t clearance = 0, altitude = 0, areas = 0;
-            if (!(input >> id >> mode >> stride >> max_hp >> radius >> step >> slope >> clearance >>
-                  altitude >> areas) ||
-                id == 0 || id > UINT32_MAX || (mode != 1 && mode != 2) || stride == 0 ||
-                max_hp == 0 || stride > INT32_MAX || max_hp > INT32_MAX || radius > INT32_MAX ||
-                step > INT32_MAX || slope > UINT32_MAX || clearance > INT32_MAX ||
-                altitude > INT32_MAX || areas > 256)
+            const auto &source = units[i];
+            if (source.unit_id == 0 ||
+                (source.movement_mode != 1 && source.movement_mode != 2) ||
+                source.move_stride_mm_per_tick == 0 ||
+                source.move_stride_mm_per_tick > INT32_MAX || source.max_hp <= 0 ||
+                (i > 0 && units[i - 1].unit_id >= source.unit_id))
                 return 0;
 
-            profile.profile_id              = static_cast<std::uint32_t>(id);
-            profile.movement_mode           = static_cast<std::uint32_t>(mode);
-            profile.move_stride_mm_per_tick = static_cast<std::uint32_t>(stride);
-            profile.max_hp                  = static_cast<std::int32_t>(max_hp);
-            profile.min_air_clearance_mm    = static_cast<std::uint32_t>(clearance);
-            profile.max_air_altitude_mm     = static_cast<std::uint32_t>(altitude);
-
-            if (mode == 1)
-            {
-                if (radius == 0 || step == 0 || clearance != 0 || altitude != 0 || areas == 0)
-                    return 0;
-                profile.navigation.unit_id            = static_cast<std::uint32_t>(id);
-                profile.navigation.radius_mm          = static_cast<std::int32_t>(radius);
-                profile.navigation.max_step_mm        = static_cast<std::int32_t>(step);
-                profile.navigation.max_slope_permille = static_cast<std::uint32_t>(slope);
-            }
-            else if (radius != 0 || step != 0 || slope != 0 || clearance == 0 ||
-                     altitude < clearance || areas != 0)
-            {
+            UnitProfile profile{};
+            profile.unit_id = source.unit_id;
+            profile.movement_mode = source.movement_mode;
+            profile.move_stride_mm_per_tick = source.move_stride_mm_per_tick;
+            profile.max_hp = source.max_hp;
+            profile.min_air_clearance_mm = source.min_air_clearance_mm;
+            profile.max_air_altitude_mm = source.max_air_altitude_mm;
+            if (source.movement_mode == 2 &&
+                (source.min_air_clearance_mm == 0 ||
+                 source.max_air_altitude_mm < source.min_air_clearance_mm))
                 return 0;
-            }
-
-            std::array<bool, 256> seen{};
-            for (std::uint64_t area_index = 0; area_index < areas; ++area_index)
-            {
-                std::uint64_t area = 0, allowed = 0, cost = 0;
-                if (!(input >> area >> allowed >> cost) || area > 255 || allowed > 1 ||
-                    cost > UINT16_MAX || (allowed && cost < 1000) || seen[area])
-                    return 0;
-                seen[area]                                  = true;
-                profile.navigation.area_allowed[area]       = static_cast<std::uint8_t>(allowed);
-                profile.navigation.area_cost_permille[area] = static_cast<std::uint16_t>(cost);
-            }
-            profiles->push_back(std::move(profile));
+            if (source.movement_mode == 1 &&
+                (source.min_air_clearance_mm != 0 || source.max_air_altitude_mm != 0))
+                return 0;
+            snapshot->units.push_back(std::move(profile));
         }
 
-        input >> std::ws;
-        if (!input.eof())
-            return 0;
-        std::sort(profiles->begin(), profiles->end(),
-                  [](const UnitProfile &left, const UnitProfile &right)
-                  { return left.profile_id < right.profile_id; });
-        for (std::size_t index = 1; index < profiles->size(); ++index)
-            if ((*profiles)[index - 1].profile_id == (*profiles)[index].profile_id)
+        std::uint32_t nav_index = 0;
+        for (auto &profile : snapshot->units)
+        {
+            if (profile.movement_mode == 2)
+                continue;
+            if (nav_index >= navigation_count ||
+                navigation[nav_index].unit_id != profile.unit_id)
                 return 0;
+            const auto &source = navigation[nav_index++];
+            if (source.radius_mm <= 0 || source.max_step_mm <= 0)
+                return 0;
+            auto &target = profile.navigation;
+            target.unit_id = source.unit_id;
+            target.radius_mm = source.radius_mm;
+            target.max_step_mm = source.max_step_mm;
+            target.max_slope_permille = source.max_slope_permille;
+            for (std::size_t area = 0; area < 256; ++area)
+            {
+                if (source.area_allowed[area] > 1 ||
+                    (source.area_allowed[area] && source.area_cost_permille[area] < 1000))
+                    return 0;
+                target.area_allowed[area] = source.area_allowed[area];
+                target.area_cost_permille[area] = source.area_cost_permille[area];
+            }
+        }
+        if (nav_index != navigation_count)
+            return 0;
 
-        std::shared_ptr<const UnitProfileTable> published = std::move(profiles);
-        std::atomic_store_explicit(&g_unit_profiles, std::move(published),
+        for (std::uint32_t i = 0; i < skill_count; ++i)
+        {
+            const auto &source = skills[i];
+            if (source.skill_id != i + 1 || source.range_mm > INT64_MAX ||
+                source.cooldown_ticks == 0 || source.damage <= 0 ||
+                source.target_mask < 1 || source.target_mask > 3 ||
+                source.effect < 1 || source.effect > 3)
+                return 0;
+            snapshot->skills[i] = {
+                static_cast<std::int64_t>(source.range_mm), source.cooldown_ticks,
+                source.damage, source.target_mask, source.effect};
+        }
+
+        std::shared_ptr<const ProfileSnapshot> published = std::move(snapshot);
+        std::atomic_store_explicit(&g_profiles, std::move(published),
                                    std::memory_order_release);
         return 1;
     }
@@ -1596,9 +1686,11 @@ extern "C" LESSON_FRAME_API std::uint32_t fs_map_version(void *handle)
 #include "frame_core.h"
 #include "lua_binding.h"
 #include "lua_table.h"
+#include <algorithm>
 #include <array>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 using flywow_lua_binding::LuaBinding;
 using flywow_lua_binding::LuaTable;
@@ -1616,15 +1708,143 @@ struct Owner
     }
 };
 
+bool readUnitProfiles(const LuaTable &rows, std::vector<FsUnitProfile> &output)
+{
+    std::size_t count = 0;
+    if (!rows.denseArrayLength(count) || count == 0 || count > 128)
+        return false;
+    output.clear();
+    output.reserve(count);
+    for (std::size_t index = 1; index <= count; ++index)
+    {
+        LuaTable row, movement, flight;
+        FsUnitProfile profile{};
+        std::string mode;
+        if (!rows.readTable(index, row) || !row.readValue("unit_id", profile.unit_id) ||
+            !row.readValue("max_hp", profile.max_hp) ||
+            !row.readTable("movement", movement) ||
+            !movement.readValue("mode", mode) ||
+            !movement.readValue("speed_mm_per_tick", profile.move_stride_mm_per_tick))
+            return false;
+        if (mode == "ground")
+            profile.movement_mode = 1;
+        else if (mode == "air")
+        {
+            profile.movement_mode = 2;
+            if (!row.readTable("flight", flight) ||
+                !flight.readValue("min_air_clearance_mm", profile.min_air_clearance_mm) ||
+                !flight.readValue("max_air_altitude_mm", profile.max_air_altitude_mm))
+                return false;
+        }
+        else
+            return false;
+        output.push_back(profile);
+    }
+    std::sort(output.begin(), output.end(),
+              [](const auto &a, const auto &b) { return a.unit_id < b.unit_id; });
+    for (std::size_t i = 1; i < output.size(); ++i)
+        if (output[i - 1].unit_id == output[i].unit_id)
+            return false;
+    return true;
+}
+
+bool readNavigationProfiles(const LuaTable &rows, std::vector<FsNavigationProfile> &output)
+{
+    std::size_t count = 0;
+    if (!rows.denseArrayLength(count) || count > 128)
+        return false;
+    output.clear();
+    output.reserve(count);
+    for (std::size_t index = 1; index <= count; ++index)
+    {
+        LuaTable row, costs, allowed;
+        FsNavigationProfile profile{};
+        if (!rows.readTable(index, row) || !row.readValue("unit_id", profile.unit_id) ||
+            !row.readValue("radius_mm", profile.radius_mm) ||
+            !row.readValue("max_step_mm", profile.max_step_mm) ||
+            !row.readValue("max_slope_permille", profile.max_slope_permille))
+            return false;
+        for (std::size_t area = 0; area < 256; ++area)
+        {
+            profile.area_allowed[area] = 1;
+            profile.area_cost_permille[area] = 1000;
+        }
+        if (!row.isNil("area_cost_permille"))
+        {
+            if (!row.readTable("area_cost_permille", costs))
+                return false;
+            for (std::uint32_t area = 0; area < 256; ++area)
+                if (!costs.isNil(area) &&
+                    !costs.readValue(area, profile.area_cost_permille[area]))
+                    return false;
+        }
+        if (!row.isNil("area_allowed"))
+        {
+            if (!row.readTable("area_allowed", allowed))
+                return false;
+            for (std::uint32_t area = 0; area < 256; ++area)
+                if (!allowed.isNil(area))
+                {
+                    bool is_allowed = false;
+                    if (!allowed.readTruth(area, is_allowed))
+                        return false;
+                    profile.area_allowed[area] = is_allowed ? 1 : 0;
+                }
+        }
+        output.push_back(profile);
+    }
+    std::sort(output.begin(), output.end(),
+              [](const auto &a, const auto &b) { return a.unit_id < b.unit_id; });
+    for (std::size_t i = 1; i < output.size(); ++i)
+        if (output[i - 1].unit_id == output[i].unit_id)
+            return false;
+    return true;
+}
+
+bool readSkillProfiles(const LuaTable &rows, std::vector<FsSkillProfile> &output)
+{
+    std::size_t count = 0;
+    if (!rows.denseArrayLength(count) || count != 3)
+        return false;
+    output.clear();
+    output.reserve(count);
+    for (std::size_t index = 1; index <= count; ++index)
+    {
+        LuaTable row;
+        FsSkillProfile profile{};
+        if (!rows.readTable(index, row) ||
+            !row.readValue("skill_id", profile.skill_id) ||
+            !row.readValue("range_mm", profile.range_mm) ||
+            !row.readValue("cooldown_ticks", profile.cooldown_ticks) ||
+            !row.readValue("damage", profile.damage) ||
+            !row.readValue("target_mask", profile.target_mask) ||
+            !row.readValue("effect", profile.effect))
+            return false;
+        output.push_back(profile);
+    }
+    std::sort(output.begin(), output.end(),
+              [](const auto &a, const auto &b) { return a.skill_id < b.skill_id; });
+    return true;
+}
+
 int preloadAssets(lua_State *state)
 {
-    LuaBinding  lua(state);
+    LuaBinding lua(state);
     std::string path;
-    std::string unit_profiles_path;
-    if (!lua.readValue(1, path) || !lua.readValue(2, unit_profiles_path))
-        return lua.pushError();
-    if (!fs_preload_unit_profiles(unit_profiles_path.c_str()))
-        return lua.pushError("UNIT_PROFILE_PRELOAD", "unit profile configuration is invalid");
+    LuaTable unit_profiles, navigation_profiles, skill_rows;
+    std::vector<FsUnitProfile> units;
+    std::vector<FsNavigationProfile> navigation;
+    std::vector<FsSkillProfile> skills;
+    if (!lua.readValue(1, path) || !lua.readTable(2, unit_profiles) ||
+        !lua.readTable(3, navigation_profiles) || !lua.readTable(4, skill_rows) ||
+        !readUnitProfiles(unit_profiles, units) ||
+        !readNavigationProfiles(navigation_profiles, navigation) ||
+        !readSkillProfiles(skill_rows, skills))
+        return lua.pushError("PROFILE_CONFIG", "existing Lua config tables are invalid");
+    if (fs_load_profiles(units.data(), static_cast<std::uint32_t>(units.size()),
+                            navigation.data(), static_cast<std::uint32_t>(navigation.size()),
+                            skills.data(), static_cast<std::uint32_t>(skills.size())) != 1)
+        return lua.pushError("PROFILE_LOAD", "Native rejected the Lua profile records");
     if (!fs_preload_map(path.c_str()))
         return lua.pushError("MAP_PRELOAD", "published BMAP could not be loaded");
     return lua.returnValues(true);
@@ -1787,7 +2007,30 @@ std::uint32_t hashBytes(const std::string &s)
 
 int main(int argc, char **argv)
 {
-    if (argc != 3 || fs_preload_map(argv[1]) != 1 || fs_preload_unit_profiles(argv[2]) != 1)
+    if (argc != 2 || fs_preload_map(argv[1]) != 1)
+        return 2;
+    const FsUnitProfile units[] = {
+        {1, 1, 150, 100, 0, 0},
+        {2, 2, 1000, 100, 200, 10000},
+    };
+    FsNavigationProfile navigation[1]{};
+    navigation[0].unit_id = 1;
+    navigation[0].radius_mm = 200;
+    navigation[0].max_step_mm = 600;
+    navigation[0].max_slope_permille = 1000;
+    for (std::size_t area = 0; area < 256; ++area)
+    {
+        navigation[0].area_allowed[area] = 1;
+        navigation[0].area_cost_permille[area] = 1000;
+    }
+    navigation[0].area_cost_permille[1] = 3000;
+    navigation[0].area_cost_permille[3] = 1500;
+    const FsSkillProfile skills[] = {
+        {1, 900, 12, 14, 1, 1},
+        {2, 9000, 24, 12, 3, 2},
+        {3, 9000, 24, 20, 3, 3},
+    };
+    if (fs_load_profiles(units, 2, navigation, 1, skills, 3) != 1)
         return 2;
     const auto meta = flywow_navigation::MapRegistry::Instance().Find(1001);
     if (!meta.ok() || !meta.value)
@@ -2463,7 +2706,13 @@ message FrameReplay {
 return
 {
     map_path        = "../shared/navigation/battle_1001/battle_1001.bmap",
-    unit_profiles_path = "../shared/battle/unit_profiles.cfg",
+    unit_profiles   = require "config.unit_profiles",
+    navigation_profiles = require "config.navigation_profiles",
+    skills = {
+        { skill_id = 1, range_mm = 900, cooldown_ticks = 12, damage = 14, target_mask = 1, effect = 1 },
+        { skill_id = 2, range_mm = 9000, cooldown_ticks = 24, damage = 12, target_mask = 3, effect = 2 },
+        { skill_id = 3, range_mm = 9000, cooldown_ticks = 24, damage = 20, target_mask = 3, effect = 3 },
+    },
     manifest_path   = "../shared/navigation/battle_1001/battle_1001.manifest.json",
     workers         = 4,    -- 长期Worker Service数，不等于OS线程数。
     max_battles     = 128,  -- 每Worker实例上限；须根据真实负载测量。
@@ -3213,7 +3462,7 @@ local conf    = require "config.frame_sync"
 local asset   = require "config.frame_sync_asset"
 
 skynet.start(function()
-    assert(native.preload(conf.map_path, conf.unit_profiles_path), "FRAME_ASSET_PRELOAD_FAILED")
+    assert(native.preload(conf.map_path, conf.unit_profiles, conf.navigation_profiles, conf.skills), "FRAME_ASSET_PRELOAD_FAILED")
     local dispatch = skynet.newservice("battle/frame_sync/dispatch")
     assert(skynet.call(dispatch, "lua", "ready"))
     cluster.reload({ [conf.gateway_node] = conf.gateway_address,
@@ -3380,7 +3629,10 @@ preload = "./third_party/skynet-flywow/logger/lualib/flywow_logger_preload.lua"
 --- 运行：server目录 ./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua。
 package.cpath = "./build/frame_sync/?.so;" .. package.cpath
 local native = require "lesson_frame_native"
-assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap"))
+assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap",
+                      require "config.unit_profiles",
+                      require "config.navigation_profiles",
+                       require "config.frame_sync".skills))
 local first = assert(native.open(1001))
 local second = assert(native.open(1001))
 local initial = assert(first:save())
@@ -3421,7 +3673,10 @@ package.path = "./lualib/?.lua;./lualib/?/init.lua;" .. package.path
 package.cpath = "./build/frame_sync/?.so;" .. package.cpath
 local native = require "lesson_frame_native"
 local core = require "battle.frame_sync.runtime"
-assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap"))
+assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap",
+                      require "config.unit_profiles",
+                      require "config.navigation_profiles",
+                       require "config.frame_sync".skills))
 local runtime = assert(core.create({ map_id = 1001, window = 8, max_frames = 3600,
                                      seat_units = { 1001 } }))
 local first = { frame = 1, x = 1, z = 0, skill = 0 }
@@ -3644,7 +3899,172 @@ if __name__ == "__main__":
     main()
 ```
 
-### 5.21 `unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs`
+### 5.21 unity/BattleNavigation/Assets/BattleNavigation/client/FrameLuaProfileLoader.cs
+
+**操作：新建文件。** xLua 只读项目 Lua 配置并转换为 C ABI 固定记录；Battle 之后只使用 Native 中的只读副本。
+
+```csharp
+using System;
+using System.IO;
+using XLua;
+
+namespace BattleNavigation.FrameSync
+{
+    internal sealed class FrameLuaProfiles
+    {
+        public FsUnitProfile[] Units;
+        public FsNavigationProfile[] Navigation;
+        public FsSkillProfile[] Skills;
+    }
+
+    internal sealed class FrameLuaProfileLoader : IDisposable
+    {
+        private readonly LuaEnv env = new LuaEnv();
+        private readonly LuaEnv.CustomLoader loader;
+
+        private FrameLuaProfileLoader()
+        {
+            loader = LoadModule;
+            env.AddLoader(loader);
+        }
+
+        public static FrameLuaProfiles Load()
+        {
+            using (var loader = new FrameLuaProfileLoader())
+                return loader.Read();
+        }
+
+        private byte[] LoadModule(ref string modulePath)
+        {
+            string relative = modulePath.Replace('.', Path.DirectorySeparatorChar) + ".lua";
+            string path = Path.Combine(UnityEngine.Application.streamingAssetsPath, "config", relative);
+            return File.Exists(path) ? File.ReadAllBytes(path) : null;
+        }
+
+        private FrameLuaProfiles Read()
+        {
+            object[] a = env.DoString("return require 'config.unit_profiles'");
+            object[] b = env.DoString("return require 'config.navigation_profiles'");
+            object[] c = env.DoString("return require 'config.frame_sync'");
+            using (var units = (LuaTable)a[0])
+            using (var navigation = (LuaTable)b[0])
+            using (var frameSync = (LuaTable)c[0])
+            using (var skills = frameSync.Get<string, LuaTable>("skills"))
+            {
+                var result = new FrameLuaProfiles
+                {
+                    Units = new FsUnitProfile[units.Length],
+                    Navigation = new FsNavigationProfile[navigation.Length],
+                    Skills = new FsSkillProfile[skills.Length],
+                };
+                for (int i = 1; i <= units.Length; ++i)
+                    result.Units[i - 1] = ReadUnit(units.Get<int, LuaTable>(i));
+                for (int i = 1; i <= navigation.Length; ++i)
+                    result.Navigation[i - 1] = ReadNavigation(navigation.Get<int, LuaTable>(i));
+                Array.Sort(result.Units, (x, y) => x.UnitId.CompareTo(y.UnitId));
+                for (int i = 1; i <= skills.Length; ++i)
+                    result.Skills[i - 1] = ReadSkill(skills.Get<int, LuaTable>(i));
+                Array.Sort(result.Navigation, (x, y) => x.UnitId.CompareTo(y.UnitId));
+                Array.Sort(result.Skills, (x, y) => x.SkillId.CompareTo(y.SkillId));
+                return result;
+            }
+        }
+
+        private static FsUnitProfile ReadUnit(LuaTable row)
+        {
+            using (row)
+            using (var movement = row.Get<string, LuaTable>("movement"))
+            {
+                string mode = movement.Get<string, string>("mode");
+                var result = new FsUnitProfile
+                {
+                    UnitId = row.Get<string, uint>("unit_id"),
+                    MovementMode = mode == "ground" ? 1u : mode == "air" ? 2u : 0u,
+                    MoveStrideMmPerTick = movement.Get<string, uint>("speed_mm_per_tick"),
+                    MaxHp = row.Get<string, int>("max_hp"),
+                };
+                if (result.MovementMode == 2)
+                {
+                    using (var flight = row.Get<string, LuaTable>("flight"))
+                    {
+                        result.MinAirClearanceMm = flight.Get<string, uint>("min_air_clearance_mm");
+                        result.MaxAirAltitudeMm = flight.Get<string, uint>("max_air_altitude_mm");
+                    }
+                }
+                if (result.UnitId == 0 || result.MovementMode == 0 ||
+                    result.MoveStrideMmPerTick == 0 || result.MaxHp <= 0)
+                    throw new InvalidDataException("UNIT_PROFILE");
+                return result;
+            }
+        }
+
+        private static FsNavigationProfile ReadNavigation(LuaTable row)
+        {
+            using (row)
+            {
+                var result = new FsNavigationProfile
+                {
+                    UnitId = row.Get<string, uint>("unit_id"),
+                    RadiusMm = row.Get<string, int>("radius_mm"),
+                    MaxStepMm = row.Get<string, int>("max_step_mm"),
+                    MaxSlopePermille = row.Get<string, uint>("max_slope_permille"),
+                    AreaAllowed = new byte[256],
+                    AreaCostPermille = new ushort[256],
+                };
+                Array.Fill(result.AreaAllowed, (byte)1);
+                Array.Fill(result.AreaCostPermille, (ushort)1000);
+                if (row.ContainsKey("area_cost_permille"))
+                {
+                    using (var costs = row.Get<string, LuaTable>("area_cost_permille"))
+                        for (int area = 0; area < 256; ++area)
+                            if (costs.ContainsKey(area))
+                                result.AreaCostPermille[area] = costs.Get<int, ushort>(area);
+                }
+                if (row.ContainsKey("area_allowed"))
+                {
+                    using (var allowed = row.Get<string, LuaTable>("area_allowed"))
+                        for (int area = 0; area < 256; ++area)
+                            if (allowed.ContainsKey(area))
+                                result.AreaAllowed[area] = allowed.Get<int, bool>(area) ? (byte)1 : (byte)0;
+                }
+                if (result.UnitId == 0 || result.RadiusMm <= 0 || result.MaxStepMm <= 0)
+                    throw new InvalidDataException("NAVIGATION_PROFILE");
+                return result;
+            }
+        }
+
+        private static FsSkillProfile ReadSkill(LuaTable row)
+        {
+            using (row)
+            {
+                var result = new FsSkillProfile
+                {
+                    SkillId = row.Get<string, uint>("skill_id"),
+                    RangeMm = row.Get<string, ulong>("range_mm"),
+                    CooldownTicks = row.Get<string, uint>("cooldown_ticks"),
+                    Damage = row.Get<string, int>("damage"),
+                    TargetMask = row.Get<string, uint>("target_mask"),
+                    Effect = row.Get<string, uint>("effect"),
+                };
+                if (result.SkillId == 0 || result.CooldownTicks == 0 || result.Damage <= 0 ||
+                    result.TargetMask < 1 || result.TargetMask > 3 || result.Effect < 1 ||
+                    result.Effect > 3)
+                    throw new InvalidDataException("SKILL_PROFILE");
+                return result;
+            }
+        }
+
+        public void Dispose()
+        {
+            env.Dispose();
+        }
+    }
+}
+```
+
+Loader 在 Unity 主线程启动时运行；LuaTable 仅在读取期间存在。Native 接收值数组并再次检查上限、排序、取值范围以及地面单位和导航配置的对应关系。
+
+### 5.22 unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs`
 
 **操作：新建或整文件覆盖。** Windows PInvoke SafeHandle、完整输入数组与CheckpointV3解码。
 
@@ -3680,6 +4100,41 @@ namespace BattleNavigation.FrameSync
         }
     }
 
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    internal struct FsUnitProfile
+    {
+        public uint UnitId;
+        public uint MovementMode;
+        public uint MoveStrideMmPerTick;
+        public int MaxHp;
+        public uint MinAirClearanceMm;
+        public uint MaxAirAltitudeMm;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 4)]
+    internal struct FsNavigationProfile
+    {
+        public uint UnitId;
+        public int RadiusMm;
+        public int MaxStepMm;
+        public uint MaxSlopePermille;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
+        public byte[] AreaAllowed;
+        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
+        public ushort[] AreaCostPermille;
+    }
+
+    [StructLayout(LayoutKind.Sequential, Pack = 8)]
+    internal struct FsSkillProfile
+    {
+        public uint SkillId;
+        public ulong RangeMm;
+        public uint CooldownTicks;
+        public int Damage;
+        public uint TargetMask;
+        public uint Effect;
+    }
+
     public sealed class FrameNative : IDisposable
     {
         private const int MaxCheckpointBytes = 65535; // 必须与Native和协议最终帧预算一致。
@@ -3692,8 +4147,10 @@ namespace BattleNavigation.FrameSync
         private static extern IntPtr fs_open(uint mapId);
 
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_preload_unit_profiles(
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+        private static extern int fs_load_profiles(
+            [In] FsUnitProfile[] units, uint unitCount,
+            [In] FsNavigationProfile[] navigation, uint navigationCount,
+            [In] FsSkillProfile[] skills, uint skillCount);
 
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
         private static extern void fs_close(IntPtr handle);
@@ -3734,18 +4191,17 @@ namespace BattleNavigation.FrameSync
         public uint MapId => fs_map_id(RequireHandle());
         public uint MapVersion => fs_map_version(RequireHandle());
 
-        /// <summary>启动时加载发布地图与导航配置；Tick和Battle构造不读取文件。</summary>
-        public static void Preload(string path, string unitProfilesPath)
+        /// <summary>启动时加载地图与Lua配置；Tick和Battle构造不读取文件。</summary>
+        public static void Preload(string path, FsUnitProfile[] units,
+                                   FsNavigationProfile[] navigation, FsSkillProfile[] skills)
         {
-            if (string.IsNullOrWhiteSpace(unitProfilesPath) ||
-                fs_preload_unit_profiles(unitProfilesPath) != 1)
-            {
+            if (units == null || units.Length == 0 || navigation == null || skills == null ||
+                skills.Length != 3 ||
+                fs_load_profiles(units, (uint)units.Length, navigation, (uint)navigation.Length,
+                                skills, (uint)skills.Length) != 1)
                 throw new InvalidDataException("UNIT_PROFILE_PRELOAD");
-            }
             if (string.IsNullOrWhiteSpace(path) || fs_preload_map(path) != 1)
-            {
                 throw new InvalidDataException("MAP_PRELOAD");
-            }
         }
 
         /// <summary>获取当前MapRegistry已经加载的地图；本实例只拥有模拟状态。</summary>
@@ -4312,8 +4768,9 @@ namespace BattleNavigation.FrameSync
         {
             try
             {
-                FrameNative.Preload(MapPath, Path.Combine(
-                    Application.streamingAssetsPath, "navigation/unit_profiles.cfg"));
+                using var lua = FrameLuaRuntime.Create();
+                FrameLuaProfiles profiles = FrameLuaProfileLoader.Load();
+                FrameNative.Preload(MapPath, profiles.Units, profiles.Navigation, profiles.Skills);
                 confirmed = new FrameNative(1001);
                 predicted = new FrameNative(1001);
 
@@ -4892,7 +5349,7 @@ cmake --build ./server/build/frame_sync_windows --config Release
 ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failure
 ```
 
-将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把已发布的同一份BMAP放入`Assets/StreamingAssets/navigation/battle_1001.bmap`，把`shared/battle/unit_profiles.cfg`原样放入`Assets/StreamingAssets/navigation/unit_profiles.cfg`。本教程使用的是Windows Native插件；不能将该结果外推成Android、iOS、Web已支持。
+将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把已发布的同一份BMAP放入 Assets/StreamingAssets/navigation/battle_1001.bmap；将 server/config 中本课使用的 .lua 配置模块按原目录结构放入 Assets/StreamingAssets/config。其余平台不在本课验证范围内。
 
 在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即开始50ms固定模拟。
 
@@ -4925,7 +5382,7 @@ ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failur
 
 性能记录必须包括CPU型号、编译器、Debug/Release、map尺寸、单位和场次数量：测试每场CPU每Tick p50/p95/p99、A*调用次数/扩展Node数、Native/Skynet RSS、Gateway队列深度、迟到比例和OVERLOAD次数。`4 workers * 128 battles`是初始资源保护参数，**不是已测得的吞吐承诺**。
 
-不在本课做Battle OS进程崩溃后持久化恢复、规则源码Hash、Lua-in-Unity脚本框架、在线Native DLL热替换、多机场次迁移或状态同步/帧同步统一Battle Core。保留发布BMAP SHA-256与**每帧诊断State Hash**，不要将两者混为一项。
+不在本课做Battle OS进程崩溃后持久化恢复、规则源码Hash、用Lua执行Unity帧模拟规则、在线Native DLL热替换、多机场次迁移或状态同步/帧同步统一Battle Core。xLua在本课只读取静态配置。保留发布BMAP SHA-256与**每帧诊断State Hash**，不要将两者混为一项。
 
 ## 8. 审计边界与完成检查
 

@@ -15,6 +15,7 @@
 - 两版都包含移动、简单 AI、基础通用 Skill Runtime、技能冷却/距离/目标规则、表现与逻辑效果的边界、地图/配置版本和 Unity/Server 联调。各版具体技能与玩法见对应实操。
 - 复用现有 FlyWow Gateway、导航资产和公开合同；不复制 framing、接入层或导航实现。低延迟实时数据通道由 FlyWow Gateway 管理，若现有公开合同不满足帧/状态同步的数据报需求，在对应实操中按抽取规范扩展 FlyWow；Battle 层拥有各自的命令、帧确认、事件与恢复语义。Battle/Skill 是否抽入 FlyWow 在完成并验证后按抽取规范评估。
 - 文档编写遵循 `docs/CODEX_TEACHING_GUIDE.md`；源码及教程中的可复制代码遵循 `.agents/skills/skynet-battle-navigation-coding-standard/SKILL.md`。
+- 帧同步版沿用仓库现有 Lua UnitProfile 与 FlyWow NavigationProfile 配置源；Unity 通过工程决策 D043 固定的 xLua Lua 5.4 后端读取同一份 Lua 文件。不得新增手工维护的平行 CFG/JSON 配置；宿主启动时将校验后的值通过 Native C ABI 传入，Native 为 Battle 保存只读配置副本。
 
 ## 当前帧同步玩法边界
 

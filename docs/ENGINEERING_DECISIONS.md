@@ -591,3 +591,10 @@ C++17 是 FlyWow 与项目 Native 层的可复现构建合同，不允许单个�
 Lesson 3 最终版由独立的帧同步和状态同步实操组成，学习顺序为帧同步在前、状态同步在后。两版允许玩法和战斗模拟不同，不为代码复用建立统一模拟内核；Lesson 2 的离线批量战斗/Replay 继续作为独立基线。两版均保留商业实时战斗的必要核心边界：Server 权威、客户端快速响应、明确命令/状态合同、版本与内容 hash、资源和生命周期上限、错误与恢复路径、真实双端验证。
 
 本决策取代旧 D031 对 Lesson 3 使用同一 Battle Core 同时承载在线与批量回放的要求；旧第三课实操只作为知识点参考，不作为新实现基线。实时数据通道属于 FlyWow Gateway 接入能力，若现有合同不足，由实际课程调用者按 `docs/FLYWOW_EXTRACTION_POLICY.md` 扩展；战斗层仍分别定义自身的同步可靠性合同。课程入口见 `codex/LESSON_03_SPEC.md`。
+
+
+## D043 - 帧同步 Unity 以 xLua Lua 5.4 读取现有业务配置
+
+帧同步课程的 Unity 客户端接入 xLua Lua 5.4 后端，读取与 Skynet Server 相同的 Lua UnitProfile 和 FlyWow NavigationProfile 源文件。课程固定使用 Tencent/xLua v2.1.16_ndkr21b_with_win Release 中的 Lua 5.4 Windows 插件包；不要使用 GitHub 自动生成的 Source code 压缩包，也不得静默升级版本。
+
+Lua 仅作为静态配置源和启动期读取器，不执行帧模拟规则。Unity 和 Skynet 分别把 Lua 数据校验并复制为 Native C ABI typed records；Native 启动阶段再次校验，并为新建 Battle 保存只读配置副本。Battle Tick 不读 Lua，不解析配置文件。该决策只覆盖本课程验证的 Windows x64 Unity 插件与 Linux Skynet Native 模块，不声明其他 Unity 平台已验证。若未来更换 xLua 版本或扩展目标平台，先验证插件构建与配置加载，再更新本决策。
