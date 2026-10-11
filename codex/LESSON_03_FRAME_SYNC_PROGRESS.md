@@ -1,12 +1,18 @@
 # 第三课帧同步版实操编写进度
 
-最后更新：2026-10-10。本文件用于更换会话后恢复任务。
+最后更新：2026-10-11。本文件用于更换会话后恢复任务。
 
 ## 当前交付
 
 `docs/Skynet_BattleNavigation第三课_帧同步版_实操.md` 已替换为完整实操正文，包含逐阶段教学、完整可复制源码、文件新建/局部修改/完整替换边界、构建/启动/调试/审计/回放步骤。23个源码片段含22个完整文件和唯一Proto追加片段，约166KB。大小不是完成证据；完整源码与实际验证记录才是。
 
 状态同步文档保持原蓝图，未开展其实现；后续再单独完成，不为了两版共用增加复杂度。实操从第二课基线开始，不依赖旧第三课。
+
+2026-10-11 收口：帧同步文档统一为单一 `UnitProfile` 配置文件/静态只读表。玩家、地面敌人和飞行敌人均通过有效 `profile_id` 查询；最大 HP、移动模式、速度、地面导航参数、飞行间隙和高度边界都从同一记录读取。FlyWow `NavigationProfile` 仅作为该记录内调用 `GridPathfinder` 的参数视图，不另建 Profile ID、配置文件或 Registry。
+
+2026-10-11 命名收口：CMake 对外链接目标统一为 `FlyWow::Navigation`，FlyWow 内部静态库目标为 `flywow_navigation_core`；帧同步教程和构建链路文档已同步该合同，C++ 命名空间保持 `flywow_navigation`。
+
+2026-10-11 CMake 归属收口：完整静态库、公开别名、Lua Binding、测试和 Benchmark 由 `navigation/native/CMakeLists.txt` 管理；删除 `grid_map/CMakeLists.txt`，Grid Map 仅作为 Navigation 内部实现源。`FlyWow::Navigation` 是构建树内 alias，不产生独立库文件；`flywow_navigation_lua` 生成供 Skynet 加载的 `flywow_navigation_native.so`。
 
 ## 用户最新约束
 
@@ -37,6 +43,8 @@ Windows仅Unity编辑源；文档/Server非Unity文件通过Git工作流同步�
 未验证：Unity Editor完整Play/场景表现、长期容量压测、全部网络故障、其它目标平台。文档提供实操验收，不将这些项目写成作者已通过。
 
 详细结果：`codex/work/lesson_03_frame_sync/verification_results.json`。
+
+本轮 Unit Profile 文档代码验证（WSL/Linux 隔离目录）：从正式实操提取的 `CMakeLists.txt`、Core、Lua Binding、frame_test 和配置完成 Release 构建；`frame_native` CTest 通过；实际加载器拒绝 15 种非法 Profile 配置，且失败后旧配置快照仍可创建 Engine。此次没有重跑 Windows DLL/Unity Editor 跨端验证，旧记录中的 Windows 结果不覆盖本轮新增的 Unit Profile 改动。
 
 ## 作者工作稿与复现
 

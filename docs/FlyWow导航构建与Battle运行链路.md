@@ -75,23 +75,25 @@ cmake -S navigation/native \
   -DSKYNET_ROOT=<SKYNET_ROOT>
 ~~~
 
-主要构建目标：
+完整 Navigation 的静态库、公开别名、Lua Binding、测试和 Benchmark 均由 `navigation/native/CMakeLists.txt` 定义。`grid_map` 是 Navigation 的内部实现目录，不单独定义或发布库。
 
-~~~text
-grid_map_core
-grid_map_test
-navigation_test
-navigation_benchmark
-flywow_navigation_lua
+| CMake 目标 | 目标性质 | 构建产物 | 使用者 |
+|---|---|---|---|
+| `flywow_navigation_core` | 完整 Navigation 的静态库目标 | Linux：`libflywow_navigation_core.a`；MSVC：`flywow_navigation_core.lib` | C++ 链接入口和 Lua Native 模块的构建依赖 |
+| `FlyWow::Navigation` | 指向静态库目标的 CMake alias | 无独立文件 | 同一 CMake 构建树中的 C++ 消费者 |
+| `flywow_navigation_lua` | 可选 Lua Binding MODULE 目标 | `build/native/flywow_navigation_native.so` | Skynet Lua 运行时通过 Lua Wrapper 加载 |
+| `grid_map_test`、`navigation_test` | 正确性测试可执行目标 | 构建目录中的测试程序 | CTest |
+| `navigation_benchmark` | Benchmark 可执行目标 | 构建目录中的 Benchmark 程序 | 手动采样，不作为自动测试 |
+
+`FlyWow::Navigation` 是当前源码树通过 `add_subdirectory` 集成时可见的稳定 CMake 别名，指向同一构建树中的 `flywow_navigation_core`。它不产生独立文件；当前没有 `install(EXPORT ...)`，因此不是可由外部 `find_package` 获取的已安装目标。若以后增加安装式 Package，再以相同名称正式导出。
+
+C++ 消费者在自己的 CMake 目标上这样链接：
+
+~~~cmake
+target_link_libraries(game_server PRIVATE FlyWow::Navigation)
 ~~~
 
-其中：
-
-- grid_map_core：地图、Registry、动态占用、Context、PathFinder；
-- grid_map_test：Grid Map 回归测试；
-- navigation_test：导航回归测试；
-- navigation_benchmark：性能程序，只构建不自动运行；
-- flywow_navigation_lua：Lua Native Binding。
+Skynet Lua 消费者不链接这个 CMake 别名；构建期由 `flywow_navigation_lua` 链接核心静态库，运行期由 Lua Wrapper 加载 `build/native/flywow_navigation_native.so`。
 
 grid_map_test 和 navigation_test 都带有：
 
@@ -455,7 +457,7 @@ Battle 保存返回的位置，并根据结果生成移动、停止等权威事�
 ~~~text
 build_flywow.sh <SKYNET_ROOT> navigation
   ↓
-CMake 编译 grid_map_core 和 Lua Binding
+CMake 编译 flywow_navigation_core 与 Lua Binding，并提供公开目标 FlyWow::Navigation
   ↓
 运行 grid_map_test、navigation_test
   ↓

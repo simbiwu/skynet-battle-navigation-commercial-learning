@@ -1,277 +1,450 @@
-# 第三课：帧同步版——从玩家输入到可预测、可恢复的实时战斗
+# 第三课：帧同步版——从玩家输入到可预测、可回滚的实时战斗
 
-本课从**完成第二课后的仓库**开始。按本文逐节创建文件、修改 Gateway、生成协议、构建 Native、启动双进程，再接入 Unity；不需要旧第三课代码，也不运行旧第三课启动脚本。状态同步版是另一套独立课程，本文件不实现它。
+> 课程位置：`docs/Skynet_BattleNavigation第三课_帧同步版_实操.md`。本文件是第三课帧同步版的完整实操教程，承接**已验收的第二课**。状态同步版另行设计，两种同步方案不共享强制性的 Battle Core。
+>
+> 基线：Skynet v1.8.0、自带 Lua 5.4.7、C++17、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7、Protobuf 唯一协议源、`server/third_party/skynet-flywow` 固定 gitlink。禁止按 GitHub 最新 `main` 猜测子模块 API。
+>
+> 重要：本文包含每个受影响文件的**最终累计完整代码**，不要求学习者拼接局部片段。文件内容本身不代表源码已落地，也不代表 Unity Play/压力/跨平台测试已通过。第三课代码从已验收的第二课出发，课程宿主的新文件可整体写入；FlyWow Gateway 内部文件由学习者按本课步骤亲自修改，并先运行负向测试确认旧行为，再运行正向测试审计新行为。
 
-本文交付的是实操步骤和完整源码。当前工作区的 Server/FlyWow 不会因为文档编写而提前安装这些改动，**Gateway 修改也由你在第 3 节亲自完成并审计**。作者验证使用隔离目录，具体已验证与尚未验证项目见最后一节。
+## 0. 最终运行效果与课程主线
 
-## 0. 最终效果与学习顺序
+### 0.1 最小战斗场景
 
-### 0.1 本课玩法
+场景保持简单：一名真实玩家控制地面单位 `1001`，服务端模拟地面 AI `2002` 和飞行 AI `2001`。地面单位受 BMAP、坡度、体型和动态占位约束；飞行单位沿明确的三轴整数规则移动，不使用地面 A* 模拟立体空域。技能保留近战、表现弹丸、逻辑弹丸三种例子。需要证明的是**客户端与服务端在正式输入下复现相同战斗结果**；玩家/单位/技能数量不是架构成熟度指标。
 
-- 玩家控制地面单位 `1001`：WASD 移动，J 近战，K 表现弹丸，L 逻辑火球。
-- Server 控制地面敌人 `2002` 和飞行敌人 `2001`，自动寻找最近的活敌人并接近、施法。AI 不依赖墙钟、浮点物理或客户端 Transform。
-- 飞行敌人会水平飞行和升降。`2000mm` 只是出生高度；不是运行时固定高度。AI 根据目标当前位置、水平距离与地表穿透限制调整高度：远距追击时抬高，接近时下俯；不是沿固定高度层移动。
-- 消灭全部敌方单位结束；双方同帧死亡判平局。没有组队、掉落、奖励或结算界面。180 秒仍未结束判平局，避免一场 Battle 无限持有输入日志。
+操作手感必须立即响应。WASD/J/K/L 在 Unity 预测 Core 中下一固定步执行，网络侧把意图绑定到明确帧号发送。正式输入抵达后，以服务器确认 Core 为准回滚和重演未确认帧。回滚期间表现层需要处理动画、投射物和特效的重建与收敛；Unity Transform 不允许直接写回正式 State。
 
-地面玩家/地面敌人受 BMAP 通行与地表规则限制；飞行敌人不使用地面 A*、walkable 或 clearance 作为空中阻挡。当前资产是 2.5D 地表 Grid：飞行只验证 XZ 地图边界、单位不得穿过地表，以及规则定义的 `10000mm` 世界高度上界。飞行高度在这个范围内变化，不是固定层。真正的立体建筑/天花板/禁飞体积需要对应空域资产；不能把地表 Grid 包装成已经支持三维空间碰撞的 NavMesh。
+正常通讯只传完整的权威输入帧与分歧诊断 hash；进入战斗、断线恢复、状态分歧、超窗恢复允许传完整 Checkpoint。这样仍属于帧同步，不能把偶发 Checkpoint 误判为持续状态同步。
 
-### 0.2 你会真正实现什么
+### 0.2 最终完整调用链
 
-|阶段|当前问题|可观察产物|
-|---|---|---|
-|1|第二课一次性模拟不接收在线输入|冻结新玩法、输入与固定帧合同|
-|2|两端各自算战斗容易分歧|同一 C++17 Core、Checkpoint、确定性测试|
-|3|Gateway 拒绝目标连接的主动消息|你亲自修改的定向 push 合同与审计测试|
-|4|网络 DTO 与模拟状态不能混为一层|唯一 Proto 的兼容扩展与生成 Registry|
-|5|实时 Battle 要跨消息保持生命周期|Runtime、Worker、Dispatch、双进程入口|
-|6|先验证 Server 真链路，再调表现|真实握手/推帧/重连/输入回放集成测试|
-|7|Unity 不能在 Update 阻塞读网络|有界长期连接、主线程双模拟实例|
-|8|玩家不能等一次 RTT 才看到动作|本地预测、输入确认、恢复重演、表现收敛|
-|9|结束后要证明输入能还原逻辑|分页日志、输入回放、逐帧状态 hash|
-|10|本机正常网络不是性能结论|跨平台 Golden、失败审计、网络与容量验证|
-
-### 0.3 当前基线与编辑位置
-
-固定 Skynet v1.8.0、自带 Lua 5.4.7、C++17、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7、protoc 36.2。FlyWow 使用当前固定 submodule，不静默升级。
-
-**WSL 操作**指主工作区 `/home/simbi/workspace/skynet-battle-navigation-commercial-learning`。Server、FlyWow、协议源、文档在这里修改。**Windows 操作**指 Unity 工作区 `G:simbidevskynet-battle-navigation-commercial-learning`。Unity C#、Scene、插件设置在 Windows 操作。非 Unity 文件通过工作区 Git 流程交付；不要用另一份目录覆盖未提交修改。本文中的 Git 同步步骤由你按实际提交与审核节奏执行，作者不代替你提交或推送。
-
-先在 WSL 仓库根目录执行只读检查：
-
-```bash
-cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning
-git status --short
-git -C server/third_party/skynet-flywow status --short
-git submodule status
-test -x server/third_party/skynet/skynet
-test -x server/third_party/skynet/3rd/lua/lua
-test -x server/third_party/protoc-36.2/bin/protoc
-test -f shared/navigation/battle_1001/battle_1001.bmap
-test -f shared/navigation/battle_1001/battle_1001.manifest.json
+```mermaid
+flowchart LR
+    A[Unity 输入采集] --> B[本地 predicted Core]
+    A --> C[FrameConnection TCP/Proto]
+    C --> D[FlyWow Gateway]
+    D --> E[宿主 Frame Proxy / Cluster]
+    E --> F[Frame Dispatch]
+    F --> G[BattleWorker 分片]
+    G --> H[按玩家席位收集/截止/补缺]
+    H --> I[权威 Native Frame Core]
+    I --> J[权威 FrameRecord: 玩家输入+hash]
+    J --> C
+    C --> K[confirmed Core]
+    K --> L[从确认点重演本地未确认输入]
+    L --> B
+    B --> M[Unity 表现]
+    I --> N[FlyWow Grid Navigation]
 ```
 
-若已有同名 `frame_sync` 文件，先审阅其内容；不要无条件覆盖你的学习修改。本课新建 `config/frame_sync.lua`，不会要求覆盖已有 `config/battle.lua`。第二课 Gateway/Battle 入口继续独立使用原端口；新版本客户端 TCP 端口为 `19021`，Cluster 为 `2537/2538`。
+Battle Process 中：`battle_id -> battle_id % worker_count + 1` 的固定路由符合本课多 Worker 要求。业务与 Skynet Service 的所有权边界按实际调用链安排：Gateway 持有 Socket；Proxy 持有转发路由；Dispatch 持有 Worker handles；Worker 持有多个 Battle；每场 Battle 独占 Runtime、Engine 和 NavigationContext；FlyWow MapRegistry 在**进程内**共享只读 GridMap。不同 OS 进程的 MapRegistry 不是同一实例。
 
-## 1. 同步合同：确认输入帧，双方按相同规则推进
+**一场 Battle 不等于一个 Skynet Service，也不等于一个 OS Worker Thread。** 每个 BattleWorker Service 的一个 Lua State 可以管理多场 Battle；同一 Native Engine 不能由两个协程交错进入。本文规定核心推进调用是同步、no-yield 的，任何 Skynet/Cluster I/O 均在该边界之外。
 
-### 1.1 一帧到底同步什么
+### 0.3 10 个教学阶段
 
-先把核心问题说清楚：帧同步里的“一帧”，不是一张画面，也不是一条网络消息；它是战斗模拟共同使用的一个编号时间步。本课规定一个逻辑帧代表 50ms 的战斗时间。Server 每推进一次逻辑，帧号加一；Unity 的预测模拟也按同样的步长推进。
-
-如果战斗初始状态记为第 0 帧，那么推进一次得到第 1 帧，推进 20 次代表逻辑战斗时间前进了 1 秒。这里的 20 次是模拟步数；电脑实际花了多久、Unity 这一秒渲染了多少张画面，是另外两件事。
-
-|概念|它回答的问题|本课例子|
+| 阶段 | 本阶段核心问题 | 真正可检查的结果 |
 |---|---|---|
-|逻辑帧|战斗规则推进到了第几步？|第 41 帧|
-|逻辑时间|按帧率换算，战斗内经过了多久？|20 帧约为 1 秒|
-|Server 调度时间|Worker 什么时候有机会执行下一步？|Timer 到期后处理消息并推进|
-|Unity 渲染帧|屏幕什么时候画下一张画面？|可能一秒画 60 张，也可能掉帧|
-|网络消息|客户端和 Server 什么时候交换数据？|一条消息可以带多条输入或多条帧记录|
+| 1 | 输入帧究竟是什么、谁决定截止 | 文字合同、数值例子、时序图、负向用例 |
+| 2 | 两端为何能确定性运行 | C++17 Core、Checkpoint、Native Golden、无半步提交 |
+| 3 | 地面导航如何成为模拟的一部分 | FlyWow `FindPath`/`AdvancePath`/Occupancy、路径复用、重建 |
+| 4 | 玩家输入怎样形成一条权威帧 | 聚合、超窗、补缺、确认、稳定顺序 |
+| 5 | Gateway 如何回推帧 | 定向 Push、身份重验、边界测试 |
+| 6 | Skynet 如何调度多场 Battle | Runtime/Worker/Dispatch、过载和生命周期 |
+| 7 | Unity 如何立即响应 | confirmed/predicted、预测回滚、表现收敛 |
+| 8 | 如何恢复和复现一场战斗 | Checkpoint、重连、重放、逐帧 hash |
+| 9 | 如何真正跑通双进程 | 实际握手、单客户端、异常网络联调 |
+| 10 | 如何评价商业工程质量 | 测试分层、导航性能、Tick p99、容量边界、发布 |
 
-因此，Unity 一秒渲染 60 张图，不代表 Battle 必须推进 60 帧；网络延迟 100ms，也不代表这 100ms 内的输入可以随意改写过去的逻辑帧。**帧号是战斗时间线的序号，不能拿 Unity 的 Update 次数或消息到达顺序替代。**
+### 0.4 操作目录与仓库约束
 
-#### 两个方向分别传什么
+WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，负责 `server/`、`docs/`、`shared/protocol/`、FlyWow 子模块；Windows 编辑源：`G:\simbi\dev\skynet-battle-navigation-commercial-learning`，负责 `unity/`、Unity 导出资产与生成的 Unity C# 协议。非 Unity 文件通过 Git 串行同步；本文不要求复制工作区、替换 Git 历史、自动提交/推送。
 
-帧同步的正常战斗流量以“输入”为中心：
+课程沿用既有协议/资产目录，不再另建第二份 proto、第二套导航实现或重复 Gateway。代码和配置不得引用开发机绝对路径。操作类型统一为【新建或整文件覆盖】及【只读】；真正操作前检查 `git status --short` 和 `git submodule status`，防止覆盖学习过程中已有的修改。
 
-~~~mermaid
-flowchart LR
-  A[Unity 采集玩家意图] --> B[FrameCommand：目标帧 + 移动方向 + 技能意图]
-  B --> C[Server 检查帧窗口与截止时间]
-  C --> D[确定该帧正式采用的玩家输入]
-  D --> E[Server Core 推进这一帧并计算 AI、移动、技能、伤害]
-  E --> F[FrameRecord：正式输入 + 是否收到 + 本帧状态 hash]
-  F --> G[Unity 确认正式帧，并校正预测模拟]
-~~~
+## 1. 帧同步核心合同：帧号、采集、截止、正式执行
 
-**客户端到 Server：提交某个逻辑帧的操作意图。**本课输入包含目标帧号、水平移动方向和技能编号。比如“第 41 帧向右移动并按下 L”。它表达的是玩家希望做什么，不是“把角色坐标改到这里”，也不包含 HP、命中结果或敌人位置。
+一逻辑帧的模拟时间固定为 `50ms`。这个 `50ms` 是模拟输入，不是函数运行的真实 CPU 时间。假定 Tick=50ms，理论逻辑帧 `f` 的模拟时刻是 `f × 50ms`；第 10 帧产生的伤害不会因为服务器忙 100ms 而按 `dt=100ms` 执行。实际墙钟只决定某场 Battle **什么时候处理截止和推进**。
 
-**Server 到客户端：说明某帧最终采用了什么输入，并提供分歧检查信息。**本课的 FrameRecord 带有被采用的玩家输入、supplied 标记和该帧结束时的状态 hash。正常推进时每帧生成正式记录；协议把记录放在响应消息里。记录本身不附带每个单位的完整坐标、HP 和弹丸状态。
+用户按住右键、按下 J，并不会通过网络发送“当前位置 X=5200、HP=88”；发送的是 `{frame=51, x=1, z=0, skill=1}`，表示请求这些输入在第 51 帧生效。服务端先验证发送者是否是该 Battle 的相应玩家席位，再验证帧号和输入字段范围；合法且在截止前的请求被保存到席位输入槽，不马上推进 Core。
 
-- input：这一帧正式采用的玩家输入。它可能是客户端按时送达的输入，也可能是缺输入规则生成的输入。
-- supplied=true：Server 在截止时间前收到了并采用了玩家输入。
-- supplied=false：截止时没有可采用的玩家输入，Server 按补缺规则生成该帧输入。它仍然是正式输入，不能等迟到消息来了再重写历史。
-- hash：Server 模拟完这一帧后，对规范化逻辑状态计算的短 hash。它帮助客户端和回放工具发现“同样输入是否算出了不同状态”；它不是坐标快照，不能单独修复分歧，也不是防作弊凭据。
+第 51 帧到期时，Worker 为唯一玩家席位构造一条正式输入帧。若玩家缺输入，按确定性缺输入规则补齐。服务端执行一次 Core Step，得到状态、胜负和下一帧；向该玩家推送正式输入与 State Hash。玩家不能提交命中结果，命中由客户端和服务端按相同规则计算。
 
-这里最容易混淆的是：**Server 回给客户端的不是“第 41 帧所有单位的新状态”，而是“第 41 帧采用的输入记录，以及用于比较模拟结果的 hash”。**客户端需要用相同规则自己推进单位、技能、弹丸和 AI。正常帧同步不会每 50ms 下发完整战斗状态。加入战斗和恢复分歧时可以发送 Checkpoint（可恢复的完整逻辑状态），那是加入/恢复流程，不是每帧同步的常规内容。
+### 1.1 输入截止与迟到
 
-#### 为什么两端都运行模拟
+假设已确认 `frame=40`，Worker 的第 41 帧正式截止是本地单调时钟 `T41`，第 42 帧是 `T41+50ms`。如果 Skynet Timer 在 `T41+8ms` 才执行，仍不能把 `T41+3ms` 到达的第 41 帧输入当作准时输入：Deadline 是确定的边界，Timer 晚到不会重开历史。网络发送方自己的墙钟不可用于业务截止，因为客户端可伪造且与服务器时钟不同步。
 
-只传输入能减少持续传输完整状态，但前提是两端能从相同起点、按相同规则推进。可以把一次模拟理解为：
+| 情况 | 服务端规则 | 客户端后续行为 |
+|---|---|---|
+| 合法未来帧，截止前到达 | 每席位每帧接受第一次合法输入 | 等正式确认，不覆盖确认值 |
+| 相同内容重复提交 | `OK` 幂等；不改变日志 | 可以安全重试 |
+| 同席位同帧提交不同内容 | `CONFLICT`；保留首次值 | 等正式帧校正 |
+| `frame <= last_confirmed` 或截止已过 | `LATE` | 不修改已运行的历史 |
+| 超出未来窗口 | `INPUT_WINDOW` | 减少发送提前量或恢复 |
+| 席位缺输入 | 最多保留前两帧的方向，技能始终为 0 | 正式帧以补缺结果为准 |
+| 不同玩家不同延迟 | 各自独立收集与补缺，整场继续推进 | 同一正式帧必须一致 |
+| Worker 落后 | 固定 Tick 连续补帧，最多追赶指定次数 | 无跳帧，超过预算报告 `OVERLOAD` |
 
-~~~text
-当前逻辑状态 + 这一帧正式采用的玩家输入
-    -> 同一套战斗规则推进一步
-    -> 新逻辑状态 + 该帧事件/状态 hash
-~~~
+缺输入计数器与上一帧方向**必须按席位保存**。例如玩家上一正式帧向右移动，连续缺输入时最多两帧沿用该方向，第三帧补零；每个缺输入帧的技能均补零。玩家断线时是否立即清空方向由合同规定；本课选择**断线后直接清空旧会话 future pending，之后每 Tick 按缺输入策略推进**，不会无限重复施法。
 
-Server 必须运行这套 Core，才能决定正式战斗结果、拒绝过期或冲突输入，并独立计算 AI、移动、技能、命中、HP 和胜负。客户端也运行同一套 Core，以便及时响应操作并复现正式帧。双方都持有模拟状态，但权威责任不同：**Server 的状态和结果是正式依据；客户端的模拟用于快速反馈，收到确认后必须服从 Server 采用的输入和检查结果。**
+### 1.2 输入序列、席位、帧号的关系
 
-本课中，Server 控制的地面敌人与飞行敌人不会逐帧把“敌人移动命令”发给客户端。双方 Core 都根据该帧开始时的状态、固定 AI 规则和相同地图资产与兼容的客户端、Server程序版本，派生敌人的目标、移动和施法。因此敌方 AI 结果也能从输入记录重演。地图ID、地图版本和地图资产hash用于确认双方加载了相同地图。战斗规则随客户端与Server程序版本发布，不通过源码字节hash协商；版本兼容由发行包和匹配服务的程序版本合同负责。
+`seat_id` 由加入 Battle 时的服务端绑定分配，不能仅凭客户端提交的 `unit_id` 当作权限。本课使用 `seat_id + frame` 作为同帧幂等键：首次合法输入生效，相同内容重复提交返回成功，不同内容返回 `CONFLICT`。输入必须由 Gateway 当前会话与 Battle 授权共同校验。客户端不可以指定获胜方、受到的伤害、Server 帧时间或 Worker 索引。
 
-#### 用第 41 帧走一遍
+一条完整正式记录中保留各玩家的实际采用输入及 `supplied` 标志。正式记录顺序先按逻辑帧递增，再按固定 Seat 顺序处理；用 `pairs()` 遍历玩家表决定模拟顺序是禁用写法，因为 Lua table 迭代顺序不能成为跨端的确定性合同。
 
-假设客户端和 Server 都已确认到第 40 帧，玩家按下“向右”：
+### 1.3 输入提前量与客户端体验
 
-1. Unity 把意图编号为目标第 41 帧，并放进待发送输入队列。
-2. 为了不让玩家等待网络往返，Unity 可以先用这条意图推进本地预测模拟。屏幕显示预测位置，但这还不是 Server 的正式确认。
-3. Server 到达第 41 帧的输入截止点。如果输入按时到达，就采用向右输入并标为 supplied=true；如果没有收到，就按补缺规则确定第 41 帧输入并标为 supplied=false。
-4. Server 用正式输入和相同 Core 推进第 41 帧，同时派生敌方 AI、技能与伤害，最后生成该帧的 FrameRecord。
-5. Unity 收到记录后，用记录里的正式输入推进“已确认模拟”，并比较 hash。如果预测输入正好被采用且 hash 相同，就继续确认；如果 Server 采用了补缺输入或 hash 不同，Unity 从最近的已确认状态恢复，再重演之后还未确认的本地输入。
-6. 渲染画面跟随预测模拟，并向确认后的正式结果平滑收敛。Transform 只负责显示位置，不能反过来改写逻辑 Core 的坐标。
+默认提前量两帧、预测上限八帧，是供本地实操起步的参数；公网 RTT 大于提前量覆盖区间时会出现大量迟到或超窗。必须实测并记录 40/80/120/200ms RTT 与抖动条件。客户端采用 `frame = last_confirmed + lead` 的窗口机制时，还需要保证帧编号**单调分配且不重复覆盖**；不能每个 Update 都写同一未来帧。服务器的具体起始执行时刻和客户端的输入 lead 在 Join Response 中约定或基于明确的当前 `frame/deadline` 计算。
 
-客户端内部可以先理解成两个逻辑副本：
+低延迟动作反馈不是可选优化：玩家本地按键应该立即进入 predicted Core 并显示可撤销的预备效果。正式结果依然由 confirmed Core 决定。若玩家连续八帧无法获得确认，应停止盲目继续预测、展示连接状态并走恢复流程，而非持续把 predicted 状态漂移到未来。
 
-- **Confirmed（已确认）**：按 Server 已正式发布的帧记录推进，表示目前能证明与权威时间线一致到哪里。
-- **Predicted（预测中）**：从 Confirmed 出发，再应用尚未确认的本地输入，供画面快速响应。它可以领先，但不能把自己的结果当成正式胜负或 HP。
+### 1.4 TCP 与可靠性
 
-例如 Confirmed 到第 40 帧，Predicted 已经先算到第 43 帧。此时收到第 41 帧记录，Unity 先用正式记录确认第 41 帧，再从这个状态重演本地仍待确认的第 42、43 帧。**回滚不是把画面瞬间倒带给玩家看，而是在逻辑副本中恢复状态并重算；随后渲染层再平滑处理位置差异。**下一节解释为什么需要预测，后文再实现输入窗口、Checkpoint、重演和表现收敛。
+沿用 FlyWow 已有 TCP/Protobuf Envelope、握手、2 字节 big-endian netpack framing。TCP 字节有序不等于固定 Tick 的业务时序保证；失包可能出现队头阻塞，服务端仍需帧截止、future window、重演与断线恢复。网络线程不访问 Unity GameObject。Gateway 不调用 Native Battle、不持有 A* Context、不跨 Cluster 传 fd 或 socket buffer；仅转发已经解码的值记录。
 
-#### 记住这条边界
+## 2. 确定性 C++ Core：从 State 到 Checkpoint
 
-~~~text
-每帧常规同步：输入意图 -> Server 选定正式输入并推进 -> 输入记录 + hash
-加入/恢复：必要时额外发送完整 Checkpoint
-客户端不能提交：权威坐标、HP、命中、死亡、敌方 AI 结果
-~~~
+### 2.1 为什么同一份 C++ 仍需要确定性纪律
 
-本课选用 TCP 传输消息。TCP 会影响数据何时到达，但不会替 Battle 决定帧号、输入截止、补缺、迟到处理或权威结果。下一节先看客户端为什么要预测；1.3 再逐项定义按时、缺失、重复、迟到和超窗输入的处理。
+客户端与服务端共享 C++ 源代码可以减少两套规则产生的差异，但不能自动保证所有平台逐帧相同。浮点取整、未定义行为、容器迭代、内存布局、并发写入、外部时间和随机源仍可能造成分歧。课程统一使用有符号 64 位世界毫米坐标、明确的整数运算、固定处理顺序和显式小端字节协议。
 
-### 1.2 为什么仍然有本地预测
+必需合同是客户端和服务端对同一个模拟版本、同一份正式输入，按相同逻辑帧得到相同的可验证结果；还必须能拒绝版本不兼容的客户端。本课选用的实现是共享 C++17 模拟源代码，分别编译为 Linux 的 Skynet Native 依赖和 Windows 的 Unity DLL；Skynet Lua负责连接授权、输入截止、帧调度、断线恢复和Replay编排，Unity C#负责输入采集、预测回滚和表现。该实现方便教学和跨端一致性验证，但不是所有商业帧同步游戏唯一的部署方式；另一种方案是客户端与服务端各自实现模拟规则，再用跨平台Golden和一致性测试约束。若修改Native模拟代码，本课必须同时更新两端构建产物并递增simulation_version；运行中的Battle不切换模拟版本。本课采用精确版本匹配，不实现源码Hash注册或多版本灰度平台。
 
-若 RTT=100ms，先提交输入、等 Server 回来再启动移动，手感会直接承担这个 RTT。本课 Unity 在下一次本地固定步就使用按键意图推进预测 Core；施法按键在当前渲染帧先显示可撤销黄闪。Server 结果到达后，confirmed Core 用正式输入推进并核对 hash，predicted Core 从 confirmed Checkpoint 恢复，再重演还未确认的意图。
+严禁将正式战斗计算交给 Unity Rigidbody、NavMeshAgent、动画事件或 `Time.deltaTime`。Unity 的秒与米仅出现在视图边界。例如 `x_mm=1500` 对应 Unity `x=1.5`；负数是相对世界原点的另一侧，不是非法坐标。地面 Y 来自 BMAP；空中 Y 是 Core 逻辑状态，2.5D BMAP 不能凭空提供桥上桥下同 XZ 的多层地面，也不能表达任意楼板和禁飞体积。
 
-例如 confirmed=40、predicted=43：Server 正式采用第 41 帧的补缺输入而没有采用本地预测的右移。confirmed 执行 Server 的 41；predicted 恢复 confirmed 的 41，依次重演仍保留的 42、43。正式 HP、死亡与结束读取 confirmed；渲染位置可以读取 predicted，并做短时间收敛。Transform 不写回 Core。
+### 2.2 每帧固定的处理次序
 
-初始预测提前两帧，Server 创建后给两个 Tick 的准备时间。提前量是明确的调度参数，不是用 `Time.deltaTime` 推断正式帧号。最多允许比确认帧前进 8 帧；网络停顿超过窗口时停止继续猜测，并通过恢复入口获取新的正式状态。
+```text
+(1) 读取上一帧已提交 State + 完整 FrameInputs
+(2) 校验 FrameInputs 的席位集合、方向、技能和帧号
+(3) 计算 AI 意图（按单位 ID，使用同一帧起始状态）
+(4) 依固定单位 ID 顺序执行移动；地面调用 FlyWow，空中按自己的三轴规则
+(5) 执行技能/冷却/生成弹丸
+(6) 推进全部逻辑弹丸，积累待提交伤害
+(7) 同一帧统一结算伤害、死亡与胜负
+(8) 检查不变量、提交新 State、维护导航事实
+(9) 序列化本帧 Checkpoint，计算诊断 State Hash
+```
 
-本课固定使用 2 tick 作为输入提前量基准；每 tick 为 50ms，因此样例提前量为 100ms。这个选择参考 Unity Netcode for Entities 的默认 `TargetCommandSlack`（2 ticks）：客户端把模拟时间保持在 Server 前方，让输入有时间到达。两套实现细节不同，所以这是可复用的起始值，不是适用于所有游戏和网络的通用保证。Photon Quantum 的 Server 缺输入等待容忍值、输入延迟偏移和回滚窗口分别是不同参数，不能把它们当成同一个“提前量”。
+位置、HP、冷却、弹丸的 `next_id`、AI 目标与规划状态、路径推进 Cursor、动态占位与影响未来决策的计数器，都必须有一致的恢复规则。仅保存单位坐标再临时调用一次 A*，如果改变后续移动路线或重规划节奏，则不是正确回滚。
 
-课程不要求测量每个玩家的单向延迟，也不要求按连接动态协商这个值。客户端仍立即本地预测以响应操作，Server 按目标帧截止时间确认正式输入。若输入超过截止时间，仍按本课的迟到规则处理；预测和提前量降低迟到概率，不会让迟到输入自动改写 Server 历史。客户端预测最多比确认帧前进 8 tick；这不是输入提前量，也不是 Server 等待缺失输入的时间。实际延迟与丢包验证用于确认这些边界和恢复行为，不用于推导一个能保证所有网络条件的数字。参考：[Unity Netcode for Entities 的 prediction/command slack](https://docs.unity.cn/Packages/com.unity.netcode%401.5/manual/intro-to-prediction.html)、[Photon Quantum 的独立输入与回滚参数](https://doc-api.photonengine.com/en/quantum/current/class_photon_1_1_deterministic_1_1_deterministic_session_config.html)。
+从业务开发角度，用候选 State 提交可以保证输入非法或模拟异常时不留下半帧；但单靠 `State before = state_` 不足以回滚 FlyWow NavigationContext：AdvancePath 可能已经修改动态占位和 Cursor。**本课要求状态事务同时覆盖 Battle State 与导航事实**，详见第 3 节。
 
-### 1.3 缺输入、迟到与批量到达
+### 2.3 技能边界：保留最小例子，避免硬编码成为框架合同
 
-每条输入都带目标帧号。Server 检查的是“这条输入对应的帧还能不能接受”，不是“消息现在才到，所以把它立即应用到当前帧”。输入先进入有限的未来窗口，等该帧截止时，Core 才把正式输入推进为一帧战斗结果。
+| 输入 | 规则 | 结果阶段 |
+|---|---|---|
+| J（近战） | 校验目标类型、距离、冷却 | 当前帧立即登记伤害 |
+| K（表现弹丸） | 伤害在施放时结算，飞行仅是表现 | 不得落地时再次伤害 |
+| L（逻辑弹丸） | 到达目标或超时决定结果 | Core 维护弹丸完整状态 |
 
-|情况|正式规则|
+技能定义作为一份 Battle 创建时冻结的不可变数据，例如技能 ID、范围、冷却、伤害、目标类型、效果类型。不要把 `damage=20`、`cooldown=24` 随意散落到 Native 分支、Lua 和 C# 三处；两端共享规则定义的同一内容。首版可以将配置离线生成进 C++ 头或只读二进制配置表，不为此引入 Unity Lua VM。
+
+服务端 Skynet Lua 热更只能修改本服务端拥有的业务/调度；影响模拟结果的规则更新必须同时覆盖两端，已开始的 Battle 保持其创建时规则，不允许热更后半场突然改变技能伤害。Native 行为变化通过标准客户端/服务端构建发布；本课不实现 Native DLL 原地热替换。
+
+### 2.4 Checkpoint 格式
+
+本课使用 Checkpoint V3，新增单位的统一 Profile ID 和上次规划的目标坐标；旧格式应重新生成，不实现历史格式迁移。
+
+Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`，也不能把指针、堆内存地址、Skynet handle、Nav A* heap scratch 放入持久格式。
+
+每个 Checkpoint 至少包含：格式版本、逻辑帧号、胜负、固定顺序的单位表、单位 HP/冷却/AI 状态、弹丸、路径跟随逻辑字段以及必要的确定性规则计数器。玩家席位信息属于 Worker Runtime；客户端重连还需要 Worker 提供所需的席位绑定和输入收集状态，但不能把当前 socket fd 当作持久身份。
+
+反序列化采用“先完整检查候选数据，再提交”的原子语义：验证格式、长度、单位数量、ID 排序、范围、重复 ID、所有引用、帧数、剩余路径点、Cursor 和导航占位，再替换 Engine State。失败必须保持上一个已提交状态可继续使用。回滚恢复不能先把 State 替换，再发现 Navigation 重建失败而返回错误；应构造候选 NavigationContext，验证后再整体交换。
+
+`State Hash` 采用对规范化 Checkpoint 字节执行的 FNV32（诊断用途）。它不承担身份鉴权、软件版本控制或资产完整性检验。**移除旧文档的 `rules_hash`、`fs_rules_hash()` 以及 CMake 的源码 SHA 拼接机制。** 地图发布资产仍遵守 `manifest` 的 SHA-256 校验；原有 Proto 版本和 Checkpoint 格式版本继续保留。
+
+
+## 3. 导航为什么必须纳入帧同步的确定性状态
+
+只保存单位坐标还不够。地面AI会缓存Path、下一路点下标和线段进度；这些值影响下一Tick的移动。正式帧、回滚、断线恢复和Replay必须能还原它们，否则同一输入在恢复后可能发生新的A*、改走另一条路线，客户端与服务端就会分歧。
+
+本课采用 FlyWow 已存在的 `NavigationContext`、`DynamicOccupancy`、`FindPathToRange` 和 `AdvancePath`，不额外编写A*或导航占位系统。对于普通空地到指定点的规划可调用 `FindPath`；追击**已经占位的目标单位**时，用 `FindPathToRange` 找目标附近可站的 Cell，以免目标自己所在格变成不可达终点。
+
+一场Battle的地面单位走下面的闭环：
+
+```text
+预加载 BMAP (OS进程一次)
+    -> 创建Battle Native Engine + 私有NavigationContext
+    -> 初始地面单位按ID登记DynamicOccupancy
+    -> 需要寻路时 FindPathToRange (本场动态阻挡事实)
+    -> 保存Path / Cursor / target_id / 下一次规划帧
+    -> 正常Tick调用 AdvancePath (内部MoveUnit复验并提交footprint)
+    -> 阻挡/目标变化/规划到期 -> 定时重规划
+    -> Checkpoint V3保存路线点+Cursor+节流状态
+    -> Restore重建独立NavigationContext与全部地面占位
+    -> 正式帧继续推进并计算相同State Hash
+```
+
+**关键例子：** 路线为 `A -> B -> C` 时，`next_point=1` 表示正在从A走向B；`progress_mm=300` 表示本段已推进300毫米。如果回滚只恢复坐标却把Cursor重置到A，下一帧便可能反向运动。`Path`可由Checkpoint中的世界坐标点重建；FlyWow的A* NodeScratch、Heap和Context内存指针不序列化。
+
+地面玩家使用FlyWow `MoveUnit`提交动态占位，AI沿Path使用`AdvancePath`；空中AI按确定性三轴逻辑行动，不冒充3D NavMesh。技能、弹丸、HP的原理集中在Core中，Gateway不直接调用Navigation。
+
+## 4. 先明确实操规则：只复制整文件
+
+本课给出下面全部文件的最终内容。**没有“先复制一半、再在第八节追加某些函数”的步骤。** 实操时按下一节顺序建立文件；对于第二课已有文件，先保留Git工作副本，再用所列最终全文覆盖。生成的Proto/Lua Registry/C#文件由已有构建脚本生成，禁止手工编辑。
+
+| 类别 | 文件及处理方式 |
 |---|---|
-|目标帧仍未截止，且位于当前帧之后 8 帧以内|接受并暂存；目标帧到来时再使用|
-|目标帧截止时没有输入|生成正式补缺输入；方向最多沿用两帧，之后停止；技能永不沿用|
-|消息到达时该帧截止时间已过|该条输入返回 LATE，不能改写历史；Timer 执行晚也不重新开放截止时间|
-|目标帧大于当前帧+8|该条输入返回 INPUT_WINDOW|
-|同一帧重复相同输入|该条结果为 OK，幂等，不增加第二份 pending|
-|同一帧收到不同输入|该条结果为 CONFLICT；先接受的输入保持不变|
-|一个请求里的输入条数为 0|请求级 EMPTY_INPUT 拒绝，不产生逐项结果|
-|一个请求里的输入条数超过 8|整批以请求级 INPUT_BATCH_TOO_LARGE 拒绝，不接受其中任何一条|
+| 整文件写入 | `server/native/frame_sync/CMakeLists.txt` |
+| 整文件写入 | `server/native/frame_sync/frame_core.h` |
+| 整文件写入 | `server/native/frame_sync/frame_core.cpp` |
+| 整文件写入 | `server/native/frame_sync/frame_binding.cpp` |
+| 新建 | `shared/battle/unit_profiles.cfg` |
+| 整文件写入 | `server/native/frame_sync/frame_test.cpp` |
+| 整文件写入 | `server/scripts/lessons/prepare_frame_sync.py` |
+| 整文件写入 | `shared/protocol/navigation_query.proto` |
+| 整文件写入 | `server/config/frame_sync.lua` |
+| 整文件写入 | `server/lualib/battle/frame_sync/runtime.lua` |
+| 整文件写入 | `server/service/battle/frame_sync/worker.lua` |
+| 整文件写入 | `server/service/battle/frame_sync/dispatch.lua` |
+| 整文件写入 | `server/service/battle/frame_sync/main.lua` |
+| 整文件写入 | `server/service/gateway/frame_sync/proxy.lua` |
+| 整文件写入 | `server/service/gateway/frame_sync/main.lua` |
+| 整文件写入 | `server/config/frame_battle_process.lua` |
+| 整文件写入 | `server/config/frame_gateway_process.lua` |
+| 整文件写入 | `server/tests/frame_binding_test.lua` |
+| 整文件写入 | `server/tests/frame_runtime_test.lua` |
+| 整文件写入 | `server/tests/frame_sync_integration.py` |
+| 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs` |
+| 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs` |
+| 整文件写入 | `unity/BattleNavigation/Assets/BattleNavigation/client/FrameBattleController.cs` |
 
-#### 截止、定稿与“迟到输入是否还能生效”
+已存在的第二课`server/scripts/linux/run_server.sh`、`server/tests/gateway_handshake_client.py`与地图发布链不直接替换。唯一例外是FlyWow已有的Gateway文件：本课不覆盖或自动改写它，而是让你亲自按上下文修改一个很小的发送校验合同，并先用测试证明旧行为、再审计修改后的边界。
 
-本课采用**2 tick 固定输入提前量 + 截止后定稿**，Server 不回滚已执行帧。50ms 的逻辑帧下，2 tick 等于 100ms。它参考 Unity Netcode for Entities 的 2 tick `TargetCommandSlack` 默认值；这里只借用相近的输入提前概念，不声称两套合同完全相同，也不保证 100ms 足以覆盖每条公网路径。客户端采样后立即本地预测，同时把带目标帧号的命令提前发送；Server 在目标帧截止前收集并确认输入。
+## 5. Native、Protocol、Skynet与Unity：按文件提供最终完整代码
 
-用 41、42、43 帧看两种结果：
+每个文件的职责、Owner、输入/输出及失败语义先在段落里说明；紧接着是其最终全文。可以逐文件复制，不需要翻到另一章节合并同一文件的第二段代码；Gateway 源码变更按专节由学习者亲自完成和审计。
 
-- **41 帧输入在截止前到达**：Server 将它记为 `supplied=true`，随后依次执行 41、42、43。客户端收到正式记录后，对照 Server 输入；如有预测差异，从最近确认状态恢复并重演未确认帧。
-- **41 帧输入在截止后才到达**：Server 已用补缺输入执行 41，随后可能已执行 42、43。该命令返回 `LATE` 并丢弃，不顺延到 42，也不触发 Server 重算 41–43。客户端收到 41 的正式记录后，用正式输入重演自己的预测历史；这只能校正客户端，不能让被拒绝的迟到意图改变 Server 结果。
+### 5.0 `shared/battle/unit_profiles.cfg`
 
-因此，**本课里的回滚是客户端预测校正，不是 Server 权威模拟回滚**。`supplied=false` 的影响会传递到 42、43 的权威状态；客户端必须接受 Server 的输入记录和 hash。若输入频繁迟到，按本课既定的 LATE、预测窗口耗尽和恢复合同处理；本课不按单个玩家动态测量或调整提前量。生产系统若要改用其他固定配置，应作为独立产品决策，不能默认为每个连接自动调参。若产品要求已截止的 41 帧仍能改变正式战斗，就必须另行设计 Server 有界回滚：保存回滚窗口内完整逻辑状态和输入历史，对 41 的修正重演 41 至当前帧，并规定哪些事件/伤害/死亡等副作用在提交边界前不得对外不可逆发布。本课 Runtime 不保存这段 Server 历史，不能声称具备该能力；这也是另一套需要单独实现与验证的合同。
+**操作：新建文件。** 这是本课唯一的 Unit Profile 配置源。每个单位原型只对应一条记录；地面寻路参数、移动速度、飞行边界等字段都在这条记录中。Skynet 和 Unity 启动时都把同一份文件交给 `fs_preload_unit_profiles`，Core 校验后发布不可变快照；每场 Engine 固定持有创建时的快照。
 
-帧同步可以通过客户端预测降低本地操作反馈延迟，但它不能保证每个迟到输入都被权威 Server 接纳。若玩法需要公网环境下稳定的即时操作响应和 Server 校正，状态同步版采用的本地预测/权威状态校正是独立方案；不能把这两种模型的输入与结果合同混写。帧同步版适合在其确定性、输入提前量和回滚边界都明确的前提下教学和评估。
+单位实例 `1001`、`2001`、`2002` 分别引用 Profile `1`、`2`、`1`。`profile_id` 只标识静态原型配置；实例 ID 标识战斗中的对象。飞行单位也必须引用有效 Profile，不能用 `0` 表示“没有 Profile”。飞行高度是单位动态状态，Profile 只定义速度、离地间隙和相对地面的最高飞行范围。
 
-#### 批量只改变传输方式，不改变每条输入的目标帧
+```text
+FWUP1 2
+1 1 150 100 200 600 1000 0 0 4
+0 1 1000
+1 1 3000
+2 1 1000
+3 1 1500
+2 2 150 100 0 0 0 200 10000 0
+```
 
-TCP 字节流可能因为网络调度、延迟和缓冲，让多条应用消息在短时间内连续到达。客户端也可以把多条不同帧的 FrameCommand 放进一个 FrameInputRequest，减少消息数量。无论哪一种情况，Server 都不能把它们当成“当前帧连续执行几次”；每条命令仍按自己的 frame 字段判断截止时间和未来窗口。
+每条 Profile 主记录字段依次为：`profile_id`、移动模式（`1` 地面、`2` 空中）、每 Tick 基础移动距离（毫米）、最大 HP、导航半径（毫米）、最大台阶（毫米）、最大坡度（千分比）、飞行离地间隙（毫米）、相对地表的最大飞行高度（毫米）、Area 条目数。随后按 Area 条目数读取 `area_id / allowed(0|1) / cost_permille`。地面 Profile 的飞行字段为 0；空中 Profile 的地面导航字段和 Area 条目数为 0。空中 Profile 仍在同一张表中，只是不调用地面寻路。
 
-本课每个 FrameInputRequest 最多装 8 条命令。批次长度合法时，Server 按数组顺序逐条处理，允许部分接受。FramePushResponse 增加 input_results；其中每项包含目标 frame 和该项结果 code，顺序与请求中的输入一致。外层 code 表示整条请求是否可处理，不代表批内所有输入成功：
+文件上限 64 KiB、最多 128 条 Profile，每条最多 256 个 Area。重复或为 0 的 Profile ID、重复 Area、模式与字段不匹配、数值越界、截断或尾部多余内容均拒绝加载。加载器把同一行中的地面导航字段映射到 FlyWow 公开 `NavigationProfile` 参数，传给 `GridPathfinder`；这只是调用 API 所需的数据形状，不是第二份配置或第二张 Profile 表。文件校验和 Unit Profile 快照由课程 Core 持有，FlyWow 继续拥有导航算法与导航 API。
 
-- 外层 code=OK：请求格式和批次大小合法；逐项结果看 input_results。
-- 每项 code=OK：这条输入已进入 pending，或它是此前已接受输入的相同重传。这只表示输入被暂存，不代表该帧已经模拟或成为正式结果。
-- 每项 code=LATE/INPUT_WINDOW/CONFLICT/BAD_INPUT/FINISHED：对应 frame 的这条输入被拒绝；其他输入仍按各自结果处理。
-- 外层 code=EMPTY_INPUT：批次为空；不处理输入，input_results 为空。
-- 外层 code=INPUT_BATCH_TOO_LARGE：批次超过 8 条；整批拒绝，input_results 为空。
+后续增加单位静态属性时，扩展这条 Unit Profile 记录和同一加载校验；不再另建飞行 Profile、战斗 Profile 等并行表。`profile.navigation` 是把本行地面字段保持成 FlyWow API 所需的参数形状，只有一个 `profile_id` 和一条配置记录。场景初始 roster 只写实例引用哪个 `profile_id`；速度、最大 HP、移动模式、地面通行与飞行边界都不能在模拟代码里另写一份。
 
-举例：Server 当前帧为 100，一批输入依次是第 99、102、109 帧。第 99 帧已过时，第 102 帧仍在未来窗口，第 109 帧超过 100+8。响应外层 code 为 OK，逐项结果为：
+### 5.1 CMake 构建边界与宿主接入
 
-~~~text
-frame 99  -> LATE
-frame 102 -> OK
-frame 109 -> INPUT_WINDOW
-~~~
+#### FlyWow Navigation 的 CMake 目标归属
 
-只有第 102 帧被暂存。它到截止时是否成为本帧正式输入，要看随后服务器发出的 FrameRecord。FrameRecord 的 input 和 supplied 才是客户端确认正式时间线的依据；批次接收结果不是战斗结果。
+**操作：完整替换 `server/third_party/skynet-flywow/navigation/native/CMakeLists.txt`，删除 `server/third_party/skynet-flywow/navigation/native/grid_map/CMakeLists.txt`。** `grid_map` 是完整 Navigation 的内部实现，不单独构建、发布；因此完整静态库的源文件、测试和 Benchmark 都由 Navigation 模块根 CMake 管理。
 
-#### 延迟、输入积压与模拟过载是三种不同情况
+该 CMake 定义一个真实静态库 `flywow_navigation_core`，以及一个不产生文件、只作为消费者名称的别名 `FlyWow::Navigation`。Skynet Lua 需要 Binding 时才启用 `flywow_navigation_lua`，产物名为 `flywow_navigation_native.so`。C++ 消费者链接 `FlyWow::Navigation`；Lua 运行时加载 Native .so；不会把三个名称当作三个库同时链接。
 
-- **网络输入积压**：旧帧可能过期，新帧可能仍在窗口内；按上面的逐帧结果处理。积压不允许倒回模拟。
-- **空输入请求**：返回 EMPTY_INPUT；它与超限批次是不同的请求错误。
-- **单条请求过大**：整批 INPUT_BATCH_TOO_LARGE 拒绝；客户端应拆分后重试，不能原样无限重试。
-- **Server Worker 模拟落后墙钟**：这是计算追赶问题，不是客户端输入批次。最多连续补 4 帧；每一帧仍单独执行和记录，不扩大 dt、不跳帧。超过追赶预算，本场显式 OVERLOAD 并停止。
+完整替换后的文件如下：
 
-一个 Worker 拥有多场 Battle，每场各自保存输入截止、当前帧与 Native 实例。它不能为了等某个连接而暂停其他 Battle，也不能把迟到输入塞进已经结束的帧。
+```cmake
+# 职责：定义完整 FlyWow Navigation Native 库、Lua Binding、测试与 Benchmark。
+# 边界：Grid Map 是 Navigation 的内部实现；不单独构建或发布 Grid 库。
+# 使用方式：
+# - 同一 CMake 构建树中的 C++ 消费者通过 FlyWow::Navigation 链接静态库。
+# - Skynet Lua 构建时设置 FLYWOW_NAVIGATION_LUA=ON，并提供 SKYNET_ROOT；
+#   生成的 flywow_navigation_native.so 由 flywow_navigation.lua 加载。
+# 产物：静态核心库、可选 Lua Native .so、测试与 Benchmark 可执行文件。
+cmake_minimum_required(VERSION 3.16)
+project(flywow_navigation LANGUAGES CXX C)
 
-### 1.4 传输选择
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-本版复用已经存在的 FlyWow TCP 长连接、应用握手与 Protobuf。TCP 保证字节流有序到达，不保证低延迟：丢包会导致队头阻塞，因而可能让旧帧输入在截止后成批到达。生产协议可以重复携带尚未确认的近期输入，以便获得逐帧接收结果；相同输入重传必须幂等，但这不能绕过 TCP 队头阻塞，也不能重开已经定稿的帧。TCP 底层把字节合并或拆分，不会改变 Gateway framing 后的应用消息边界；若多个 FrameInputRequest 连续到达，仍逐条按各自目标帧处理。若一个请求显式携带多条 FrameCommand，则按 1.3 的逐项结果合同处理。帧号、缺输入规则、窗口、确认与恢复仍由 Battle 定义，不能把 TCP 的可靠性当作业务确认。
+enable_testing()
+find_package(Threads REQUIRED)
 
-本课不会另外创造一套 UDP 会话/加密/拥塞控制。商业产品能选择可靠流或成熟的数据报传输，取决于目标网络与玩法；帧同步并不由 TCP/UDP 决定。这里明确保留 TCP 的队头阻塞风险，最后给出实际延迟/丢包验证步骤，不宣称本机验收证明所有公网实时场景。
+# 完整 Navigation 核心只有一个静态库目标；Grid Map 源码只是其中一部分。
+add_library(flywow_navigation_core STATIC
+    grid_map/bmap_reader.cpp
+    grid_map/grid_map.cpp
+    grid_map/map_registry.cpp
+    grid_map/nav_result.cpp
+    grid_map/dynamic_occupancy.cpp
+    grid_map/navigation_context.cpp
+    grid_map/navigation_profile_registry.cpp
+    grid_map/grid_pathfinder.cpp
+)
 
-## 2. 先做可恢复的确定性模拟，不先堆网络文件
+# 静态库还会链接进 Lua MODULE，因此 Linux 下需要位置无关的目标文件。
+set_target_properties(flywow_navigation_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
-### 2.1 坐标与状态
+# 对外头文件目前位于 grid_map；通过 PUBLIC 传递给链接 Navigation 的消费者。
+target_include_directories(flywow_navigation_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}/grid_map")
+target_link_libraries(flywow_navigation_core PUBLIC Threads::Threads)
 
-长期单位位置是有符号 64 位毫米 `x/y/z`。`GridPos` 只出现在导航内部；Unity 显示才除以 `1000f`。地面高度来自 BMAP，空中单位的高度是可变逻辑事实。不能把物理 Rigidbody、NavMeshAgent、Transform 或动画回调用于正式移动与命中。
+# 给消费者稳定的模块级名称；ALIAS 不会生成第二份库文件。
+add_library(FlyWow::Navigation ALIAS flywow_navigation_core)
 
-本课每帧固定顺序：校验玩家意图 → 帧号递增 → 从帧开始状态产生 AI → 按 ID 移动 → 校验/施法 → 推进弹丸 → 同帧统一伤害提交 → 死亡/结束。最后统一伤害避免处理 ID 小者时先杀死另一方、取消对方已经应当发生的同帧攻击。
+# 编译选项按工具链区分，保持同一 Navigation 核心可被 Linux Server 与 Windows 客户端宿主构建。
+if(MSVC)
+    target_compile_options(flywow_navigation_core PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(flywow_navigation_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
-整数移动预算：`3000mm/s × 50ms / 1000ms = 150mm`。双轴分别 `106mm`，三轴分别 `86mm`；这是编译进规则的量化近似，不在不同平台调用浮点 sqrt。地面/空中子步不超过 `cell_size/4`，X、Z、Y 顺序固定。地面校验通行、clearance 和地表高差；空中只验证其自己的空间边界。飞行 AI 在障碍地表变高时爬升；接近目标时会调整高度，客户端按同样规则派生，不接受玩家发来的敌人坐标。
+# 测试和 Benchmark 通过公开别名链接，验证的就是消费者看到的 Navigation 目标。
+add_executable(grid_map_test grid_map/tests/grid_map_test.cpp)
+target_link_libraries(grid_map_test PRIVATE FlyWow::Navigation)
+if(MSVC)
+    target_compile_options(grid_map_test PRIVATE /UNDEBUG)
+else()
+    target_compile_options(grid_map_test PRIVATE -UNDEBUG)
+endif()
+add_test(NAME grid_map_test COMMAND grid_map_test)
 
-地面 AI 使用 FlyWow 现有 `GridPathfinder::FindPathStatic`；每个 Engine 独占 `NavigationContext` scratch。当前不保存路线缓存，所以恢复当前逻辑状态后可重新查询；scratch 的查询代数/堆槽不是玩法状态，不能直接序列化其指针。查询成本按地图与单位数增长，最后要求单独测 CPU；不会用“只有几个单位”替代这个成本说明。
+add_executable(navigation_test grid_map/tests/navigation_test.cpp)
+target_link_libraries(navigation_test PRIVATE FlyWow::Navigation)
+if(MSVC)
+    target_compile_options(navigation_test PRIVATE /W4 /permissive- /UNDEBUG)
+else()
+    target_compile_options(navigation_test PRIVATE -Wall -Wextra -Wpedantic -UNDEBUG)
+endif()
+add_test(NAME navigation_test COMMAND navigation_test)
 
-### 2.2 技能基础框架
+# Benchmark 只构建，不注册为自动测试，避免把性能采样混入正确性门禁。
+add_executable(navigation_benchmark grid_map/benchmark/navigation_benchmark.cpp)
+target_link_libraries(navigation_benchmark PRIVATE FlyWow::Navigation)
+if(MSVC)
+    target_compile_options(navigation_benchmark PRIVATE /W4 /permissive-)
+else()
+    target_compile_options(navigation_benchmark PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
-|技能|效果类型|目标移动类型|正式伤害发生时刻|冷却|
-|---|---|---|---|---|
-|J 近战|Instant|地面|施放成功的当前帧|12帧=600ms|
-|K 表现弹丸|VisualBolt|地面/空中|施放成功的当前帧；之后飞行仅表现|24帧=1200ms|
-|L 逻辑火球|LogicalBolt|地面/空中|弹丸到达目标的逻辑帧|24帧=1200ms|
+option(FLYWOW_NAVIGATION_LUA "构建供 Skynet Lua 5.4.7 加载的 Native Binding" OFF)
+set(FLYWOW_NATIVE_OUTPUT_DIR "" CACHE PATH "FlyWow Lua Native .so 的输出目录")
 
-定义与运行态分开：Skill 定义保存范围、冷却、伤害、Effect 与目标类型掩码；Unit 只保存各技能 ready 帧；Bolt 保存实例 ID、施法者、目标、过期帧、位置和到达伤害。施放失败不消费冷却，不创建弹丸。逻辑弹丸满槽拒绝施法；表现弹丸满槽仅省略视觉飞行，正式伤害和冷却仍提交，避免表现资源决定战斗结果。Target 根据合法类型选择最近活敌人，等距按 ID；正式距离包含高度，不再只算 XZ。
+if(FLYWOW_NAVIGATION_LUA)
+    # 该 Binding 使用 Linux Skynet ABI 和 ELF 链接选项；Windows Unity 只构建静态核心依赖。
+    if(NOT CMAKE_SYSTEM_NAME STREQUAL "Linux")
+        message(FATAL_ERROR "FLYWOW_NAVIGATION_LUA requires Linux and the host Skynet Lua ABI")
+    endif()
 
-表现弹丸和逻辑弹丸都可由渲染器画出来，但前者 `damage=0`，到达/消失不会再打一次伤害。逻辑弹丸速度采用三轴 Chebyshev 长度的整数归一，400mm/帧，最多存在60帧；目标死亡或到期即移除。两种魔法弹丸在本玩法中忽略地面障碍，不声称实现了射线遮挡。施法黄闪只是即时预备反馈，不等于命中。
+    # 必须使用宿主固定版本 Skynet 自带的 Lua 头文件，不能意外链接系统 Lua。
+    set(SKYNET_ROOT "" CACHE PATH "宿主固定版本 Skynet 源码目录")
+    set(SKYNET_LUA_DIR "${SKYNET_ROOT}/3rd/lua")
+    if(NOT EXISTS "${SKYNET_LUA_DIR}/lua.h")
+        message(FATAL_ERROR "Skynet bundled Lua headers not found: ${SKYNET_LUA_DIR}")
+    endif()
 
-Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部在 Checkpoint 中；回滚必须恢复它们，不能只把单位位置拉回。范围/伤害是业务定义，不塞进 Gateway，也不让导航模块依赖技能。
+    # 复用 FlyWow 通用 Lua Binding 支持库；Navigation 自己只实现领域 API 适配。
+    if(NOT TARGET flywow_lua_binding)
+        add_subdirectory("${CMAKE_CURRENT_SOURCE_DIR}/../../lua-binding"
+                         "${CMAKE_BINARY_DIR}/lua-binding" EXCLUDE_FROM_ALL)
+    endif()
 
-### 2.3 规范化 Checkpoint
+    add_library(flywow_navigation_lua MODULE navigation_binding.cpp)
+    target_include_directories(flywow_navigation_lua PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}"
+        "${CMAKE_CURRENT_SOURCE_DIR}/grid_map"
+        "${SKYNET_LUA_DIR}"
+    )
+    target_link_libraries(flywow_navigation_lua PRIVATE FlyWow::Navigation flywow_lua_binding)
+    target_compile_options(flywow_navigation_lua PRIVATE -Wall -Wextra -Wpedantic)
 
-不能 `memcpy(State)`：vector 内存、指针、padding 和编译器布局不同。这里逐字段写小端格式版本1。
+    # Lua Wrapper 名称与 Native 模块名称不同，避免 require 递归加载 Wrapper 自身。
+    set_target_properties(flywow_navigation_lua PROPERTIES
+        PREFIX ""
+        OUTPUT_NAME "flywow_navigation_native"
+    )
+    if(FLYWOW_NATIVE_OUTPUT_DIR)
+        set_target_properties(flywow_navigation_lua PROPERTIES
+            LIBRARY_OUTPUT_DIRECTORY "${FLYWOW_NATIVE_OUTPUT_DIR}"
+        )
+    endif()
 
-|布局|字节数|内容|
-|---|---:|---|
-|头|20|version/frame/winner/next_bolt/unit_count，各uint32|
-|每单位|52|id/camp/move_mode；XYZ各int64；hp int32；ready[3]各uint32|
-|弹丸数|4|uint32|
-|每弹丸|44|id/caster/target/expires/damage各4字节；XYZ各int64|
+    # 自定义 allocator 必须进入同一 DSO，避免其符号被其它模块实现抢先解析。
+    target_sources(flywow_navigation_lua PRIVATE
+        "${CMAKE_CURRENT_SOURCE_DIR}/../../common/native/skynet_allocator.cpp"
+    )
+    target_link_options(flywow_navigation_lua PRIVATE "-Wl,-Bsymbolic-functions")
+endif()
+```
 
-最大 `20 + 64×52 + 4 + 128×44 = 8984 bytes`，ABI 缓冲预算为16384 bytes。restore 先读候选值、验证版本/数量/范围/排序/引用，再唯一发布；坏状态不能留下半个新世界。每步异常也恢复旧 State。FNV32 仅用于逐帧分歧诊断，不用于抗作弊、安全身份或资产完整性；地图内容身份由已发布地图的版本与 SHA256 校验。
+在本课宿主的 CMake 中，通过 `add_subdirectory("${FLYWOW}/navigation/native" ...)` 引入这个模块，再用 `target_link_libraries(frame_core PUBLIC FlyWow::Navigation)` 接入。这样课程只依赖稳定目标名，不需要列举 FlyWow 内部 CPP 文件。
 
-### 2.4 新建 Native 文件
+#### 宿主 `server/native/frame_sync/CMakeLists.txt`
 
-在 WSL 仓库中创建以下文件。Core 属于宿主玩法；FlyWow 提供导航和 Lua Binding 公共实现，不把本课技能写进 submodule，不复制导航源码。CMake 编译固定子模块中的原始 source；Windows 构建关闭 Lua Binding，保留同一 Core。
+```cmake
+# 职责：把宿主帧同步Core分别构建成Windows Unity DLL与Linux Lua Native依赖。
+# 边界：课程宿主只链接固定FlyWow submodule公开的FlyWow::Navigation目标，不枚举导航实现源码。
+# 输入/输出：宿主frame_core与Binding源码 -> frame_core, lesson_frame_native, frame_test。
+# 不负责：重复枚举FlyWow内部CPP、生成规则源码Hash、修改Skynet源码。
+cmake_minimum_required(VERSION 3.16)
+project(lesson_frame LANGUAGES CXX)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+set(CMAKE_CXX_EXTENSIONS OFF)
 
-### server/native/frame_sync/frame_core.h
+set(FLYWOW "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet-flywow")
+add_subdirectory("${FLYWOW}/navigation/native"
+                 "${CMAKE_CURRENT_BINARY_DIR}/flywow_navigation" EXCLUDE_FROM_ALL)
 
-**操作：新建。** 把本场逻辑状态、单步输入和可恢复ABI固定下来。
+add_library(frame_core SHARED frame_core.cpp)
+target_include_directories(frame_core PUBLIC "${CMAKE_CURRENT_SOURCE_DIR}")
+target_link_libraries(frame_core PUBLIC FlyWow::Navigation)
+if(MSVC)
+    target_compile_options(frame_core PRIVATE /W4 /permissive- /EHsc /utf-8)
+else()
+    target_compile_options(frame_core PRIVATE -Wall -Wextra -Wpedantic)
+endif()
 
-学习导航：精读 State全部字段、step/save/restore以及handle的open/close配对。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+add_executable(frame_test frame_test.cpp)
+target_link_libraries(frame_test PRIVATE frame_core)
+if(MSVC)
+    target_compile_options(frame_test PRIVATE /UNDEBUG /utf-8)
+else()
+    target_compile_options(frame_test PRIVATE -UNDEBUG)
+endif()
+
+enable_testing()
+add_test(NAME frame_native
+         COMMAND frame_test
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap"
+         "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/battle/unit_profiles.cfg")
+
+option(LESSON_FRAME_LUA "构建Skynet Lua 5.4.7 Binding；Windows Unity构建时设OFF" ON)
+if(LESSON_FRAME_LUA)
+    set(SKYNET_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet/3rd/lua")
+    add_subdirectory("${FLYWOW}/lua-binding"
+                     "${CMAKE_CURRENT_BINARY_DIR}/flywow_lua_binding" EXCLUDE_FROM_ALL)
+    add_library(lesson_frame_native MODULE frame_binding.cpp)
+    target_include_directories(lesson_frame_native PRIVATE
+                               "${SKYNET_LUA_DIR}" "${FLYWOW}/lua-binding")
+    target_link_libraries(lesson_frame_native PRIVATE frame_core flywow_lua_binding)
+    set_target_properties(lesson_frame_native PROPERTIES
+                          PREFIX "" BUILD_RPATH "$ORIGIN")
+endif()
+```
+
+### 5.2 `server/native/frame_sync/frame_core.h`
+
+**操作：新建或整文件覆盖。** 确定性State、单席位C ABI、每场独占Navigation Context的公开合同。
 
 ```cpp
-// 职责：定义帧同步整数模拟、可恢复状态与稳定 C ABI；属于宿主 Battle，不属于 FlyWow。
-// 输入/输出：已发布只读地图与单帧玩家意图 -> 逻辑状态；不读取网络、墙钟或 Unity 表现状态。
-// ownership：Engine 共享持有不可变 GridMap，并独占 NavigationContext 与 State；C handle 由调用方成对 open/close。
+// 职责：第三课跨 Unity/Skynet 的确定性帧模拟及唯一 C ABI。
+// 边界：宿主 Battle Native；不使用 Lua、Unity、Skynet、Socket 或墙钟。
+// 输入/输出：已预热 immutable BMAP + 完整席位输入 -> State/Checkpoint。
+// ownership：每个 Engine 独占 State 与 NavigationContext；地图由 FlyWow
+// Registry 共享。
 #pragma once
 
-#include "grid_map.h"
-#include "navigation_context.h"
-
+#include "grid_pathfinder.h"
+#include "map_registry.h"
+#include "navigation_profile.h"
 #include <cstddef>
 #include <cstdint>
 #include <memory>
@@ -280,87 +453,99 @@ Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部�
 
 namespace lesson_frame
 {
-constexpr std::size_t   kMaxUnits  = 64;   // 每场允许持有的单位总数；超限时拒绝初始化或恢复。
-constexpr std::size_t   kMaxBolts  = 128;  // 每场在途逻辑弹丸上限；满槽时拒绝逻辑弹丸施法。
-constexpr std::uint32_t kMaxFrames = 3600; // 50ms/tick 下为 180 秒；到期时以平局结束。
-constexpr std::uint32_t kTickMs    = 50;   // 固定逻辑步长；渲染帧率不改变它。
+constexpr std::uint32_t kTickMs    = 50;   // 固定模拟时间；不随真实调度时间改变。
+constexpr std::uint32_t kMaxFrames = 3600; // 180秒；限制每场Replay长度。
+constexpr std::uint32_t kMaxUnits  = 16;   // 当前课例单位/AI数量上限。
+constexpr std::uint32_t kMaxBolts  = 128;  // 当前课例弹丸上限。
+constexpr std::uint32_t kMaxRoutes = 16;   // 最多为每个单位保持一条路径。
+constexpr std::size_t   kMaxState  = 65535;
 
-/// 单帧玩家意图；方向分量取 -1、0、1，skill 使用下方固定业务编号。
-struct Input
+struct PlayerInput
 {
-    std::int32_t x     = 0; // 世界 X 方向；-1/0/1 表示负向/不动/正向，不是坐标。
-    std::int32_t z     = 0; // 世界 Z 方向；-1/0/1 表示负向/不动/正向，不是坐标。
-    std::int32_t y     = 0; // 飞行高度意图：-1 下降、0 保持、1 上升；地面单位忽略。
-    std::int32_t skill = 0; // 0 不施法；1 近战；2 表现弹丸；3 逻辑火球。
+    std::uint32_t seat_id = 0; // 固定为1；由Worker会话授权后生成。
+    std::uint32_t unit_id = 0; // 固定席位1控制1001；仅本Battle配置。
+    std::int32_t  x       = 0; // -1/0/1，向X轴移动。
+    std::int32_t  z       = 0; // -1/0/1，向Z轴移动。
+    std::int32_t  skill   = 0; // 0空，1近战，2表现弹丸，3逻辑弹丸。
 };
 
-/// Battle 单位的权威逻辑状态；位置为带符号 64 位世界毫米。
+struct UnitProfile
+{
+    std::uint32_t profile_id              = 0;
+    std::uint32_t movement_mode           = 0;       // 1地面，2空中；所有单位从配置读取。
+    std::uint32_t move_stride_mm_per_tick = 0;       // 基础每Tick位移；对角方向按整数比例归一化。
+    std::int32_t  max_hp                  = 0;       // 单位静态最大生命值；当前HP属于战斗状态。
+    std::uint32_t min_air_clearance_mm    = 0;       // 空中单位离当前地表的最小间隙。
+    std::uint32_t max_air_altitude_mm     = 0;       // 空中单位相对当前地表的最高高度。
+    flywow_navigation::NavigationProfile navigation; // 地面参数视图；源自本行配置。
+};
+
+using UnitProfileTable = std::vector<UnitProfile>;
+
 struct Unit
 {
-    std::uint32_t id        = 0;   // Battle 内稳定且唯一的实例 ID；单位按 ID 排序推进。
-    std::uint32_t camp      = 0;   // 阵营编号：1 为玩家方，2 为敌方。
-    std::uint32_t move_mode = 1;   // 移动规则：1 受地表约束，2 可主动升降的空中单位。
-    std::int64_t  x         = 0;   // 世界 X 坐标，单位 mm。
-    std::int64_t  y         = 0;   // 世界高度，单位 mm；地面单位由地图采样确定。
-    std::int64_t  z         = 0;   // 世界 Z 坐标，单位 mm。
-    std::int32_t  hp        = 100; // 当前生命值；0 表示死亡。
-    std::uint32_t ready[3]  = {};  // 技能 1/2/3 最早可再次施放的逻辑帧号。
+    std::uint32_t id            = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
+    std::uint32_t profile_id    = 0; // 静态原型ID；地面和空中单位都必须引用有效记录。
+    std::uint32_t camp          = 0; // 1玩家阵营，2敌方阵营。
+    std::uint32_t movement_mode = 0; // 从Profile派生并随Checkpoint校验的运行时缓存。
+    std::int64_t  x             = 0; // 整数毫米世界坐标。
+    std::int64_t  y             = 0;
+    std::int64_t  z             = 0;
+    std::int32_t  hp            = 0;
+    std::uint32_t ready[3]      = {}; // 下一次允许施放的逻辑帧。
 };
 
-/// 在途逻辑弹丸；其 ID、位置和到期时间都是可恢复的 Battle 状态。
 struct Bolt
 {
-    std::uint32_t id      = 0; // 本场单调递增的弹丸实例 ID。
-    std::uint32_t caster  = 0; // 发射单位 ID；必须引用现存 Unit。
-    std::uint32_t target  = 0; // 目标单位 ID；必须引用现存 Unit。
-    std::uint32_t expires = 0; // 到期逻辑帧；到期或目标死亡后移除。
-    std::int32_t  damage  = 0; // 0 仅供表现；20 在到达目标时提交逻辑伤害。
-    std::int64_t  x       = 0; // 世界 X 坐标，单位 mm。
-    std::int64_t  y       = 0; // 世界高度，单位 mm。
-    std::int64_t  z       = 0; // 世界 Z 坐标，单位 mm。
+    std::uint32_t id      = 0;
+    std::uint32_t caster  = 0;
+    std::uint32_t target  = 0;
+    std::uint32_t expires = 0;
+    std::int32_t  damage  = 0; // 0表示纯表现弹丸。
+    std::int64_t  x       = 0;
+    std::int64_t  y       = 0;
+    std::int64_t  z       = 0;
 };
 
-/// 完整可恢复逻辑状态；不包含指针、渲染对象、墙钟、随机全局状态或 Socket。
+struct Route
+{
+    std::uint32_t           unit_id          = 0; // 当前路径唯一跟随者；不借用其他Unit的cursor。
+    std::uint32_t           target_id        = 0; // 当前追击目标；变化触发重新规划。
+    std::int64_t            planned_target_x = 0; // 上次A*看到的目标坐标；决定是否重规划。
+    std::int64_t            planned_target_y = 0;
+    std::int64_t            planned_target_z = 0;
+    std::uint32_t           repath_at        = 0;     // 允许再次A*的逻辑帧；防重复/失败刷查询。
+    std::uint32_t           blocked_frames   = 0;     // 路线动态阻挡持续Tick数。
+    std::uint32_t           next_point       = 1;     // 对应PathFollowCursor::next_point_index。
+    std::uint64_t           progress_mm      = 0;     // 当前路径线段已消费的整数毫米。
+    bool                    valid            = false; // 路线已规划且包含合法跟随点。
+    flywow_navigation::Path path; // FlyWow原始Path；帧间复用，Checkpoint只编码其值。
+};
+
 struct State
 {
-    std::uint32_t     frame     = 0; // 已完成的逻辑帧；初始 Checkpoint 为 0。
-    std::uint32_t     winner    = 0; // 0 进行中；1/2 对应胜方阵营；3 表示平局。
-    std::uint32_t     next_bolt = 1; // 下一个弹丸 ID；恢复后继续单调递增。
-    std::vector<Unit> units;         // 按稳定 ID 严格升序；数量不超过 kMaxUnits。
-    std::vector<Bolt> bolts;         // 按实例 ID 严格升序；数量不超过 kMaxBolts。
+    std::uint32_t      frame     = 0;
+    std::uint32_t      winner    = 0; // 0继续，1/2胜方，3平局。
+    std::uint32_t      next_bolt = 1;
+    std::vector<Unit>  units;  // 始终按id严格升序。
+    std::vector<Bolt>  bolts;  // 始终按id严格升序。
+    std::vector<Route> routes; // 始终按unit_id严格升序。
 };
 
-/// 单场无锁、无 yield 的模拟 Engine；调用方必须串行调用其可变方法。
-class Engine
+class Engine final
 {
   public:
-    /// 创建本场模拟并共享持有不可变地图；地图无效或出生点不可用时抛出异常。
-    /// @param map 已验证的只读地图；Engine 与调用方共同持有其生命周期。
     explicit Engine(std::shared_ptr<const flywow_navigation::GridMap> map);
-
-    /// 按课程玩法初始化单位；失败时保留调用前状态并抛出异常。
-    void reset();
-
-    /// 推进一个固定逻辑帧；非法输入、结束状态或导航失败时不提交半帧状态。
-    /// @param input 当前帧玩家意图；方向分量为 -1/0/1，skill 为 0..3。
-    void step(Input input);
-
-    /// 生成显式小端的规范化状态副本，可用于 Checkpoint 与确定性比较。
-    /// @return 调用方拥有的序列化字节串。
-    std::string save() const;
-
-    /// 验证完整候选状态后一次性替换当前状态。
-    /// @param bytes 借用的规范化状态字节；函数返回后不保留其引用。
-    /// @throws 状态格式、版本或业务约束不合法时抛出异常，旧状态保持不变。
-    void restore(const std::string &bytes);
-
-    /// 只读借用当前状态；引用在 Engine 下一次成功变更或析构前有效。
+    /// 每帧包含唯一玩家席位的正式输入；AI由Core推进，失败不发布半帧。
+    void         stepFrame(std::uint32_t frame, const PlayerInput *inputs, std::size_t count);
+    /// 规范化Checkpoint V3，小端逐字段编码，不序列化指针或A* scratch。
+    std::string  save() const;
+    /// 验证后原子替换 State 与 Occupancy；失败旧状态不变。
+    void         restore(const std::string &bytes);
     const State &state() const noexcept
     {
         return state_;
     }
-
-    /// 返回当前地图身份；不执行 I/O。
     std::uint32_t mapId() const noexcept
     {
         return map_->metadata().map_id;
@@ -371,473 +556,652 @@ class Engine
     }
 
   private:
-    std::shared_ptr<const flywow_navigation::GridMap> map_;
-    flywow_navigation::NavigationContext
-          context_; // 当前 Engine 独占 A* scratch；不属于可恢复 State。
-    State state_;
+    std::shared_ptr<const flywow_navigation::GridMap>     map_;
+    // Engine创建时固定本Core发布的只读快照；Tick不读文件，也不临时构造Profile。
+    std::shared_ptr<const UnitProfileTable>               profiles_;
+    std::unique_ptr<flywow_navigation::NavigationContext> context_; // Battle-local scratch/占位。
+    State                                                 state_;
+    bool poisoned_ = false; // 异常补偿失败时拒绝继续推进。
 
-    void  stepUnchecked(Input input);
-    void  chaseAir(const Unit &unit, const Unit &other, Input &input) const;
-    void  chaseGround(const Unit &unit, const Unit &other, Input &input);
-    bool  sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t &y) const;
-    void  move(Unit &unit, Input input);
-    bool  sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y, std::int64_t &y) const;
-    Input ai(const Unit &unit);
-    void  cast(Unit &unit, std::int32_t skill, std::vector<std::int32_t> &damage);
-    void  projectiles(std::vector<std::int32_t> &damage);
-    std::size_t target(const Unit &unit, std::uint32_t target_modes = 3) const;
+    void        reset();
+    void        runFrame(const PlayerInput *inputs);
+    bool        sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t from_y,
+                             std::int64_t &new_y) const;
+    bool        sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t target_y,
+                          std::int64_t &new_y) const;
+    bool        moveGround(Unit &unit, std::int32_t x, std::int32_t z);
+    void        moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y);
+    void        chaseGround(Unit &unit, const Unit &target);
+    void        chaseAir(Unit &unit, const Unit &target);
+    void        cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &damage);
+    void        moveBolts(std::vector<std::int32_t> &damage);
     void        finish(const std::vector<std::int32_t> &damage);
+    std::size_t targetOf(const Unit &unit, std::uint32_t move_mask) const;
+    Route      &routeFor(std::uint32_t unit_id);
+    std::unique_ptr<flywow_navigation::NavigationContext> buildContext(const State &state) const;
 };
 } // namespace lesson_frame
 
 #if defined(_WIN32)
-#define SKYNET_BATTLE_NAV_FRAME_API __declspec(dllexport)
+#define LESSON_FRAME_API __declspec(dllexport)
 #else
-#define SKYNET_BATTLE_NAV_FRAME_API __attribute__((visibility("default")))
+#define LESSON_FRAME_API __attribute__((visibility("default")))
 #endif
+
+// C ABI不传std::vector或std::string，不让C++异常穿过P/Invoke/Lua。
+struct FsPlayerInput
+{
+    std::uint32_t seat_id;
+    std::uint32_t unit_id;
+    std::int32_t  x;
+    std::int32_t  z;
+    std::int32_t  skill;
+};
+static_assert(sizeof(FsPlayerInput) == 20, "Frame ABI struct size must remain 20 bytes");
 
 extern "C"
 {
-    /// 加载已发布地图并创建独占 Engine；不保存调用方传入的路径指针。
-    /// @param path UTF-8 BMAP 文件路径；必须以 NUL 结尾。
-    /// @return 成功时返回调用方独占的 handle；失败时返回 nullptr。
-    SKYNET_BATTLE_NAV_FRAME_API void *fs_open(const char *path);
-
-    /// 释放由 fs_open 返回的 Engine handle；空指针可安全传入。
-    /// @param handle fs_open 返回且尚未关闭的 handle；重复关闭非空 handle 属于调用方错误。
-    SKYNET_BATTLE_NAV_FRAME_API void fs_close(void *handle);
-
-    /// 校验意图并推进一帧；不成功时返回 0 且不提交半帧结果。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param x 世界 X 方向分量，取 -1、0、1。
-    /// @param z 世界 Z 方向分量，取 -1、0、1。
-    /// @param skill 0 不施法、1 近战、2 表现弹丸、3 逻辑火球。
-    /// @return 成功返回 1；参数、状态或领域操作失败返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_step(void *handle, int x, int z, int skill);
-
-    /// 将当前状态写入调用方缓冲；不会保存缓冲指针。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param out 调用方提供的输出缓冲区。
-    /// @param capacity out 的字节容量；小于完整状态长度时失败。
-    /// @return 成功返回写入字节数；失败返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_save(void *handle, unsigned char *out, int capacity);
-
-    /// 验证候选 Checkpoint 后恢复 Engine；失败时保留旧状态。
-    /// @param handle 当前 Battle 独占的 Engine handle。
-    /// @param bytes 借用的规范化状态字节，仅在本次调用期间读取。
-    /// @param count bytes 的有效字节数。
-    /// @return 成功返回 1；无效 handle、长度或状态返回 0。
-    SKYNET_BATTLE_NAV_FRAME_API int fs_restore(void *handle, const unsigned char *bytes, int count);
-
-    /// 返回地图身份；空 handle 返回 0。该值不是运行时版本握手。
-    /// @param handle 当前 Battle 的 Engine handle。
-    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_version(void *handle);
-    SKYNET_BATTLE_NAV_FRAME_API std::uint32_t fs_map_id(void *handle);
-} // extern "C"
+    /// 加载验证过的BMAP并发布到进程MapRegistry；启动/部署阶段调用，有同步磁盘I/O。
+    LESSON_FRAME_API int   fs_preload_map(const char *path);
+    /// 启动时读取完整Unit Profile配置文件，校验后原子发布单一只读表。
+    /// 失败返回0；旧表不变；已创建Engine继续持有自己的配置快照。
+    LESSON_FRAME_API int   fs_preload_unit_profiles(const char *path);
+    /// 按已加载map_id创建独占Engine，并固定Unit Profile快照；无磁盘I/O。
+    LESSON_FRAME_API void *fs_open(std::uint32_t map_id);
+    /// 仅同一owner调用；nullptr安全，重复释放非空handle非法。
+    LESSON_FRAME_API void  fs_close(void *handle);
+    /// 校验连续帧、seat/unit映射和输入值；成功1，失败0且旧状态不变。
+    LESSON_FRAME_API int   fs_step_frame(void *handle, std::uint32_t frame,
+                                         const FsPlayerInput *players, std::uint32_t count);
+    /// 缓冲由调用方拥有，成功返回字节数，失败0，最大65535字节。
+    LESSON_FRAME_API int   fs_save(void *handle, unsigned char *output, int capacity);
+    /// 恢复候选Checkpoint；失败0，不产生半步提交。
+    LESSON_FRAME_API int   fs_restore(void *handle, const unsigned char *bytes, int count);
+    LESSON_FRAME_API std::uint32_t fs_map_id(void *handle);
+    LESSON_FRAME_API std::uint32_t fs_map_version(void *handle);
+}
 ```
 
-### server/native/frame_sync/frame_core.cpp
+### 5.3 `server/native/frame_sync/frame_core.cpp`
 
-**操作：新建。** 让按键意图按固定阶段产生位置、技能和伤害；两端编译同一份实现。
+**操作：新建或整文件覆盖。** 本文件把上一帧状态和本帧正式输入推进为新状态，同时维护 FlyWow 路径和动态占位。
 
-学习导航：精读 move的子步与取整、冷却/弹丸所有权、同帧统一伤害、候选restore和异常原子提交。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+按执行顺序精读：`fs_preload_unit_profiles → fs_open → Engine::reset → stepFrame → runFrame → save/restore`。第一遍先掌握四件事：实例通过 `profile_id` 查询同一张静态表、移动模式和速度等参数来自该表、Path/Cursor 跨帧复用、恢复时状态与导航事实一起提交。
+
+玩家实例 `1001` 和地面敌人实例 `2002` 都引用 Profile `1`；飞行敌人 `2001` 引用 Profile `2`。三者都必须通过同一个 `profileFor` 查询到完整记录。地面单位把记录中的 Navigation 参数交给 FlyWow；飞行单位从同一记录读取飞行边界。任何单位都没有“无 Profile”哨兵值。
+
+完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。配置文件缺失、非法或战斗 roster 引用了不存在的 Profile 时，启动或创建 Engine 应失败。
+
+`chaseGround` 的重规划间隔只限制查询频率。已有路径有效、追击目标未换且位置未变时，每个 Tick 调用 `AdvancePath` 消费最多 150 mm，保持路径和 Cursor；目标移动或路径失效才在允许的帧重新规划。上次规划的目标坐标、下一可规划帧和 Cursor 都写入 Checkpoint，恢复后保持相同决策。
+
+完成后运行第 5.5 节的 Native 测试：同一输入逐帧输出相同 Checkpoint，恢复上一帧再执行也得到相同结果。配置文件缺失、非法或缺少地面单位引用的 Profile 时，启动或创建 Engine 应失败。
 
 ```cpp
-// 职责：实现帧同步纯整数规则、规范化状态和C ABI异常边界。
-// 输入：Input与固定地图；输出：State；无网络、锁、Timer或随机全局状态。
+// 职责：实现第三课帧同步确定性模拟、FlyWow导航复用、Checkpoint V3与C ABI。
+// 边界：Battle
+// Native；地图/导航来自FlyWow，玩法来自宿主，本文件不访问网络/Skynet/Lua。
+// 输入/输出：每帧单席位输入 ->
+// State/诊断Checkpoint；持有每场私有NavigationContext。
+// 不负责：账户身份授权、BMAP SHA256部署校验、Unity渲染、Native热替换。
 #include "frame_core.h"
-#include "bmap_reader.h"
-#include "grid_pathfinder.h"
+
 #include <algorithm>
-#include <cstdlib>
+#include <array>
+#include <atomic>
 #include <cstring>
+#include <fstream>
 #include <limits>
 #include <stdexcept>
+#include <utility>
+
+namespace
+{
+std::shared_ptr<const lesson_frame::UnitProfileTable> g_unit_profiles;
+}
 
 namespace lesson_frame
 {
 namespace
 {
-// 静态技能定义不进入可变运行状态；Unit 只保存各技能下次可施放的帧号。
-enum class SkillEffect
+constexpr std::int64_t  kPositionLimit = 500000000;
+constexpr std::uint32_t kRepathDelay   = 10; // 每10帧最多做一次正常跟随重规划。
+constexpr std::uint32_t kBlockedRetry  = 4;  // 已阻挡路线最早4帧后再次规划。
+
+std::int64_t strideForAxes(std::uint32_t base_stride, std::int32_t axis_count)
 {
-    kInstant,     // 当前帧直接提交伤害。
-    kVisualBolt,  // 当前帧提交伤害；弹丸只负责表现，不再次结算。
-    kLogicalBolt, // 弹丸到达目标时提交伤害。
-};
+    if (axis_count == 0)
+        return 0;
+    if (axis_count == 1)
+        return base_stride;
+    const std::uint32_t scale_permille = axis_count == 2 ? 707 : 577;
+    return (static_cast<std::uint64_t>(base_stride) * scale_permille + 500) / 1000;
+}
+
 struct Skill
 {
-    std::int64_t  range;        // 施法最大距离，单位 mm，按三轴距离判定。
-    std::uint32_t cooldown;     // 冷却时长，单位逻辑帧。
-    std::int32_t  damage;       // 正式伤害点数；只由 Engine 提交。
-    SkillEffect   effect;       // 命中/弹丸的逻辑生效时机。
-    std::uint32_t target_modes; // 可选目标移动类型位标记：1 地面、2 空中、3 两者。
+    std::int64_t  range_mm;
+    std::uint32_t cooldown;
+    std::int32_t  damage;
+    std::uint32_t target_mask; // 1地面、2空中、3均可。
+    std::uint32_t effect;      // 1即时、2表现弹丸、3逻辑弹丸。
 };
-// 数组下标对应 skill 编号减一；射程用 mm，冷却用固定逻辑帧。
-constexpr Skill        kSkills[]      = {{900, 12, 14, SkillEffect::kInstant, 1},
-                                         {9000, 24, 12, SkillEffect::kVisualBolt, 3},
-                                         {9000, 24, 20, SkillEffect::kLogicalBolt, 3}};
-// 每轴绝对坐标不超过 500,000,000mm，最大轴差为 1,000,000,000mm；
-// 三轴平方和最多为 3e18，小于 int64 上限，保证 distance2 的乘加不溢出。
-constexpr std::int64_t kPositionLimit = 500000000;
-std::int32_t           sign(std::int64_t value)
+constexpr std::array<Skill, 3> kSkills{
+    {{900, 12, 14, 1, 1}, {9000, 24, 12, 3, 2}, {9000, 24, 20, 3, 3}}};
+
+std::int32_t sign(std::int64_t n)
 {
-    return (value > 0) - (value < 0);
+    return (n > 0) - (n < 0);
 }
-// 先限制单轴，平方和在int64范围内；positions经过输入/restore边界验证。
+std::int64_t absolute(std::int64_t n)
+{
+    return n < 0 ? -n : n;
+}
 std::int64_t distance2(const Unit &a, const Unit &b)
 {
-    const auto dx = a.x - b.x;
-    const auto dz = a.z - b.z;
-    const auto dy = a.y - b.y;
-    return dx * dx + dy * dy + dz * dz;
+    const auto dx = a.x - b.x, dy = a.y - b.y, dz = a.z - b.z;
+    return dx * dx + dy * dy + dz * dz; // 输入边界保证绝对坐标有界。
 }
-void put(std::string &out, std::uint64_t value, unsigned count)
+flywow_navigation::WorldPosition position(const Unit &unit)
+{
+    return {unit.x, unit.y, unit.z};
+}
+const UnitProfile &profileFor(const UnitProfileTable &profiles, std::uint32_t profile_id)
+{
+    // 配置发布前按 profile_id 排序；所有单位只查这一张不可变表。
+    const auto found = std::lower_bound(profiles.begin(), profiles.end(), profile_id,
+                                        [](const UnitProfile &profile, std::uint32_t id)
+                                        { return profile.profile_id < id; });
+    if (found == profiles.end() || found->profile_id != profile_id)
+    {
+        throw std::runtime_error("UNIT_PROFILE_NOT_FOUND");
+    }
+    return *found;
+}
+
+// 在Pathfinder规划和提交阶段使用同一业务阻挡规则；FlyWow只记录动态footprint。
+bool blockOccupancy(void *, const flywow_navigation::DynamicNavigationQuery &query)
+{
+    return query.agent && query.agent->profile && query.occupancy &&
+           !query.occupancy->IsFootprintBlocked(*query.agent->profile, query.target,
+                                                query.agent->handle);
+}
+flywow_navigation::DynamicNavigationPolicy policy()
+{
+    return {nullptr, &blockOccupancy};
+}
+
+// 显式逐字节小端格式；不允许序列化struct padding或指针。
+void put(std::string &out, std::uint64_t n, unsigned count)
 {
     for (unsigned i = 0; i < count; ++i)
-        out.push_back(static_cast<char>((value >> (8 * i)) & 255));
+        out.push_back(static_cast<char>((n >> (8 * i)) & 255u));
 }
 std::uint64_t get(const std::string &in, std::size_t &offset, unsigned count)
 {
-    if (offset + count > in.size())
+    if (count > in.size() - std::min(offset, in.size()))
         throw std::runtime_error("STATE_TRUNCATED");
     std::uint64_t value = 0;
     for (unsigned i = 0; i < count; ++i)
         value |= static_cast<std::uint64_t>(static_cast<unsigned char>(in[offset++])) << (8 * i);
     return value;
 }
-std::int64_t signedValue(std::uint64_t bits)
+std::int64_t signed64(std::uint64_t n)
 {
-    // 不依赖无符号大值转有符号的实现定义行为；显式还原二补数。
-    return bits <= static_cast<std::uint64_t>(INT64_MAX)
-               ? static_cast<std::int64_t>(bits)
-               : -1 - static_cast<std::int64_t>(UINT64_MAX - bits);
+    // 无符号大整数转有符号是实现定义；这里手动还原二补数。
+    return n <= static_cast<std::uint64_t>(INT64_MAX)
+               ? static_cast<std::int64_t>(n)
+               : -1 - static_cast<std::int64_t>(UINT64_MAX - n);
 }
-void checkPosition(std::int64_t value)
+std::int32_t signed32(std::uint64_t n)
 {
-    if (value < -kPositionLimit || value > kPositionLimit)
+    return n <= static_cast<std::uint64_t>(INT32_MAX)
+               ? static_cast<std::int32_t>(n)
+               : -1 - static_cast<std::int32_t>(UINT32_MAX - n);
+}
+void requirePosition(std::int64_t n)
+{
+    if (n < -kPositionLimit || n > kPositionLimit)
         throw std::runtime_error("POSITION_RANGE");
 }
-
-std::size_t readStateHeader(const std::string &bytes, std::size_t &offset, State &candidate)
+void validatePoint(const flywow_navigation::WorldPosition &point)
 {
-    if (get(bytes, offset, 4) != 1)
-        throw std::runtime_error("STATE_VERSION");
-    candidate.frame     = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    candidate.winner    = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    candidate.next_bolt = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    const auto count    = get(bytes, offset, 4);
-    if (count < 1 || count > kMaxUnits || candidate.frame > kMaxFrames || candidate.winner > 3 ||
-        candidate.next_bolt == 0 || candidate.next_bolt > kMaxFrames * kMaxUnits + 1)
-        throw std::runtime_error("STATE_RANGE");
-    return static_cast<std::size_t>(count);
-}
-Unit readUnit(const std::string &bytes, std::size_t &offset, const State &candidate)
-{
-    Unit unit;
-    unit.id        = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    unit.camp      = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    unit.move_mode = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    unit.x         = signedValue(get(bytes, offset, 8));
-    unit.y         = signedValue(get(bytes, offset, 8));
-    unit.z         = signedValue(get(bytes, offset, 8));
-    const auto hp  = get(bytes, offset, 4);
-    if (hp > 100)
-        throw std::runtime_error("STATE_HP");
-    unit.hp       = static_cast<std::int32_t>(hp);
-    unit.ready[0] = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    unit.ready[1] = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    unit.ready[2] = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    checkPosition(unit.x);
-    checkPosition(unit.y);
-    checkPosition(unit.z);
-    if (unit.ready[0] > candidate.frame + 24 || unit.ready[1] > candidate.frame + 24 ||
-        unit.ready[2] > candidate.frame + 24 || (unit.move_mode != 1 && unit.move_mode != 2) ||
-        unit.id == 0 || (unit.camp != 1 && unit.camp != 2) || unit.hp < 0 || unit.hp > 100 ||
-        (!candidate.units.empty() && candidate.units.back().id >= unit.id))
-        throw std::runtime_error("STATE_UNIT");
-    return unit;
-}
-Bolt readBolt(const std::string &bytes, std::size_t &offset, const State &candidate)
-{
-    Bolt bolt;
-    bolt.id      = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    bolt.caster  = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    bolt.target  = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    bolt.expires = static_cast<std::uint32_t>(get(bytes, offset, 4));
-    bolt.damage  = static_cast<std::int32_t>(get(bytes, offset, 4));
-    bolt.x       = signedValue(get(bytes, offset, 8));
-    bolt.y       = signedValue(get(bytes, offset, 8));
-    bolt.z       = signedValue(get(bytes, offset, 8));
-    checkPosition(bolt.x);
-    checkPosition(bolt.y);
-    checkPosition(bolt.z);
-    const auto exists = [&](std::uint32_t id)
-    {
-        return std::any_of(candidate.units.begin(), candidate.units.end(),
-                           [&](const Unit &unit) { return unit.id == id; });
-    };
-    if ((bolt.damage != 0 && bolt.damage != 20) || !exists(bolt.caster) || !exists(bolt.target) ||
-        bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 || bolt.id == 0 ||
-        bolt.id >= candidate.next_bolt ||
-        (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
-        throw std::runtime_error("STATE_BOLT");
-    return bolt;
+    requirePosition(point.x_mm);
+    requirePosition(point.y_mm);
+    requirePosition(point.z_mm);
 }
 } // namespace
 
 Engine::Engine(std::shared_ptr<const flywow_navigation::GridMap> map)
-    : map_(std::move(map)), context_(map_)
+    : map_(std::move(map)),
+      profiles_(std::atomic_load_explicit(&g_unit_profiles, std::memory_order_acquire))
 {
     if (!map_ || map_->metadata().cell_size_mm < 100)
-        throw std::runtime_error("MAP_CELL_SIZE");
+        throw std::runtime_error("MAP_INVALID");
+    if (!profiles_ || profiles_->empty())
+    {
+        throw std::runtime_error("UNIT_PROFILES_NOT_LOADED");
+    }
     reset();
 }
-bool Engine::sample(std::int64_t x, std::int64_t z, std::int64_t from_y, std::int64_t &y) const
+
+bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t from_y,
+                          std::int64_t &new_y) const
 {
-    const auto result = map_->QueryWorld({x, from_y, z});
-    if (!result.ok() || !result.value.IsWalkable())
+    const auto query = map_->QueryWorld({x, from_y, z});
+    if (!query.ok() || !query.value.IsWalkable())
         return false;
-    const auto radius_cells =
-        (200u + map_->metadata().cell_size_mm - 1) / map_->metadata().cell_size_mm;
-    if (result.value.clearance_cells < radius_cells)
+    const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+    const auto  required =
+        flywow_navigation::RequiredClearanceCells(profile, map_->metadata().cell_size_mm);
+    if (query.value.clearance_cells < required)
         return false;
-    y = result.value.height_mm;
-    return std::abs(y - from_y) <= 600;
+    new_y = query.value.height_mm;
+    return absolute(new_y - from_y) <= profile.max_step_mm;
 }
-bool Engine::sampleAir(std::int64_t x, std::int64_t z, std::int64_t desired_y,
-                       std::int64_t &y) const
+
+bool Engine::sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t target_y,
+                       std::int64_t &new_y) const
 {
-    const auto result = map_->QueryWorld({x, 0, z});
-    if (!result.ok())
+    const auto &profile = profileFor(*profiles_, unit.profile_id);
+    const auto  query   = map_->QueryWorld({x, 0, z});
+    if (!query.ok() ||
+        target_y <
+            static_cast<std::int64_t>(query.value.height_mm) + profile.min_air_clearance_mm ||
+        target_y > static_cast<std::int64_t>(query.value.height_mm) + profile.max_air_altitude_mm)
         return false;
-    if (desired_y < static_cast<std::int64_t>(result.value.height_mm) + 200 || desired_y > 10000)
-        return false;
-    y = desired_y;
-    return true; // 不读取IsWalkable/clearance；该地图尚无空域禁飞与天花板资产。
+    new_y = target_y;
+    return true;
 }
+
+std::unique_ptr<flywow_navigation::NavigationContext>
+Engine::buildContext(const State &candidate) const
+{
+    auto next_context = std::make_unique<flywow_navigation::NavigationContext>(map_);
+    // 单位按ID升序；恢复碰撞事实时不允许依赖unordered_map遍历顺序。
+    for (const auto &unit : candidate.units)
+    {
+        if (unit.movement_mode != 1 || unit.hp <= 0)
+            continue;
+        const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+        const auto  grid    = map_->WorldToGrid(position(unit));
+        if (!grid.ok())
+            throw std::runtime_error("STATE_GRID");
+        if (next_context->occupancy().IsFootprintBlocked(profile, grid.value, {unit.id}))
+            throw std::runtime_error("STATE_OCCUPANCY_CONFLICT");
+        const auto result = next_context->occupancy().Move({unit.id}, profile, grid.value);
+        if (!result.ok() || !result.value)
+            throw std::runtime_error("STATE_OCCUPANCY_COMMIT");
+    }
+    return next_context;
+}
+
 void Engine::reset()
 {
     State candidate;
-    candidate.units = {{1001, 1, 1, -11000, 0, 4000, 100, {}},
-                       {2001, 2, 2, 11000, 2000, -4000, 100, {}},
-                       {2002, 2, 1, 11000, 0, -4000, 100, {}}};
+    Unit  player;
+    player.id         = 1001;
+    player.profile_id = 1;
+    player.camp       = 1;
+    player.x          = -11000;
+    player.z          = 4000;
+    candidate.units.push_back(player);
+
+    Unit flying_enemy;
+    flying_enemy.id         = 2001;
+    flying_enemy.profile_id = 2;
+    flying_enemy.camp       = 2;
+    flying_enemy.x          = 11000;
+    flying_enemy.y          = 2000;
+    flying_enemy.z          = -4000;
+    candidate.units.push_back(flying_enemy);
+
+    Unit ground_enemy;
+    ground_enemy.id         = 2002;
+    ground_enemy.profile_id = 1;
+    ground_enemy.camp       = 2;
+    ground_enemy.x          = 11000;
+    ground_enemy.z          = -4000;
+    candidate.units.push_back(ground_enemy);
+
     for (auto &unit : candidate.units)
-        if (!(unit.move_mode == 2 ? sampleAir(unit.x, unit.z, unit.y, unit.y)
-                                  : sample(unit.x, unit.z, unit.y, unit.y)))
+    {
+        const auto &profile   = profileFor(*profiles_, unit.profile_id);
+        unit.movement_mode    = profile.movement_mode;
+        unit.hp               = profile.max_hp;
+        std::int64_t ground_y = unit.y;
+        const bool   sampled  = unit.movement_mode == 1
+                                    ? sampleGround(unit, unit.x, unit.z, unit.y, ground_y)
+                                    : sampleAir(unit, unit.x, unit.z, unit.y, ground_y);
+        if (!sampled)
             throw std::runtime_error("SPAWN_BLOCKED");
-    state_ = std::move(candidate);
+        unit.y = ground_y;
+    }
+    auto next_context = buildContext(candidate);
+    state_            = std::move(candidate);
+    context_          = std::move(next_context);
 }
-std::size_t Engine::target(const Unit &unit, std::uint32_t target_modes) const
+
+std::size_t Engine::targetOf(const Unit &unit, std::uint32_t move_mask) const
 {
-    std::size_t  best          = state_.units.size();
-    std::int64_t best_distance = INT64_MAX;
-    for (std::size_t i = 0; i < state_.units.size(); ++i)
+    auto         best    = state_.units.size();
+    std::int64_t nearest = INT64_MAX;
+    for (std::size_t index = 0; index < state_.units.size(); ++index)
     {
-        const auto &other = state_.units[i];
-        if (other.hp <= 0 || other.camp == unit.camp || (other.move_mode & target_modes) == 0)
+        const auto &other = state_.units[index];
+        if (other.hp <= 0 || other.camp == unit.camp || !(other.movement_mode & move_mask))
             continue;
-        const auto d = distance2(unit, other);
-        if (d < best_distance)
+        const auto score = distance2(unit, other);
+        if (score < nearest)
         {
-            best          = i;
-            best_distance = d;
+            nearest = score;
+            best    = index;
         }
     }
-    return best; // ID排序保证等距时优先较小ID。
+    return best; // 严格升序遍历，距离相同时ID较小者获胜。
 }
-void Engine::chaseAir(const Unit &unit, const Unit &other, Input &input) const
+
+Route &Engine::routeFor(std::uint32_t unit_id)
 {
-    input.x               = sign(other.x - unit.x);
-    input.z               = sign(other.z - unit.z);
-    // 水平距离越大，追击高度越高；接近目标时下俯，目标移动后重新计算。
-    const auto horizontal = std::max(std::abs(other.x - unit.x), std::abs(other.z - unit.z));
-    const auto desired_y  = other.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
-    input.y               = std::abs(desired_y - unit.y) >= 150 ? sign(desired_y - unit.y) : 0;
-    std::int64_t probe_y  = unit.y;
-    if (!sampleAir(unit.x + input.x * 150, unit.z + input.z * 150, unit.y, probe_y))
-        input.y = 1;
-    if (distance2(unit, other) <= 800 * 800)
-        input.x = input.z = 0;
+    auto it = std::lower_bound(state_.routes.begin(), state_.routes.end(), unit_id,
+                               [](const Route &route, std::uint32_t value)
+                               { return route.unit_id < value; });
+    if (it == state_.routes.end() || it->unit_id != unit_id)
+        it = state_.routes.insert(it, Route{});
+    it->unit_id = unit_id;
+    return *it;
 }
-void Engine::chaseGround(const Unit &unit, const Unit &other, Input &input)
+
+bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
 {
-    auto profile               = flywow_navigation::MakeDefaultNavigationProfile(unit.id);
-    profile.radius_mm          = 200;
-    profile.max_step_mm        = 600;
-    profile.max_slope_permille = 1500;
-    const auto path            = flywow_navigation::GridPathfinder::FindPathStatic(
-        context_, profile, {unit.x, unit.y, unit.z}, {other.x, other.y, other.z});
-    // 路线不存入逻辑事实：相同当前State重新查询得到相同结果；不可达停住。
-    if (path.ok() && path.value.count() > 1)
+    if (x == 0 && z == 0)
+        return false;
+    const auto  &unit_profile = profileFor(*profiles_, unit.profile_id);
+    const auto   stride = strideForAxes(unit_profile.move_stride_mm_per_tick, (x != 0) + (z != 0));
+    const auto   target_x = unit.x + x * stride;
+    const auto   target_z = unit.z + z * stride;
+    std::int64_t target_y = unit.y;
+    if (!sampleGround(unit, target_x, target_z, target_y, target_y))
+        return false;
+    const auto                              &navigation = unit_profile.navigation;
+    const flywow_navigation::NavigationAgent agent{{unit.id}, &navigation};
+    const auto                               result = flywow_navigation::GridPathfinder::MoveUnit(
+        *context_, agent, position(unit), {target_x, target_y, target_z}, policy());
+    if (!result.ok() || !result.value)
+        return false;
+    unit.x = target_x;
+    unit.z = target_z;
+    unit.y = target_y;
+    return true;
+}
+
+void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
+{
+    const auto  &profile  = profileFor(*profiles_, unit.profile_id);
+    const auto   axes     = (x != 0) + (z != 0) + (y != 0);
+    const auto   stride   = strideForAxes(profile.move_stride_mm_per_tick, axes);
+    std::int64_t result_y = unit.y;
+    const auto   new_y    = unit.y + y * stride;
+    if (sampleAir(unit, unit.x + x * stride, unit.z + z * stride, new_y, result_y))
     {
-        const auto &next = path.value.WorldPoint(1);
-        input.x          = sign(next.x_mm - unit.x);
-        input.z          = sign(next.z_mm - unit.z);
+        unit.x += x * stride;
+        unit.z += z * stride;
+        unit.y = result_y;
     }
 }
-Input Engine::ai(const Unit &unit)
+
+void Engine::chaseGround(Unit &unit, const Unit &target)
 {
-    const auto index = target(unit);
-    if (index == state_.units.size())
-        return {};
-    const auto &other = state_.units[index];
-    Input       input;
-    if (unit.move_mode == 2)
-        chaseAir(unit, other, input);
-    else if (distance2(unit, other) > 800 * 800)
-        chaseGround(unit, other, input);
-    input.skill = distance2(unit, other) <= 900 * 900 && other.move_mode == 1 ? 1 : 3;
-    return input;
-}
-void Engine::move(Unit &unit, Input input)
-{
-    // 3000mm/s × 50ms / 1000 = 150mm；对角分量乘707/1000约为1/sqrt(2)。
-    // 这里的106mm量化是玩法合同，两端使用同一代码；不使用平台sqrt。
-    if (unit.move_mode == 1)
-        input.y = 0;
-    const int          axes   = (input.x != 0) + (input.z != 0) + (input.y != 0);
-    const std::int64_t length = axes == 3 ? 86 : axes == 2 ? 106 : 150;
-    const auto         dx     = input.x * length;
-    const auto         dz     = input.z * length;
-    const auto         dy     = input.y * length;
-    // 最大子步不超过cell/4，防止跨越一个阻挡格；最多8步。
-    const auto         stride = std::max<std::int64_t>(1, map_->metadata().cell_size_mm / 4);
-    const auto         steps  = std::max<std::int64_t>(1, (length + stride - 1) / stride);
-    for (std::int64_t n = 1; n <= steps; ++n)
+    if (distance2(unit, target) <= 900 * 900)
+        return;
+    auto &route = routeFor(unit.id);
+    if (route.target_id != target.id)
     {
-        const auto   sx = dx * n / steps - dx * (n - 1) / steps;
-        const auto   sz = dz * n / steps - dz * (n - 1) / steps;
-        const auto   sy = dy * n / steps - dy * (n - 1) / steps;
-        std::int64_t y  = unit.y;
-        // X后Z是固定的贴墙滑动顺序；不是由物理回调执行顺序决定。
-        if (unit.move_mode == 2 ? sampleAir(unit.x + sx, unit.z, unit.y, y)
-                                : sample(unit.x + sx, unit.z, unit.y, y))
-        {
-            unit.x += sx;
-            unit.y = y;
-        }
-        if (unit.move_mode == 2 ? sampleAir(unit.x, unit.z + sz, unit.y, y)
-                                : sample(unit.x, unit.z + sz, unit.y, y))
-        {
-            unit.z += sz;
-            unit.y = y;
-        }
-        if (unit.move_mode == 2 && sampleAir(unit.x, unit.z, unit.y + sy, y))
-            unit.y = y;
+        route.valid     = false;
+        route.target_id = target.id;
+        route.repath_at = state_.frame;
+    }
+
+    const bool target_moved = target.x != route.planned_target_x ||
+                              target.y != route.planned_target_y ||
+                              target.z != route.planned_target_z;
+    // 冷却到期只代表允许重规划；有效路径且目标未移动时继续复用。
+    if (state_.frame >= route.repath_at && (!route.valid || target_moved))
+    {
+        const auto &profile = profileFor(*profiles_, unit.profile_id).navigation;
+        const flywow_navigation::NavigationAgent agent{{unit.id}, &profile};
+        // 目标单位占位本身不能作为终点；找其附近允许站立的位置。
+        // FindPathToRange沿用FlyWow的真实动态A*查询实现。
+        auto candidate = flywow_navigation::GridPathfinder::FindPathToRange(
+            *context_, agent, position(unit), position(target), 800, policy(), true);
+        route.repath_at        = state_.frame + kRepathDelay;
+        route.planned_target_x = target.x;
+        route.planned_target_y = target.y;
+        route.planned_target_z = target.z;
+        route.blocked_frames   = 0;
+        route.valid            = candidate.ok() && candidate.value.count() > 1;
+        route.path             = flywow_navigation::Path{};
+        route.next_point       = 1;
+        route.progress_mm      = 0;
+        if (route.valid)
+            route.path = std::move(candidate.value);
+    }
+
+    if (!route.valid)
+        return;
+    const auto                         &path = route.path;
+    flywow_navigation::PathFollowCursor cursor;
+    cursor.next_point_index                             = route.next_point;
+    cursor.segment_progress_mm                          = route.progress_mm;
+    const auto                              &profile    = profileFor(*profiles_, unit.profile_id);
+    const auto                              &navigation = profile.navigation;
+    const flywow_navigation::NavigationAgent agent{{unit.id}, &navigation};
+    const auto result = flywow_navigation::GridPathfinder::AdvancePath(
+        *context_, agent, path, cursor, position(unit), profile.move_stride_mm_per_tick, policy());
+    if (!result.ok())
+        throw std::runtime_error("NAV_ADVANCE_FAILED");
+    unit.x            = result.value.position.x_mm;
+    unit.y            = result.value.position.y_mm;
+    unit.z            = result.value.position.z_mm;
+    route.next_point  = static_cast<std::uint32_t>(cursor.next_point_index);
+    route.progress_mm = cursor.segment_progress_mm;
+    if (result.value.status == flywow_navigation::PathAdvanceStatus::kBlocked)
+    {
+        route.valid = false;
+        ++route.blocked_frames;
+        route.repath_at = state_.frame + kBlockedRetry;
+    }
+    else if (result.value.status == flywow_navigation::PathAdvanceStatus::kReached)
+    {
+        route.valid     = false;
+        route.repath_at = state_.frame + kRepathDelay;
     }
 }
+
+void Engine::chaseAir(Unit &unit, const Unit &target)
+{
+    const auto &profile    = profileFor(*profiles_, unit.profile_id);
+    const auto  horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
+    const auto  desired_y  = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
+    const std::int32_t x = sign(target.x - unit.x), z = sign(target.z - unit.z);
+    const std::int32_t y = absolute(desired_y - unit.y) >= profile.move_stride_mm_per_tick
+                               ? sign(desired_y - unit.y)
+                               : 0;
+    if (distance2(unit, target) > 800 * 800)
+        moveAir(unit, x, z, y);
+}
+
 void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &damage)
 {
     if (skill_id == 0)
         return;
-    const auto &def   = kSkills[skill_id - 1];
-    const auto  index = target(unit, def.target_modes);
+    const Skill &skill = kSkills[static_cast<std::size_t>(skill_id - 1)];
+    const auto   index = targetOf(unit, skill.target_mask);
     if (index == state_.units.size() || state_.frame < unit.ready[skill_id - 1] ||
-        distance2(unit, state_.units[index]) > def.range * def.range ||
-        (def.target_modes & state_.units[index].move_mode) == 0)
+        distance2(unit, state_.units[index]) > skill.range_mm * skill.range_mm)
         return;
-    if (def.effect == SkillEffect::kLogicalBolt && state_.bolts.size() >= kMaxBolts)
+    if (skill.effect == 3 && state_.bolts.size() >= kMaxBolts)
         return;
 
-    unit.ready[skill_id - 1] = state_.frame + def.cooldown;
-    if (def.effect == SkillEffect::kInstant)
+    unit.ready[skill_id - 1] = state_.frame + skill.cooldown;
+    if (skill.effect == 1)
     {
-        damage[index] += def.damage;
+        damage[index] += skill.damage;
         return;
     }
-    if (def.effect == SkillEffect::kVisualBolt)
-        damage[index] += def.damage; // 表现飞行不会改变已经结算的伤害。
-    if (state_.bolts.size() >= kMaxBolts)
-        return; // 表现球满槽仅降级视觉，不撤回已提交的伤害与冷却。
+    if (skill.effect == 2)
+        damage[index] += skill.damage;
+    if (state_.bolts.size() == kMaxBolts)
+        return; // 纯表现弹丸满槽不撤销已结算伤害。
     state_.bolts.push_back({state_.next_bolt++, unit.id, state_.units[index].id, state_.frame + 60,
-                            def.effect == SkillEffect::kVisualBolt ? 0 : def.damage, unit.x, unit.y,
-                            unit.z});
+                            skill.effect == 2 ? 0 : skill.damage, unit.x, unit.y, unit.z});
 }
-void Engine::projectiles(std::vector<std::int32_t> &damage)
+
+void Engine::moveBolts(std::vector<std::int32_t> &damage)
 {
-    std::vector<Bolt> surviving;
-    surviving.reserve(kMaxBolts);
+    std::vector<Bolt> next;
+    next.reserve(kMaxBolts);
     for (auto bolt : state_.bolts)
     {
         const auto it = std::find_if(state_.units.begin(), state_.units.end(), [&](const Unit &unit)
                                      { return unit.id == bolt.target && unit.hp > 0; });
         if (it == state_.units.end() || bolt.expires <= state_.frame)
             continue;
-        const auto dx   = it->x - bolt.x;
-        const auto dz   = it->z - bolt.z;
-        const auto dy   = it->y - bolt.y;
-        const auto span = std::max({std::abs(dx), std::abs(dy), std::abs(dz)});
-        // 400mm/frame；以Chebyshev长度归一保证整数确定性，技能规则不是欧氏匀速。
+        const auto dx = it->x - bolt.x, dy = it->y - bolt.y, dz = it->z - bolt.z;
+        const auto span = std::max({absolute(dx), absolute(dy), absolute(dz)});
         if (span <= 400)
         {
             damage[static_cast<std::size_t>(it - state_.units.begin())] += bolt.damage;
             continue;
         }
         bolt.x += dx * 400 / span;
-        bolt.z += dz * 400 / span;
         bolt.y += dy * 400 / span;
-        surviving.push_back(bolt);
+        bolt.z += dz * 400 / span;
+        next.push_back(bolt);
     }
-    state_.bolts.swap(surviving); // 保持原ID顺序；回滚后迭代顺序不改变。
+    state_.bolts.swap(next);
 }
+
 void Engine::finish(const std::vector<std::int32_t> &damage)
 {
-    bool alive1 = false;
-    bool alive2 = false;
+    bool alive1 = false, alive2 = false;
     for (std::size_t i = 0; i < state_.units.size(); ++i)
     {
         auto &unit = state_.units[i];
         unit.hp    = std::max(0, unit.hp - damage[i]);
-        alive1 |= unit.hp > 0 && unit.camp == 1;
-        alive2 |= unit.hp > 0 && unit.camp == 2;
+        if (unit.hp == 0 && unit.movement_mode == 1)
+        {
+            const auto released = context_->occupancy().Release({unit.id});
+            if (!released.ok())
+                throw std::runtime_error("NAV_RELEASE_FAILED");
+        }
+        alive1 = alive1 || (unit.camp == 1 && unit.hp > 0);
+        alive2 = alive2 || (unit.camp == 2 && unit.hp > 0);
     }
     if (!alive1 || !alive2)
         state_.winner = alive1 ? 1 : alive2 ? 2 : 3;
     else if (state_.frame >= kMaxFrames)
         state_.winner = 3;
 }
-void Engine::step(Input input)
+
+void Engine::runFrame(const PlayerInput *inputs)
 {
-    // API原子提交：任何异常恢复旧逻辑状态；临时内存失败不留下半帧。
-    State before = state_;
+    ++state_.frame;
+    std::vector<std::int32_t>  damage(state_.units.size(), 0);
+    // 先冻结AI追击目标ID：移动先后不得改变本帧每人的目标选择。
+    std::vector<std::uint32_t> targets(state_.units.size(), 0);
+    for (std::size_t index = 0; index < state_.units.size(); ++index)
+    {
+        if (state_.units[index].id == 1001 || state_.units[index].hp <= 0)
+            continue;
+        const auto target_index = targetOf(state_.units[index], 3);
+        if (target_index != state_.units.size())
+            targets[index] = state_.units[target_index].id;
+    }
+    // 全部单位按ID升序执行；玩家1001由正式帧输入驱动，其余单位由Core规则驱动。
+    for (auto &unit : state_.units)
+    {
+        if (unit.hp <= 0)
+            continue;
+        if (unit.id == 1001)
+        {
+            const auto &input = inputs[0];
+            moveGround(unit, input.x, input.z);
+        }
+        else
+        {
+            const auto id = targets[static_cast<std::size_t>(&unit - state_.units.data())];
+            const auto it = std::find_if(state_.units.begin(), state_.units.end(),
+                                         [&](const Unit &other) { return other.id == id; });
+            if (it == state_.units.end())
+                continue;
+            if (unit.movement_mode == 1)
+                chaseGround(unit, *it);
+            else
+                chaseAir(unit, *it);
+        }
+    }
+    // 固定顺序结算技能，伤害直到最后才提交，避免ID处理顺序取消同帧攻击。
+    for (auto &unit : state_.units)
+    {
+        if (unit.hp <= 0)
+            continue;
+        std::int32_t skill_id = 0;
+        if (unit.id == 1001)
+            skill_id = inputs[0].skill;
+        else
+        {
+            const auto enemy = targetOf(unit, 3);
+            if (enemy != state_.units.size())
+                skill_id =
+                    (unit.movement_mode == 1 && distance2(unit, state_.units[enemy]) <= 900 * 900)
+                        ? 1
+                        : 3;
+        }
+        cast(unit, skill_id, damage);
+    }
+    moveBolts(damage);
+    finish(damage);
+}
+
+void Engine::stepFrame(std::uint32_t frame, const PlayerInput *inputs, std::size_t count)
+{
+    if (poisoned_ || state_.winner != 0 || frame != state_.frame + 1 || frame > kMaxFrames ||
+        !inputs || count != 1 || inputs[0].seat_id != 1 || inputs[0].unit_id != 1001)
+        throw std::runtime_error("FRAME_INPUT");
+    for (std::size_t i = 0; i < count; ++i)
+    {
+        if (inputs[i].x < -1 || inputs[i].x > 1 || inputs[i].z < -1 || inputs[i].z > 1 ||
+            inputs[i].skill < 0 || inputs[i].skill > 3)
+            throw std::runtime_error("FRAME_INPUT_RANGE");
+    }
+    const State before = state_; // 失败路径补偿；商业规模需Benchmark评估快照复制成本。
     try
     {
-        stepUnchecked(input);
+        runFrame(inputs);
     }
     catch (...)
     {
-        state_ = std::move(before);
+        try
+        {
+            auto restored = buildContext(before);
+            state_        = before;
+            context_      = std::move(restored);
+        }
+        catch (...)
+        {
+            poisoned_ = true;
+        }
         throw;
     }
 }
-void Engine::stepUnchecked(Input input)
-{
-    if (state_.winner != 0)
-        throw std::runtime_error("BATTLE_FINISHED");
-    if (input.x < -1 || input.x > 1 || input.z < -1 || input.z > 1 || input.y != 0 ||
-        input.skill < 0 || input.skill > 3)
-        throw std::runtime_error("BAD_INPUT");
-    ++state_.frame;
-    std::vector<Input> inputs;
-    for (const auto &unit : state_.units)
-        inputs.push_back(unit.id == 1001 ? input : ai(unit));
-    for (std::size_t i = 0; i < state_.units.size(); ++i)
-        if (state_.units[i].hp > 0)
-            move(state_.units[i], inputs[i]);
 
-    std::vector<std::int32_t> damage(state_.units.size(), 0);
-    for (std::size_t i = 0; i < state_.units.size(); ++i)
-        if (state_.units[i].hp > 0)
-            cast(state_.units[i], inputs[i].skill, damage);
-    projectiles(damage);
-    finish(damage); // 同帧统一提交伤害；不会因先处理ID小者而取消对方同帧攻击。
-}
 std::string Engine::save() const
 {
+    if (poisoned_)
+        throw std::runtime_error("STATE_POISONED");
     std::string out;
-    out.reserve(128 + state_.units.size() * 52 + state_.bolts.size() * 44);
-    put(out, 1, 4);
+    out.reserve(4096);
+    put(out, 3, 4);
     put(out, state_.frame, 4);
     put(out, state_.winner, 4);
     put(out, state_.next_bolt, 4);
@@ -845,15 +1209,15 @@ std::string Engine::save() const
     for (const auto &unit : state_.units)
     {
         put(out, unit.id, 4);
+        put(out, unit.profile_id, 4);
         put(out, unit.camp, 4);
-        put(out, unit.move_mode, 4);
+        put(out, unit.movement_mode, 4);
         put(out, static_cast<std::uint64_t>(unit.x), 8);
         put(out, static_cast<std::uint64_t>(unit.y), 8);
         put(out, static_cast<std::uint64_t>(unit.z), 8);
         put(out, static_cast<std::uint32_t>(unit.hp), 4);
-        put(out, unit.ready[0], 4);
-        put(out, unit.ready[1], 4);
-        put(out, unit.ready[2], 4);
+        for (const auto ready : unit.ready)
+            put(out, ready, 4);
     }
     put(out, state_.bolts.size(), 4);
     for (const auto &bolt : state_.bolts)
@@ -867,52 +1231,266 @@ std::string Engine::save() const
         put(out, static_cast<std::uint64_t>(bolt.y), 8);
         put(out, static_cast<std::uint64_t>(bolt.z), 8);
     }
+    put(out, state_.routes.size(), 4);
+    for (const auto &route : state_.routes)
+    {
+        put(out, route.unit_id, 4);
+        put(out, route.target_id, 4);
+        put(out, static_cast<std::uint64_t>(route.planned_target_x), 8);
+        put(out, static_cast<std::uint64_t>(route.planned_target_y), 8);
+        put(out, static_cast<std::uint64_t>(route.planned_target_z), 8);
+        put(out, route.repath_at, 4);
+        put(out, route.blocked_frames, 4);
+        put(out, route.valid ? 1 : 0, 4);
+        put(out, route.path.count(), 4);
+        put(out, route.next_point, 4);
+        put(out, route.progress_mm, 8);
+        put(out, route.path.length_mm(), 8);
+        put(out, std::string(route.path.status()) == "partial" ? 1 : 0, 4);
+        for (const auto &point : route.path.points())
+        {
+            put(out, static_cast<std::uint64_t>(point.x_mm), 8);
+            put(out, static_cast<std::uint64_t>(point.y_mm), 8);
+            put(out, static_cast<std::uint64_t>(point.z_mm), 8);
+        }
+    }
+    if (out.size() > kMaxState)
+        throw std::runtime_error("STATE_SIZE_LIMIT");
     return out;
 }
+
 void Engine::restore(const std::string &bytes)
 {
+    if (poisoned_ || bytes.size() > kMaxState)
+        throw std::runtime_error("STATE_INVALID");
     std::size_t offset = 0;
-    State       candidate;
-    const auto  count = readStateHeader(bytes, offset, candidate);
-    for (std::size_t i = 0; i < count; ++i)
-        candidate.units.push_back(readUnit(bytes, offset, candidate));
-
+    if (get(bytes, offset, 4) != 3)
+        throw std::runtime_error("STATE_VERSION");
+    State candidate;
+    candidate.frame     = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    candidate.winner    = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    candidate.next_bolt = static_cast<std::uint32_t>(get(bytes, offset, 4));
+    const auto units    = get(bytes, offset, 4);
+    if (units != 3 || candidate.frame > kMaxFrames || candidate.winner > 3 ||
+        candidate.next_bolt == 0 || candidate.next_bolt > kMaxFrames * kMaxUnits + 1)
+        throw std::runtime_error("STATE_HEADER");
+    for (std::uint64_t i = 0; i < units; ++i)
+    {
+        Unit unit;
+        unit.id            = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.profile_id    = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.camp          = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.movement_mode = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        unit.x             = signed64(get(bytes, offset, 8));
+        unit.y             = signed64(get(bytes, offset, 8));
+        unit.z             = signed64(get(bytes, offset, 8));
+        unit.hp            = signed32(get(bytes, offset, 4));
+        for (auto &ready : unit.ready)
+            ready = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        requirePosition(unit.x);
+        requirePosition(unit.y);
+        requirePosition(unit.z);
+        if (unit.hp < 0 || unit.camp < 1 || unit.camp > 2 || unit.movement_mode < 1 ||
+            unit.movement_mode > 2 ||
+            (!candidate.units.empty() && candidate.units.back().id >= unit.id))
+            throw std::runtime_error("STATE_UNIT");
+        for (const auto ready : unit.ready)
+            if (ready > candidate.frame + 24)
+                throw std::runtime_error("STATE_READY");
+        candidate.units.push_back(unit);
+    }
+    if (candidate.units[0].id != 1001 || candidate.units[1].id != 2001 ||
+        candidate.units[2].id != 2002)
+        throw std::runtime_error("STATE_UNIT_IDS");
+    if (candidate.units[0].profile_id != 1 || candidate.units[1].profile_id != 2 ||
+        candidate.units[2].profile_id != 1)
+        throw std::runtime_error("STATE_PROFILE_IDS");
+    for (const auto &unit : candidate.units)
+    {
+        const auto &profile = profileFor(*profiles_, unit.profile_id);
+        if (unit.movement_mode != profile.movement_mode || unit.hp > profile.max_hp)
+            throw std::runtime_error("STATE_PROFILE_MISMATCH");
+    }
     const auto bolts = get(bytes, offset, 4);
     if (bolts > kMaxBolts)
-        throw std::runtime_error("STATE_BOLTS");
-    for (std::size_t i = 0; i < bolts; ++i)
-        candidate.bolts.push_back(readBolt(bytes, offset, candidate));
+        throw std::runtime_error("STATE_BOLT_LIMIT");
+    for (std::uint64_t i = 0; i < bolts; ++i)
+    {
+        Bolt bolt;
+        bolt.id      = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.caster  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.target  = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.expires = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        bolt.damage  = signed32(get(bytes, offset, 4));
+        bolt.x       = signed64(get(bytes, offset, 8));
+        bolt.y       = signed64(get(bytes, offset, 8));
+        bolt.z       = signed64(get(bytes, offset, 8));
+        requirePosition(bolt.x);
+        requirePosition(bolt.y);
+        requirePosition(bolt.z);
+        const auto unitExists = [&](std::uint32_t unit_id)
+        {
+            return std::any_of(candidate.units.begin(), candidate.units.end(),
+                               [&](const Unit &unit) { return unit.id == unit_id; });
+        };
+        if (!bolt.id || bolt.id >= candidate.next_bolt || !unitExists(bolt.caster) ||
+            !unitExists(bolt.target) || (bolt.damage != 0 && bolt.damage != 20) ||
+            bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 ||
+            (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
+            throw std::runtime_error("STATE_BOLT");
+        candidate.bolts.push_back(bolt);
+    }
+    const auto routes = get(bytes, offset, 4);
+    if (routes > kMaxRoutes)
+        throw std::runtime_error("STATE_ROUTE_LIMIT");
+    for (std::uint64_t i = 0; i < routes; ++i)
+    {
+        Route route;
+        route.unit_id          = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.target_id        = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.planned_target_x = signed64(get(bytes, offset, 8));
+        route.planned_target_y = signed64(get(bytes, offset, 8));
+        route.planned_target_z = signed64(get(bytes, offset, 8));
+        requirePosition(route.planned_target_x);
+        requirePosition(route.planned_target_y);
+        requirePosition(route.planned_target_z);
+        route.repath_at           = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.blocked_frames      = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        const auto valid          = get(bytes, offset, 4);
+        const auto points         = get(bytes, offset, 4);
+        route.next_point          = static_cast<std::uint32_t>(get(bytes, offset, 4));
+        route.progress_mm         = get(bytes, offset, 8);
+        const auto path_length_mm = get(bytes, offset, 8);
+        const auto partial        = get(bytes, offset, 4);
+        if (valid > 1 || partial > 1 || points > 1024 || route.next_point > points ||
+            route.repath_at > candidate.frame + kRepathDelay || route.unit_id == 0 ||
+            route.target_id == 0 ||
+            (!candidate.routes.empty() && candidate.routes.back().unit_id >= route.unit_id))
+            throw std::runtime_error("STATE_ROUTE");
+        route.valid = valid != 0;
+        std::vector<flywow_navigation::WorldPosition> path_points;
+        path_points.reserve(static_cast<std::size_t>(points));
+        for (std::uint64_t j = 0; j < points; ++j)
+        {
+            flywow_navigation::WorldPosition point;
+            point.x_mm = signed64(get(bytes, offset, 8));
+            point.y_mm = signed64(get(bytes, offset, 8));
+            point.z_mm = signed64(get(bytes, offset, 8));
+            validatePoint(point);
+            if (!map_->WorldToGrid(point).ok())
+                throw std::runtime_error("STATE_ROUTE_POINT");
+            path_points.push_back(point);
+        }
+        route.path = flywow_navigation::Path(std::move(path_points), path_length_mm, partial != 0);
+        if (route.valid && (route.path.count() < 2 || route.next_point < 1))
+            throw std::runtime_error("STATE_ROUTE_CURSOR");
+        candidate.routes.push_back(std::move(route));
+    }
     if (offset != bytes.size())
         throw std::runtime_error("STATE_TRAILING");
-    state_ = std::move(candidate); // 所有校验通过后唯一发布点。
+    auto next_context = buildContext(candidate);
+    state_            = std::move(candidate);    // 候选已完成逻辑校验与占位重建。
+    context_          = std::move(next_context); // 发布点后从未混用新旧动态事实。
 }
 } // namespace lesson_frame
 
-extern "C" void *fs_open(const char *path)
+extern "C" LESSON_FRAME_API int fs_preload_map(const char *path)
 {
     try
     {
-        if (!path)
-            return nullptr;
-        const auto map = flywow_navigation::BMapReader::Read(path);
-        return map.ok() ? new lesson_frame::Engine(map.value) : nullptr;
+        if (!path || !*path)
+            return 0;
+        const auto result = flywow_navigation::MapRegistry::Instance().Load(path);
+        return result.ok() && static_cast<bool>(result.value) ? 1 : 0;
     }
     catch (...)
     {
-        return nullptr;
+        return 0;
     }
 }
-extern "C" void fs_close(void *handle)
+
+extern "C" LESSON_FRAME_API int fs_preload_unit_profiles(const char *path)
 {
-    delete static_cast<lesson_frame::Engine *>(handle);
-}
-extern "C" int fs_step(void *handle, int x, int z, int skill)
-{
+    using lesson_frame::UnitProfile;
+    using lesson_frame::UnitProfileTable;
+
     try
     {
-        if (!handle)
+        if (!path || !*path)
             return 0;
-        static_cast<lesson_frame::Engine *>(handle)->step({x, z, 0, skill});
+        std::ifstream input(path, std::ios::binary | std::ios::ate);
+        if (!input || input.tellg() <= 0 || input.tellg() > 65536)
+            return 0;
+        input.seekg(0);
+        std::string   signature;
+        std::uint32_t count = 0;
+        if (!(input >> signature >> count) || signature != "FWUP1" || count == 0 || count > 128)
+            return 0;
+
+        auto profiles = std::make_shared<UnitProfileTable>();
+        profiles->reserve(count);
+        for (std::uint32_t index = 0; index < count; ++index)
+        {
+            UnitProfile   profile{};
+            std::uint64_t id = 0, mode = 0, stride = 0, max_hp = 0, radius = 0, step = 0, slope = 0;
+            std::uint64_t clearance = 0, altitude = 0, areas = 0;
+            if (!(input >> id >> mode >> stride >> max_hp >> radius >> step >> slope >> clearance >>
+                  altitude >> areas) ||
+                id == 0 || id > UINT32_MAX || (mode != 1 && mode != 2) || stride == 0 ||
+                max_hp == 0 || stride > INT32_MAX || max_hp > INT32_MAX || radius > INT32_MAX ||
+                step > INT32_MAX || slope > UINT32_MAX || clearance > INT32_MAX ||
+                altitude > INT32_MAX || areas > 256)
+                return 0;
+
+            profile.profile_id              = static_cast<std::uint32_t>(id);
+            profile.movement_mode           = static_cast<std::uint32_t>(mode);
+            profile.move_stride_mm_per_tick = static_cast<std::uint32_t>(stride);
+            profile.max_hp                  = static_cast<std::int32_t>(max_hp);
+            profile.min_air_clearance_mm    = static_cast<std::uint32_t>(clearance);
+            profile.max_air_altitude_mm     = static_cast<std::uint32_t>(altitude);
+
+            if (mode == 1)
+            {
+                if (radius == 0 || step == 0 || clearance != 0 || altitude != 0 || areas == 0)
+                    return 0;
+                profile.navigation.unit_id            = static_cast<std::uint32_t>(id);
+                profile.navigation.radius_mm          = static_cast<std::int32_t>(radius);
+                profile.navigation.max_step_mm        = static_cast<std::int32_t>(step);
+                profile.navigation.max_slope_permille = static_cast<std::uint32_t>(slope);
+            }
+            else if (radius != 0 || step != 0 || slope != 0 || clearance == 0 ||
+                     altitude < clearance || areas != 0)
+            {
+                return 0;
+            }
+
+            std::array<bool, 256> seen{};
+            for (std::uint64_t area_index = 0; area_index < areas; ++area_index)
+            {
+                std::uint64_t area = 0, allowed = 0, cost = 0;
+                if (!(input >> area >> allowed >> cost) || area > 255 || allowed > 1 ||
+                    cost > UINT16_MAX || (allowed && cost < 1000) || seen[area])
+                    return 0;
+                seen[area]                                  = true;
+                profile.navigation.area_allowed[area]       = static_cast<std::uint8_t>(allowed);
+                profile.navigation.area_cost_permille[area] = static_cast<std::uint16_t>(cost);
+            }
+            profiles->push_back(std::move(profile));
+        }
+
+        input >> std::ws;
+        if (!input.eof())
+            return 0;
+        std::sort(profiles->begin(), profiles->end(),
+                  [](const UnitProfile &left, const UnitProfile &right)
+                  { return left.profile_id < right.profile_id; });
+        for (std::size_t index = 1; index < profiles->size(); ++index)
+            if ((*profiles)[index - 1].profile_id == (*profiles)[index].profile_id)
+                return 0;
+
+        std::shared_ptr<const UnitProfileTable> published = std::move(profiles);
+        std::atomic_store_explicit(&g_unit_profiles, std::move(published),
+                                   std::memory_order_release);
         return 1;
     }
     catch (...)
@@ -920,16 +1498,57 @@ extern "C" int fs_step(void *handle, int x, int z, int skill)
         return 0;
     }
 }
-extern "C" int fs_save(void *handle, unsigned char *out, int capacity)
+
+extern "C" LESSON_FRAME_API void *fs_open(std::uint32_t map_id)
 {
     try
     {
-        if (!handle || !out || capacity < 0)
+        const auto result = flywow_navigation::MapRegistry::Instance().Find(map_id);
+        if (!result.ok() || !result.value)
+            return nullptr;
+        return new lesson_frame::Engine(result.value);
+    }
+    catch (...)
+    {
+        return nullptr;
+    }
+}
+
+extern "C" LESSON_FRAME_API void fs_close(void *handle)
+{
+    delete static_cast<lesson_frame::Engine *>(handle);
+}
+
+extern "C" LESSON_FRAME_API int fs_step_frame(void *handle, std::uint32_t frame,
+                                              const FsPlayerInput *players, std::uint32_t count)
+{
+    try
+    {
+        if (!handle || !players || count != 1)
+            return 0;
+        lesson_frame::PlayerInput inputs[1];
+        for (std::uint32_t i = 0; i < count; ++i)
+            inputs[i] = {players[i].seat_id, players[i].unit_id, players[i].x, players[i].z,
+                         players[i].skill};
+        static_cast<lesson_frame::Engine *>(handle)->stepFrame(frame, inputs, count);
+        return 1;
+    }
+    catch (...)
+    {
+        return 0;
+    }
+}
+
+extern "C" LESSON_FRAME_API int fs_save(void *handle, unsigned char *output, int capacity)
+{
+    try
+    {
+        if (!handle || !output || capacity < 0)
             return 0;
         const auto bytes = static_cast<lesson_frame::Engine *>(handle)->save();
         if (bytes.size() > static_cast<std::size_t>(capacity))
             return 0;
-        std::memcpy(out, bytes.data(), bytes.size());
+        std::memcpy(output, bytes.data(), bytes.size());
         return static_cast<int>(bytes.size());
     }
     catch (...)
@@ -937,14 +1556,15 @@ extern "C" int fs_save(void *handle, unsigned char *out, int capacity)
         return 0;
     }
 }
-extern "C" int fs_restore(void *handle, const unsigned char *bytes, int count)
+
+extern "C" LESSON_FRAME_API int fs_restore(void *handle, const unsigned char *bytes, int count)
 {
     try
     {
-        if (!handle || !bytes || count < 0 || count > 16384)
+        if (!handle || !bytes || count <= 0 || count > static_cast<int>(lesson_frame::kMaxState))
             return 0;
         static_cast<lesson_frame::Engine *>(handle)->restore(
-            std::string(reinterpret_cast<const char *>(bytes), count));
+            std::string(reinterpret_cast<const char *>(bytes), static_cast<std::size_t>(count)));
         return 1;
     }
     catch (...)
@@ -953,329 +1573,310 @@ extern "C" int fs_restore(void *handle, const unsigned char *bytes, int count)
     }
 }
 
-extern "C" std::uint32_t fs_map_version(void *handle)
-{
-    return handle ? static_cast<lesson_frame::Engine *>(handle)->mapVersion() : 0;
-}
-extern "C" std::uint32_t fs_map_id(void *handle)
+extern "C" LESSON_FRAME_API std::uint32_t fs_map_id(void *handle)
 {
     return handle ? static_cast<lesson_frame::Engine *>(handle)->mapId() : 0;
 }
+extern "C" LESSON_FRAME_API std::uint32_t fs_map_version(void *handle)
+{
+    return handle ? static_cast<lesson_frame::Engine *>(handle)->mapVersion() : 0;
+}
 ```
 
-### server/native/frame_sync/frame_binding.cpp
+### 5.4 `server/native/frame_sync/frame_binding.cpp`
 
-**操作：新建。** 让一个Skynet Worker Lua State拥有Native模拟，关闭时明确释放。
-
-学习导航：精读 借用userdata仅存活于回调；错误以nil/error返回；close与GC各自负责什么。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** FlyWow LuaBinding封装，Lua数组一次转换为C ABI，Engine独占。
 
 ```cpp
-// 职责：帧同步宿主Lua Binding；不持有Socket、Service handle或全局模拟对象。
-// 每个userdata独占Engine；close幂等，GC兜底。调用同步不yield。
+// 职责：Skynet Lua 5.4.7 到宿主 Frame Core 的唯一 Native Adapter。
+// 边界：Lua Binding；参数/返回值使用固定FlyWow lua-binding封装，不实现玩法。
+// 输入/输出：map_id、完整FrameInputs、Checkpoint -> userdata/true或nil,error。
+// ownership：userdata独占Engine，close幂等；每次Native调用同步、no-yield。
+// 不负责：Socket、权限认证、Skynet Service、进程级地图资产发布策略。
 #include "frame_core.h"
 #include "lua_binding.h"
 #include "lua_table.h"
-#include <memory>
+#include <array>
+#include <cstdint>
+#include <string>
+
 using flywow_lua_binding::LuaBinding;
 using flywow_lua_binding::LuaTable;
+
 namespace
 {
-constexpr const char *kType = "lesson.frame.engine";
+constexpr const char *kUserdataType = "lesson.frame.engine";
+
 struct Owner
 {
-    void *handle = nullptr;
+    void *handle = nullptr; // 只能由本Lua State的回调访问。
     ~Owner() noexcept
     {
         fs_close(handle);
     }
 };
-// 封装层固定栈/引用合同：参数读取不弹栈，returnValues压结果；临时LuaTable的
-// registry引用在回调退出时unref，Lua栈中的返回值继续持有对象。无longjmp错误API。
-int openEngine(lua_State *state)
+
+int preloadAssets(lua_State *state)
 {
     LuaBinding  lua(state);
     std::string path;
-    if (!lua.readValue(1, path))
+    std::string unit_profiles_path;
+    if (!lua.readValue(1, path) || !lua.readValue(2, unit_profiles_path))
         return lua.pushError();
-    Owner *owner = nullptr;
-    if (!lua.newUserdata(kType, owner))
-        return lua.pushError();
-    owner->handle = fs_open(path.c_str());
-    if (!owner->handle)
-        return lua.pushError("MAP_LOAD", "cannot open battle map");
-    return lua.returnValues(owner);
-}
-int stepEngine(lua_State *state)
-{
-    LuaBinding lua(state);
-    Owner     *owner = nullptr;
-    int        x = 0, z = 0, skill = 0;
-    if (!lua.readUserdata(1, kType, owner) || !lua.readValue(2, x) || !lua.readValue(3, z) ||
-        !lua.readValue(4, skill))
-        return lua.pushError();
-    if (!fs_step(owner->handle, x, z, skill))
-        return lua.pushError("STEP_FAILED", "invalid input or finished state");
+    if (!fs_preload_unit_profiles(unit_profiles_path.c_str()))
+        return lua.pushError("UNIT_PROFILE_PRELOAD", "unit profile configuration is invalid");
+    if (!fs_preload_map(path.c_str()))
+        return lua.pushError("MAP_PRELOAD", "published BMAP could not be loaded");
     return lua.returnValues(true);
 }
+
+int openEngine(lua_State *state)
+{
+    LuaBinding    lua(state);
+    std::uint32_t map_id = 0;
+    if (!lua.readValue(1, map_id) || map_id == 0)
+        return lua.pushError("MAP_ID", "map_id must be a positive integer");
+    void *handle = fs_open(map_id);
+    if (!handle)
+        return lua.pushError("MAP_OPEN", "map not preloaded or spawn blocked");
+    Owner *owner = nullptr;
+    if (!lua.newUserdata(kUserdataType, owner))
+    {
+        fs_close(handle);
+        return lua.pushError();
+    }
+    owner->handle = handle;
+    return lua.returnValues(owner);
+}
+
+int stepFrame(lua_State *state)
+{
+    LuaBinding    lua(state);
+    Owner        *owner = nullptr;
+    std::uint32_t frame = 0;
+    LuaTable      inputs;
+    if (!lua.readUserdata(1, kUserdataType, owner) || !lua.readValue(2, frame) ||
+        !lua.readTable(3, inputs))
+        return lua.pushError();
+    if (!owner->handle)
+        return lua.pushError("CLOSED", "engine already closed");
+    std::size_t count = 0;
+    if (!inputs.denseArrayLength(count))
+        return lua.pushError();
+    if (count != 1)
+        return lua.pushError("INPUT_COUNT", "exactly one player input required");
+
+    std::array<FsPlayerInput, 1> players{};
+    for (std::size_t index = 0; index < count; ++index)
+    {
+        LuaTable entry;
+        if (!inputs.readTable(static_cast<std::int64_t>(index + 1), entry) ||
+            !entry.readValue("seat_id", players[index].seat_id) ||
+            !entry.readValue("unit_id", players[index].unit_id) ||
+            !entry.readValue("x", players[index].x) || !entry.readValue("z", players[index].z) ||
+            !entry.readValue("skill", players[index].skill))
+            return lua.pushError("INPUT_FIELDS", "missing or invalid seat fields");
+    }
+    if (fs_step_frame(owner->handle, frame, players.data(),
+                      static_cast<std::uint32_t>(players.size())) != 1)
+        return lua.pushError("STEP_FAILED", "invalid frame or simulation error");
+    return lua.returnValues(true);
+}
+
 int saveEngine(lua_State *state)
 {
     LuaBinding lua(state);
     Owner     *owner = nullptr;
-    if (!lua.readUserdata(1, kType, owner))
+    if (!lua.readUserdata(1, kUserdataType, owner))
         return lua.pushError();
-    unsigned char buffer[16384];
-    const int     count = fs_save(owner->handle, buffer, sizeof(buffer));
-    if (count == 0)
-        return lua.pushError("STATE_SAVE", "closed engine or state overflow");
-    return lua.returnValues(std::string(reinterpret_cast<char *>(buffer), count));
+    if (!owner->handle)
+        return lua.pushError("CLOSED", "engine already closed");
+    std::string buffer(lesson_frame::kMaxState, '\0');
+    const int   written = fs_save(owner->handle, reinterpret_cast<unsigned char *>(&buffer[0]),
+                                  static_cast<int>(buffer.size()));
+    if (written <= 0)
+        return lua.pushError("STATE_SAVE", "serialization failed");
+    buffer.resize(static_cast<std::size_t>(written));
+    return lua.returnValues(buffer);
 }
+
 int restoreEngine(lua_State *state)
 {
     LuaBinding  lua(state);
     Owner      *owner = nullptr;
     std::string bytes;
-    if (!lua.readUserdata(1, kType, owner) || !lua.readValue(2, bytes))
+    if (!lua.readUserdata(1, kUserdataType, owner) || !lua.readValue(2, bytes))
         return lua.pushError();
+    if (!owner->handle)
+        return lua.pushError("CLOSED", "engine already closed");
     if (!fs_restore(owner->handle, reinterpret_cast<const unsigned char *>(bytes.data()),
                     static_cast<int>(bytes.size())))
-        return lua.pushError("STATE_RESTORE", "invalid or incompatible checkpoint");
+        return lua.pushError("STATE_RESTORE", "checkpoint invalid or incompatible");
     return lua.returnValues(true);
 }
-int closeEngine(lua_State *state)
-{
-    LuaBinding lua(state);
-    Owner     *owner = nullptr;
-    if (!lua.readUserdata(1, kType, owner))
-        return lua.pushError();
-    fs_close(owner->handle);
-    owner->handle = nullptr; // GC只析构Owner一次，不再释放旧指针。
-    return lua.returnValues(true);
-}
+
 int identity(lua_State *state)
 {
     LuaBinding lua(state);
     Owner     *owner = nullptr;
-    if (!lua.readUserdata(1, kType, owner))
+    if (!lua.readUserdata(1, kUserdataType, owner))
         return lua.pushError();
     if (!owner->handle)
-        return lua.pushError("CLOSED", "engine is closed");
+        return lua.pushError("CLOSED", "engine already closed");
     return lua.returnValues(fs_map_id(owner->handle), fs_map_version(owner->handle));
 }
+
+int closeEngine(lua_State *state)
+{
+    LuaBinding lua(state);
+    Owner     *owner = nullptr;
+    if (!lua.readUserdata(1, kUserdataType, owner))
+        return lua.pushError();
+    fs_close(owner->handle);
+    owner->handle = nullptr;
+    return lua.returnValues(true);
+}
 } // namespace
+
 extern "C" int luaopen_lesson_frame_native(lua_State *state)
 {
     LuaBinding lua(state);
     LuaTable   meta;
-    if (!lua.registerUserdata<Owner>(kType, meta))
+    if (!lua.registerUserdata<Owner>(kUserdataType, meta))
         return lua.pushError();
     auto methods = lua.newTable();
-    methods.setFunction("step", stepEngine);
+    methods.setFunction("step_frame", stepFrame);
     methods.setFunction("save", saveEngine);
     methods.setFunction("restore", restoreEngine);
-    methods.setFunction("close", closeEngine);
     methods.setFunction("identity", identity);
+    methods.setFunction("close", closeEngine);
     meta.writeValue("__index", methods);
     auto module = lua.newTable();
+    module.setFunction("preload", preloadAssets);
     module.setFunction("open", openEngine);
     return lua.returnValues(module);
 }
 ```
 
-### server/native/frame_sync/CMakeLists.txt
+### 5.5 `server/native/frame_sync/frame_test.cpp`
 
-**操作：新建。** 把同一核心编译为Linux Lua模块与Windows Unity DLL，不下载或复制FlyWow源码。
-
-学习导航：精读 C++17、固定 Lua ABI、真实子模块源码路径和 CMake 目标边界。可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
-
-```cmake
-# 职责：构建宿主Frame Core、Lua Binding和Unity Native DLL；源码来自固定子模块。
-# 输入：固定FlyWow/Skynet源码；输出：frame_core DLL/so、lesson_frame_native.so和Golden。
-cmake_minimum_required(VERSION 3.16)
-project(lesson_frame LANGUAGES CXX)
-set(CMAKE_CXX_STANDARD 17)
-set(CMAKE_CXX_STANDARD_REQUIRED ON)
-set(CMAKE_CXX_EXTENSIONS OFF)
-set(FLYWOW "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet-flywow")
-set(GRID "${FLYWOW}/navigation/native/grid_map")
-add_library(frame_core SHARED
-    frame_core.cpp
-    "${GRID}/bmap_reader.cpp"
-    "${GRID}/grid_map.cpp"
-    "${GRID}/nav_result.cpp"
-    "${GRID}/dynamic_occupancy.cpp"
-    "${GRID}/navigation_context.cpp"
-    "${GRID}/navigation_profile_registry.cpp"
-    "${GRID}/grid_pathfinder.cpp"
-)
-target_include_directories(frame_core PUBLIC . "${GRID}")
-if(MSVC)
-    target_compile_options(frame_core PRIVATE /W4 /permissive- /EHsc /utf-8)
-    set_target_properties(frame_core PROPERTIES WINDOWS_EXPORT_ALL_SYMBOLS ON)
-else()
-    target_compile_options(frame_core PRIVATE -Wall -Wextra -Wpedantic)
-endif()
-add_executable(frame_test frame_test.cpp)
-target_link_libraries(frame_test PRIVATE frame_core)
-if(MSVC)
-    target_compile_options(frame_test PRIVATE /UNDEBUG /utf-8)
-else()
-    target_compile_options(frame_test PRIVATE -UNDEBUG)
-endif()
-option(LESSON_FRAME_LUA "构建固定Skynet Lua Binding" ON)
-if(LESSON_FRAME_LUA)
-    set(SKYNET_LUA_DIR "${CMAKE_CURRENT_SOURCE_DIR}/../../third_party/skynet/3rd/lua")
-    add_subdirectory("${FLYWOW}/lua-binding" "${CMAKE_BINARY_DIR}/lua-binding" EXCLUDE_FROM_ALL)
-    add_library(lesson_frame_native MODULE frame_binding.cpp)
-    target_include_directories(lesson_frame_native PRIVATE
-        "${SKYNET_LUA_DIR}"
-        "${FLYWOW}/lua-binding"
-    )
-    target_link_libraries(lesson_frame_native PRIVATE frame_core flywow_lua_binding)
-    set_target_properties(lesson_frame_native PROPERTIES PREFIX "" BUILD_RPATH "$ORIGIN")
-endif()
-enable_testing()
-add_test(
-    NAME frame_native
-    COMMAND frame_test
-        "${CMAKE_CURRENT_SOURCE_DIR}/../../../shared/navigation/battle_1001/battle_1001.bmap"
-)
-```
-
-### server/native/frame_sync/frame_test.cpp
-
-**操作：新建。** 在接网络之前锁住重复运行、回滚恢复、损坏状态和异常不提交的合同。
-
-学习导航：精读 比较规范化bytes，而不是结构体padding；Golden输出可跨Windows/Linux逐行比较。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Linux/Windows相同输入的Native Golden、恢复与异常不提交。
 
 ```cpp
-// 职责：帧同步Native聚焦回归与跨平台Golden；不启动Server。
-#include "bmap_reader.h"
+// 职责：跨平台Frame Core
+// Golden、正式输入与Checkpoint恢复、Checkpoint恢复及坏状态回归。 边界：Native
+// CTest；不依赖Skynet和Unity；输出逐帧GOLDEN供Windows/Linux逐行比较。
+// 输入：唯一已发布BMAP绝对或相对路径；失败返回非零退出码。
 #include "frame_core.h"
 #include <cassert>
-#include <chrono>
-#include <iomanip>
+#include <cstdint>
 #include <iostream>
-std::uint32_t hashBytes(const std::string &bytes)
+#include <stdexcept>
+#include <string>
+
+namespace
+{
+std::uint32_t hashBytes(const std::string &s)
 {
     std::uint32_t hash = 2166136261u;
-    for (unsigned char byte : bytes)
+    for (unsigned char byte : s)
         hash = (hash ^ byte) * 16777619u;
-    return hash; // 模拟分歧诊断用FNV32，不是密码或资产完整性hash。
+    return hash;
 }
+} // namespace
+
 int main(int argc, char **argv)
 {
-    if (argc != 2)
+    if (argc != 3 || fs_preload_map(argv[1]) != 1 || fs_preload_unit_profiles(argv[2]) != 1)
         return 2;
-    const auto map = flywow_navigation::BMapReader::Read(argv[1]);
-    if (!map.ok())
+    const auto meta = flywow_navigation::MapRegistry::Instance().Find(1001);
+    if (!meta.ok() || !meta.value)
         return 3;
-    lesson_frame::Engine a(map.value), b(map.value);
-    const auto           initial = a.save();
-    assert(a.state().units[0].move_mode == 1 && a.state().units[1].move_mode == 2);
-    const auto born_y = a.state().units[1].y;
-    for (int i = 0; i < 12; ++i)
-        a.step({});
-    assert(a.state().units[1].y != born_y); // Server AI确实升降，不固定高度。
-    a.restore(initial);
-    for (int i = 0; i < 240 && a.state().winner == 0; ++i)
+    lesson_frame::Engine first(meta.value), second(meta.value);
+    const auto           initial = first.save();
+    assert(first.state().units.size() == 3);
+    bool has_route = false;
+    for (std::uint32_t frame = 1; frame <= 200 && first.state().winner == 0; ++frame)
     {
-        const lesson_frame::Input input{(i / 30) % 3 - 1, (i / 45) % 3 - 1, 0,
-                                        i % 20 == 0   ? 2
-                                        : i % 12 == 0 ? 1
-                                                      : 0};
-        const auto                before = a.save();
-        a.step(input);
-        b.step(input);
-        assert(a.save() == b.save());
-        b.restore(before);
-        b.step(input);
-        assert(a.save() == b.save());
-        std::cout << "GOLDEN " << a.state().frame << " " << hashBytes(a.save()) << "\n";
+        lesson_frame::PlayerInput inputs[1] = {
+            {1, 1001, static_cast<int>((frame / 25) % 3) - 1,
+             static_cast<int>((frame / 30) % 3) - 1, frame % 15 == 0 ? 1 : 0},
+        };
+        const auto prior = first.save();
+        first.stepFrame(frame, inputs, 1);
+        second.stepFrame(frame, inputs, 1);
+        assert(first.save() == second.save());
+        second.restore(prior);
+        second.stepFrame(frame, inputs, 1);
+        assert(first.save() == second.save());
+        has_route |= !first.state().routes.empty();
+        std::cout << "GOLDEN " << frame << " " << hashBytes(first.save()) << "\n";
     }
-    const auto saved = a.save();
+    const auto saved = first.save();
     try
     {
-        a.restore(saved + "x");
+        first.restore(saved + "x");
         assert(false);
     }
     catch (...)
     {
     }
-    assert(a.save() == saved);
+    assert(first.save() == saved);
     try
     {
-        a.step({9, 0, 0});
+        first.stepFrame(first.state().frame + 1, nullptr, 2);
         assert(false);
     }
     catch (...)
     {
     }
-    assert(a.save() == saved);
-    a.restore(initial);
-    assert(a.save() == initial);
-    std::cout << "FRAME_NATIVE_OK map=" << a.mapId() << ":" << a.mapVersion() << "\n";
+    assert(first.save() == saved);
+    first.restore(initial);
+    assert(first.save() == initial);
+    std::cout << "FRAME_NATIVE_OK route_seen=" << has_route << "\n";
+    return 0;
 }
 ```
 
-### server/tests/frame_binding_test.lua
+### 5.6 `server/scripts/lessons/prepare_frame_sync.py`
 
-**操作：新建。** 验证真实userdata加载、返回错误和幂等关闭。
+**操作：新建或整文件覆盖。** 验证正式BMAP SHA-256并生成Server纯Lua资产ID记录。
 
-学习导航：精读 Lua State拥有两个独立Engine；非法调用不会借助pcall抛出参数错误。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+```python
+# 职责：验证发布 BMAP 的 SHA256，生成课程所需的只读地图元数据。
+# 调用：在 server 目录执行 python3 scripts/lessons/prepare_frame_sync.py。
+# 不负责：Native源码版本Hash、Skynet启动、Git操作。
+from pathlib import Path
+import hashlib
+import json
 
-```lua
---- 职责：真实Native Binding聚焦测试；须在server工作目录使用固定Lua运行。
-package.cpath = "./build/frame_sync/?.so;" .. package.cpath
-local native = require "lesson_frame_native"
-local a = assert(native.open("../shared/navigation/battle_1001/battle_1001.bmap"))
-local b = assert(native.open("../shared/navigation/battle_1001/battle_1001.bmap"))
-assert(a:save() == b:save())
-local before = assert(a:save())
-local ok, err = a:step(9,0,0,0)
-assert(ok == nil and type(err.code) == "string")
-assert(a:save() == before)
-assert(a:step(1,0,3,0))
-assert(a:save() ~= b:save(), "separate userdata must own separate State")
-assert(b:restore(a:save()))
-assert(a:save() == b:save())
-assert(a:close())
-assert(a:close())
-ok, err = a:save()
-assert(ok == nil and type(err.code) == "string")
-assert(b:close())
-collectgarbage("collect")
-print("FRAME_BINDING_OK")
+root     = Path(__file__).resolve().parents[3]
+asset    = root / "shared/navigation/battle_1001"
+manifest = json.loads((asset / "battle_1001.manifest.json").read_text(encoding="utf-8"))
+digest   = hashlib.sha256((asset / "battle_1001.bmap").read_bytes()).hexdigest()
+
+if digest != manifest["content_sha256"]:
+    raise SystemExit("MAP_HASH_MISMATCH")
+
+target = root / "server/config/frame_sync_asset.lua"
+target.write_text(
+    "--- 构建生成的已验证地图身份；不要手改。\n"
+    'return { map_id = %d, map_version = %d, map_hash = "%s" }\n' %
+    (manifest["map_id"], manifest["map_version"], digest),
+    encoding="utf-8",
+)
+print("FRAME_ASSET_OK", digest)
 ```
 
-### 2.5 第一次跨 Lua/C++ 边界怎样审计
+### 5.7 由你亲自修改 Gateway 定向主动消息，并先审计
 
-`require "lesson_frame_native"` 查 `package.cpath`，加载 `server/build/frame_sync/lesson_frame_native.so`，Lua 自动调用 `luaopen_lesson_frame_native`。每个 Service 都有独立 Lua State/module cache；同一 OS 进程可以多次进入 open。每次 `native.open()` 创建独占 Engine userdata，不能把可变 Engine 当成共享全局对象。
-
-Owner 存 Native handle：显式 close 把它设为 null；GC 只析构 userdata 里的 Owner 一次，所以不会重复释放旧 handle。Binding 读取参数失败使用返回值 `nil,error`，不依赖 Lua longjmp 穿过 C++ 局部析构。LuaTable/LuaBinding 的栈与 registry reference 机制由固定 FlyWow 的 `lua-binding/` 实现，调用方借用 userdata 至当前回调结束，不把其裸指针跨 yield 保留。
-
-先仅构建新 Core，不启动 Server：
-
-```bash
-cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
-cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release
-cmake --build build/frame_sync --parallel 4
-ctest --test-dir build/frame_sync --output-on-failure
-./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
-```
-
-预期 CTest `frame_native` 通过，Lua 输出 `FRAME_BINDING_OK`。`frame_test` 对两独立实例、restore后重演、坏Checkpoint保持旧状态、非法输入原子失败、飞行敌人高度变化做断言。它输出每帧 `GOLDEN frame hash`，后面与 Windows 比较；这里只证明当前 Linux 实例，不提前宣称跨平台确定性。
-
-失败排查：`MAP_LOAD` 看相对工作目录与BMAP；`SPAWN_BLOCKED` 核对资产版本/出生点；`module not found` 核对 `.so` 名称、cpath 和构建路径；`undefined symbol lua_*` 必须使用Skynet固定Lua，不能随便换系统 Lua 5.3；DLL/so 不是可以跨OS复制使用的同一二进制。
-
-## 3. 由你修复 Gateway 定向主动消息，并先审计
-
-### 3.1 当前拒绝的具体含义
+#### 5.7.1 当前拒绝的具体含义
 
 `connection_id>0` 指定一个已经建立的逻辑连接；`request_id=0` 表示主动消息，不属于某个客户端请求的响应。这两个字段并不矛盾。当前 `flywow_gateway.lua` 的 `deliver_data()` 把这个组合当成非法；因此业务虽然产生正式FramePush，却发不到特定玩家。
 
 只允许 `connection_id=0/request_id=0` 的广播不能作为替代：广播会把某场战斗输入发给所有连接。也不能伪造一个旧非零request_id，把主动帧塞到控制请求的等待表。
 
-### 3.2 局部修改 FlyWow Runtime
+#### 5.7.2 局部修改 FlyWow Runtime
 
 **操作：局部修改。WSL 子模块文件：**
 
@@ -1283,13 +1884,13 @@ ctest --test-dir build/frame_sync --output-on-failure
 
 只在 `deliver_data(message)` 的参数拒绝条件中，删除这一条：
 
-```lua
+```text
         (message.connection_id > 0 and message.request_id == 0) or
 ```
 
 保留相邻的广播关联检查：
 
-```lua
+```text
         (message.connection_id == 0 and message.request_id ~= 0) or
 ```
 
@@ -1304,11 +1905,11 @@ ctest --test-dir build/frame_sync --output-on-failure
 
 这是 FlyWow 接入合同的通用修复，代码仍不认识Battle。旧第二课 `server/service/gateway/gateway_proxy.lua` 自身还有“指定连接必须非零request_id”的验证；**本课使用独立 Frame Proxy**，其合同在第5节给出，所以不要求修改旧第二课Proxy，也不暗中依赖它突然支持主动帧。
 
-### 3.3 完整替换审计测试
+#### 5.7.3 完整替换审计测试
 
 下面是完整测试文件，保留原关联响应、异步派发、旧epoch与广播用例，再新增两个连接的定向推送审计。握手替身 `ready` 由场景开关控制；它只验证 Gateway 对 ready 的处理，不冒充真实握手密码学测试。调试器替身避免单测引入宿主调试环境。
 
-### server/third_party/skynet-flywow/gateway/tests/gateway_async_test.lua
+#### 文件：`server/third_party/skynet-flywow/gateway/tests/gateway_async_test.lua`
 
 **操作：完整替换（先比较你已有测试修改）。** 审计定向主动消息，同时保持原异步合同回归。
 
@@ -1655,7 +2256,7 @@ assert(#e.writes == 3, "unknown target must be dropped")
 print("GATEWAY_ASYNC_UNIT_OK")
 ```
 
-### 3.4 先证明测试能抓住旧错误
+#### 5.7.4 先证明测试能抓住旧错误
 
 先放入测试，**暂不删除旧拒绝条件**，从Server工作目录执行：
 
@@ -1673,528 +2274,479 @@ print("GATEWAY_ASYNC_UNIT_OK")
 
 暂不因为教程要求而自动commit/push。你审计通过并决定发布时，按WORKSPACE_WORKFLOW：FlyWow子模块先形成已验证提交并推送，主仓库再更新submodule指针，随后Windows同步。提交标题与正文用中文。本文后续步骤在你的当前已修改WSL工作树中也能验证，不要求提前发布一个未审计版本。
 
-## 4. 兼容扩展唯一 Proto，不手写第二份命令表
 
-现有 `QueryCell=1001`、`RunAutoBattle=1002` 与字段号不改变，Envelope仍protocol_version=3。新增命令的 `XxxRequest/XxxResponse` 由FlyWow生成器识别：FrameInput只有Request，FramePush只有Response；输入单向发送，FramePush使用request_id=0。
+### 5.8 `shared/protocol/navigation_query.proto`
 
-**操作：局部修改 `shared/protocol/navigation_query.proto` 的CommandId，添加：**
-
-```proto
-FRAME_JOIN    = 1101;
-FRAME_INPUT   = 1102;
-FRAME_PUSH    = 1103;
-FRAME_RECOVER = 1104;
-FRAME_LEAVE   = 1105;
-FRAME_REPLAY  = 1106;
-```
-
-**操作：在同一个Proto文件末尾追加以下完整messages。** `.proto.inc`只是本文作者组织片段的名字，不是你要创建的第二份协议文件；不要新增运行时协议源。
+**操作：新建或整文件覆盖。** 保留第二课全部编号和消息，在唯一源完整定义第三课单席位协议。
 
 ```proto
-// 职责：以下message追加到navigation_query.proto；CommandId另按正文局部修改。
-message FrameCommand
-{
-    uint32 frame = 1; // 请求生效帧；必须位于Server当前帧之后的窗口内。
-    sint32 x     = 2; // -1/0/1，X方向按键。
-    sint32 z     = 3; // -1/0/1，Z方向按键。
-    uint32 skill = 4; // 0无施法，1近战，2表现弹丸，3逻辑火球。
+// 职责：Unity、FlyWow Gateway和宿主Battle共享的唯一网络消息/命令编号合同。
+// 边界：跨进程Proto；不把GridPos/Native指针/Skill内部状态带入长期协议。
+// 输入/输出：CommandId+XxxRequest/Response -> Envelope里的Protobuf业务消息。
+// 生命周期：同一源码自动生成Server descriptor/Registry及Unity C#；历史字段不可改号。
+// 不负责：网络传输加密、账号授权、帧调度、战斗逻辑。
+// 命名：XxxRequest和XxxResponse按枚举名字自动生成Registry；只含Response表示主动推送。
+syntax = "proto3";
+package battle.navigation.v1;
+
+enum CommandId {
+  COMMAND_UNSPECIFIED = 0;
+  QUERY_CELL = 1001;
+  RUN_AUTO_BATTLE = 1002;
+  FRAME_JOIN = 1101;
+  FRAME_INPUT = 1102;
+  FRAME_PUSH = 1103;
+  FRAME_RECOVER = 1104;
+  FRAME_LEAVE = 1105;
+  FRAME_REPLAY = 1106;
 }
-message FrameRecord
-{
-    FrameCommand input    = 1; // 该帧被权威采用的玩家输入；AI在确定性Core内派生。
-    bool         supplied = 2; // true采用玩家输入；false采用明确的缺输入规则。
-    fixed32      hash     = 3; // 本帧结束的规范化状态FNV32；用于诊断分歧。
+
+message Envelope {
+  uint32 protocol_version = 1; // 已有协议兼容版本，课程不修改其编号。
+  uint32 command = 2;          // CommandId的值；发送方向决定消息类型。
+  uint64 request_id = 3;       // 客户端请求/控制响应ID；0保留主动推送。
+  bytes body = 4;
 }
-message FrameJoinRequest
-{
-    uint32 scenario_id = 1;
+
+message WorldPosition {
+  sint64 x_mm = 1; // 世界X/Y/Z均整数毫米；负数合法。
+  sint64 y_mm = 2;
+  sint64 z_mm = 3;
 }
-message FrameJoinResponse
-{
-    string code         = 1; // OK/BUSY/BAD_SCENARIO/INTERNAL等稳定机器码。
-    uint32 battle_id    = 2;
-    bytes  resume_token = 3; // 32bytes操作系统随机凭据；不能写日志。
-    uint32 generation   = 4; // 重连会话代数；阻止旧连接输入写新会话。
-    uint32 map_id       = 5;
-    uint32 map_version  = 6;
-    string map_hash     = 7; // 已发布BMAP SHA256。
-    reserved 8;              // 已发布字段号永久保留，避免旧客户端把字段误读为新语义。
-    uint32 frame      = 9;
-    bytes  checkpoint = 10; // 初始完整状态；正常帧只传FrameRecord。
+
+message QueryCellRequest {
+  uint32 map_id = 1;
+  uint32 map_version = 2;
+  WorldPosition position = 3;
 }
-message FrameInputRequest
-{
-    uint32                battle_id  = 1;
-    uint32                generation = 2;
-    repeated FrameCommand inputs     = 3; // 最多8条；一帧只允许一个不可变输入。
+message QueryCellResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    MAP_NOT_FOUND = 2;
+    MAP_VERSION_MISMATCH = 3;
+    OUT_OF_BOUNDS = 4;
+    NOT_WALKABLE = 5;
+    BAD_REQUEST = 6;
+    INTERNAL_ERROR = 7;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 map_id = 3;
+  uint32 map_version = 4;
+  int32 grid_x = 5;
+  int32 grid_z = 6;
+  int32 cell_height_mm = 7;
+  uint32 area = 8;
+  uint32 clearance = 9;
 }
-message FrameInputResult
-{
-    uint32 frame = 1; // 对应请求中的目标帧；用于定位批内结果。
-    string code  = 2; // OK/BAD_INPUT/LATE/INPUT_WINDOW/CONFLICT/FINISHED。
+
+message RunAutoBattleRequest { uint32 scenario_id = 1; }
+message BattleEvent {
+  uint32 seq = 1;
+  uint32 logic_ms = 2;
+  string type = 3;
+  uint32 unit_id = 4;
+  uint32 target_id = 5;
+  uint32 attacker_id = 6;
+  uint32 killer_id = 7;
+  uint32 damage = 8;
+  uint32 target_hp = 9;
+  uint32 speed_mm_per_sec = 10;
+  string reason = 11;
+  string result = 12;
+  WorldPosition position = 13;
+  repeated WorldPosition points = 14;
 }
-message FramePushResponse
-{
-    uint32               battle_id  = 1;
-    uint32               generation = 2;
-    repeated FrameRecord records    = 3; // 按帧严格连续；一正常推送当前帧。
-    string code   = 4; // 请求级：OK/EMPTY_INPUT/INPUT_BATCH_TOO_LARGE/OVERLOAD/INTERNAL。
-    uint32 winner = 5; // 0进行中，1/2阵营胜利，3平局。
-    repeated FrameInputResult input_results = 6; // 输入请求的逐项结果；顺序与inputs一致。
+message RunAutoBattleResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    BAD_SCENARIO = 2;
+    BUSY = 3;
+    BATTLE_FAILED = 4;
+    RESULT_TOO_LARGE = 5;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 battle_id = 3;
+  uint32 battle_version = 4;
+  uint32 map_id = 5;
+  uint32 map_version = 6;
+  sint64 seed = 7;
+  string battle_result = 8;
+  uint32 end_logic_ms = 9;
+  repeated BattleEvent events = 10;
 }
-message FrameRecoverRequest
-{
-    uint32 battle_id    = 1;
-    bytes  resume_token = 2;
+
+// 第三课帧同步：正式帧统一携带玩家席位采用输入，不广播HP/权威位置。
+message FrameCommand {
+  uint32 frame = 1; // 请求生效帧，Service验证Deadline。
+  sint32 x = 2;     // -1/0/1。
+  sint32 z = 3;
+  uint32 skill = 4; // 0无技能，1近战，2视觉弹丸，3逻辑弹丸。
 }
-message FrameRecoverResponse
-{
-    FrameJoinResponse state = 1;
+message FramePlayerRecord {
+  uint32 seat_id = 1;     // 服务端分配、正序稳定。
+  FrameCommand input = 2;// 实际被采用的本席位输入。
+  bool supplied = 3;     // false表示服务端缺输入填充。
 }
-message FrameLeaveRequest
-{
-    uint32 battle_id  = 1;
-    uint32 generation = 2;
+message FrameRecord {
+  uint32 frame = 1;                  // 严格连续的权威帧。
+  repeated FramePlayerRecord players = 2; // 固定顺序；本课只有席位1。
+  fixed32 hash = 3;                  // 状态FNV32分歧诊断，不是安全Hash。
 }
-message FrameLeaveResponse
-{
-    string code = 1;
+message FrameJoinRequest {
+  uint32 scenario_id = 1;
+  uint32 battle_id = 2; // 0创建并立即开始单人Battle；非0连接已有Battle会被拒绝。
+  uint32 simulation_version = 3; // 客户端正在运行的确定性模拟合同版本。
 }
-message FrameReplayRequest
-{
-    uint32 battle_id    = 1;
-    bytes  resume_token = 2;
-    uint32 offset       = 3;
+message FrameJoinResponse {
+  string code = 1;          // OK/FULL/NOT_FOUND等。
+  uint32 battle_id = 2;
+  uint32 seat_id = 3;       // 绑定到当前Gateway Session的Seat。
+  bytes resume_token = 4;  // 本席位独占32字节随机恢复凭据；不要进Replay/日志。
+  uint32 generation = 5;   // 恢复时递增，旧代数失效。
+  uint32 map_id = 6;
+  uint32 map_version = 7;
+  string map_hash = 8;      // 发布BMAP SHA-256；不包含rules源码Hash。
+  uint32 frame = 9;
+  bytes checkpoint = 10;   // 创建或恢复时的当前StateV2。
+  uint32 tick_ms = 11;
+  uint32 future_window = 12;
+  uint32 input_lead = 13;
+  uint32 simulation_version = 14; // 服务端模拟版本；连接和回放元数据校验。
 }
-message FrameReplayResponse
-{
-    string               code    = 1;
-    repeated FrameRecord records = 2; // 分页最多256帧；不把整场日志塞进单个帧。
-    uint32               total   = 3;
-    FrameJoinResponse    initial = 4; // 第一页带身份/初始状态，不带恢复凭据。
+message FrameInputRequest {
+  uint32 battle_id = 1;
+  uint32 generation = 2;
+  repeated FrameCommand inputs = 3; // 网络发送不自行声明Seat身份。
 }
-message FrameReplay
-{
-    uint32               format_version = 1; // 目前1；加载时拒绝未知版本。
-    FrameJoinResponse    initial        = 2;
-    repeated FrameRecord records        = 3;
+message FramePushResponse {
+  uint32 battle_id = 1;
+  uint32 generation = 2; // 目标席位会话代数。
+  repeated FrameRecord records = 3;
+  string code = 4; // OK/LATE/INPUT_WINDOW/CONFLICT/OVERLOAD/INTERNAL。
+  uint32 winner = 5;
+  bytes checkpoint = 6; // 保留：服务端请求客户端安装完整Checkpoint时使用。
+}
+message FrameRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
+message FrameRecoverResponse { FrameJoinResponse state = 1; }
+message FrameLeaveRequest { uint32 battle_id = 1; uint32 generation = 2; }
+message FrameLeaveResponse { string code = 1; }
+message FrameReplayRequest {
+  uint32 battle_id = 1;
+  bytes resume_token = 2;
+  uint32 offset = 3;
+}
+message FrameReplayResponse {
+  string code = 1;
+  repeated FrameRecord records = 2; // 服务端按网络预算裁切分页。
+  uint32 total = 3;
+  FrameJoinResponse initial = 4;   // 首次提供初始状态；不包括Token。
+}
+message FrameReplay {
+  uint32 format_version = 1; // V1文件封装；Checkpoint内容为V2。
+  FrameJoinResponse initial = 2;
+  repeated FrameRecord records = 3;
 }
 ```
 
-### 4.1 消息的业务意义
+### 5.9 `server/config/frame_sync.lua`
 
-Join只选择已发布scenario_id，不携带位置、HP或Native状态。Server回传初始身份与Checkpoint。`battle_id` 是本进程不复用的战斗ID；`generation` 在恢复时递增，防止旧连接的合法旧消息写入新会话。`gateway_epoch/connection_id` 是Server内部传输身份，不是账号。
-
-`resume_token` 是32bytes操作系统随机恢复凭据，当前没有账号登录，所以不把connection_id当作永久身份。凭据仅在控制响应中交给该客户端，恢复/回放时验证；不能写日志，也不放进保存的回放。P-256应用握手不等于登录，也不加密之后的业务数据；实际部署的链路保护与账号系统仍按各自接入层处理。
-
-### 4.2 生成Server合同
-
-WSL仓库根目录：
-
-```bash
-./server/protocol/build_server_descriptor.sh
-python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
-  --proto shared/protocol/navigation_query.proto \
-  --output server/lualib/gateway/protocol/navigation_registry.lua
-rg -n 'FRAME_|FrameInput|FramePush' server/lualib/gateway/protocol/navigation_registry.lua
-```
-
-预期descriptor非空、输出 `SERVER_DESCRIPTOR_OK`；Registry的FrameInput为request_type且response_type=nil，FramePush为request_type=nil且response_type。不要手工编辑生成物来“补推送支持”。
-
-协议源按双工作区流程到Windows后，在Windows仓库根执行：
-
-```powershell
-./shared/protocol/build_unity_cs.ps1
-```
-
-该脚本将唯一Proto生成到现有 `Assets/BattleNavigation/Scripts/Protocol/NavigationQuery.cs`，保持已有Google.Protobuf引用。不要再把WSL生成的另一份同名C#放入Assets，否则相同类型重复定义。
-
-失败排查：命令没有Request/Response是命名前缀不匹配；descriptor旧是没有重新生成/重启；Server与Unity使用不同map_hash是地图发布身份不一致；协议枚举编号不能因为重新排列就改变。
-
-## 5. 实时Runtime与Worker：时间在调度层，规则在Core
-
-### 5.1 状态ownership
-
-|owner|持有内容|释放位置|
-|---|---|---|
-|Gateway|listen/client fd、握手、codec、写缓冲|连接关闭/进程停止|
-|Frame Proxy|本地Gateway handle、固定Cluster目标|进程结束；不持有Battle等待表|
-|Frame Dispatch|Worker handles、Battle ID分配|进程结束|
-|Worker|Battle索引、会话/凭据/代数、截止时间|leave/保留期到期摘除|
-|Runtime|pending输入、正式帧日志、Native Engine|Worker调用core.close|
-|Engine|单位/冷却/飞行/弹丸逻辑State、私有导航scratch|userdata显式close，GC兜底|
-|Unity Controller|confirmed/predicted Native、未确认输入、表现对象|OnDestroy|
-|FrameConnection|Socket、读写线程、有界队列、控制等待|Dispose关闭Socket解除读阻塞|
-
-Worker的 `M.step()` 不yield，正式状态修改是顺序事务。`skynet.call` 控制流程可能yield；入站route是pack/unpack后的值record，不借用Gateway连接对象。回复携带原epoch/id，Gateway再次核对连接有效性；不能把fd跨Cluster传给Worker。
-
-### 5.2 先创建运行预算与资产验证
-
-下面配置是新的独立配置，不覆盖现有battle.lua。容量是每Worker128场、4个Worker；这不是吞吐承诺，后面必须测当前地图、技能与部署机器。输入窗口8、每消息最多8输入、日志最多3600、回放页256、结束/断线保留30秒，都对应本功能确实持有的状态。
-
-### server/config/frame_sync.lua
-
-**操作：新建。** 为本版Worker给出实际持有状态的上限和固定时间合同，不覆盖第二课config.battle。
-
-学习导航：精读 tick与deadline、每Worker容量、输入窗口、重连保留、日志上限。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 固定Tick、单玩家席位、input window、Shard与容量预算。
 
 ```lua
---- 职责：帧同步版运行预算；Server进程启动时固定，配置变更需重启。
---- 输入输出：无输入->纯配置；不创建Service、不读取Unity工程。
+--- 职责：第三课帧同步Battle、网络与容量预算；Server进程启动时读取。
+--- 边界：纯配置，不创建Service；不引用开发机绝对路径。
+--- 不负责：规则源码hash、崩溃后持久化恢复、动态Worker迁移。
 return
 {
-    map_path         = "../shared/navigation/battle_1001/battle_1001.bmap",
-    manifest_path    = "../shared/navigation/battle_1001/battle_1001.manifest.json",
-    workers          = 4,     -- Service数；不表示线程绑定。
-    max_battles      = 128,   -- 每Worker同时持有的Battle；结束结果也占预算。
-    tick_cs          = 5,     -- 5×10ms=50ms；Native kTickMs必须同值。
-    future_window    = 8,     -- 当前帧后最多8帧输入；超窗明确拒绝。
-    max_catchup      = 4,     -- 一次心跳最多补4帧；仍落后则OVERLOAD，不跳帧。
-    retention_cs     = 3000,  -- 结束/断线Battle保留30秒。
-    max_frames       = 3600,  -- 180秒；对应Native时限和有界Replay日志。
-    input_batch      = 8,
-    replay_page      = 256,
-    gateway_node     = "frame_gateway",
-    gateway_address  = "127.0.0.1:2537",
-    battle_node      = "frame_battle",
-    battle_address   = "127.0.0.1:2538",
-    gateway_port     = 19021,
+    map_path        = "../shared/navigation/battle_1001/battle_1001.bmap",
+    unit_profiles_path = "../shared/battle/unit_profiles.cfg",
+    manifest_path   = "../shared/navigation/battle_1001/battle_1001.manifest.json",
+    workers         = 4,    -- 长期Worker Service数，不等于OS线程数。
+    max_battles     = 128,  -- 每Worker实例上限；须根据真实负载测量。
+    simulation_version = 1, -- 规则不兼容时递增；不维护源码Hash发布系统。
+    seats           = 1,    -- 唯一玩家席位；敌人由确定性AI推进。
+    tick_cs         = 5,    -- Skynet时间单位10ms；5cs = 50ms。
+    input_lead      = 2,    -- 初始输入提前两帧；按网络实测调整。
+    future_window   = 8,    -- 每席位未来允许缓存最多8帧。
+    input_batch     = 8,    -- 单次输入消息最多8条。
+    max_catchup     = 4,    -- 每次heartbeat最多补4帧，仍落后则OVERLOAD。
+    max_frames      = 3600, -- 与Native kMaxFrames一致。
+    replay_page     = 128,  -- 页面还须受65535字节编码大小约束。
+    retention_cs    = 3000, -- 结束或无人在线后30秒释放。
+    gateway_node    = "frame_gateway",
+    gateway_address = "127.0.0.1:2537",
+    battle_node     = "frame_battle",
+    battle_address  = "127.0.0.1:2538",
+    gateway_port    = 19021,
 }
 ```
 
-### server/scripts/lessons/prepare_frame_sync.py
+### 5.10 `server/lualib/battle/frame_sync/runtime.lua`
 
-**操作：新建。** 在启动前验证已发布地图hash并生成资产身份配置。该文件只描述地图资产身份，不计算或绑定源代码hash。
-
-学习导航：精读 路径从脚本推导，manifest与BMAP内容一致性，源码运行时不读Unity工程。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
-
-```python
-# 职责：验证帧同步部署资产并生成静态身份配置；不启动Server，不操作Git。
-# 调用：server工作目录 python3 scripts/lessons/prepare_frame_sync.py。
-from pathlib import Path
-import hashlib
-import json
-root = Path(__file__).resolve().parents[3]
-asset = root / 'shared/navigation/battle_1001'
-manifest = json.loads((asset/'battle_1001.manifest.json').read_text())
-digest = hashlib.sha256((asset/'battle_1001.bmap').read_bytes()).hexdigest()
-if digest != manifest['content_sha256']:
-    raise SystemExit('MAP_HASH_MISMATCH')
-target = root/'server/config/frame_sync_asset.lua'
-content = (
-    '--- 构建生成的已验证地图身份；不手改。\n'
-    'return { map_id = %d, map_version = %d, map_hash = "%s" }\n'
-) % (manifest['map_id'], manifest['map_version'], digest)
-target.write_text(content, encoding='utf-8')
-print('FRAME_ASSET_OK',digest)
-```
-
-WSL Server工作目录执行：
-
-```bash
-python3 scripts/lessons/prepare_frame_sync.py
-```
-
-预期 `FRAME_ASSET_OK`，生成 `config/frame_sync_asset.lua`。它保存已验证的map_id/version/hash，Runtime不读取Unity工程，也不读取开发机绝对路径。manifest文件的真实名称是 `battle_1001.manifest.json`；不是泛称 `manifest.json`。
-
-### 5.3 Runtime：复制意图，记录实际采用输入
-
-Runtime只管理本场的输入窗口与Core调用，不注册Service、不读网络、不以客户端时间推进。`pending`最多window条；一条输入被接受后不可改写。`records`保存实际被执行的补缺或玩家输入，不是发送方声称已执行的输入。Checkpoint只在加入/恢复/客户端重演时使用，Server不为每帧保留完整状态历史。
-
-### server/lualib/battle/frame_sync/runtime.lua
-
-**操作：新建。** 把输入窗口、缺输入规则和Replay归到一个Battle实例；先用纯Lua驱动验证。
-
-学习导航：精读 Native owner、不可变帧输入、明确拒绝、帧状态hash、历史最大长度；不require Skynet。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 纯Lua no-yield输入收集、补缺和完整FrameRecord。
 
 ```lua
---- 职责：一个帧同步Battle的no-yield运行时；输入->权威FrameRecord/Checkpoint。
---- Native Engine归本Runtime独占；调用方负责close；无Socket/墙钟/Skynet依赖。
+--- 职责：单场帧同步 no-yield Core Adapter；收集玩家输入并提交完整权威帧。
+--- 边界：宿主 Battle Runtime；不依赖 Skynet/网络/墙钟。
+--- ownership：独占 Native Engine；Worker 必须在销毁 Battle 时调用 close。
+--- 输入/输出：席位输入 -> 帧记录/规范化 Checkpoint；失败返回稳定 code。
+--- 不负责：用户认证、fd、Cluster、定时器、Battle 进程持久化恢复。
 local native = require "lesson_frame_native"
 local M = {}
 
+local MAX_SEATS = 1
+local MAX_MISSING_HOLD = 2
+
 ---@class FrameInput
----@field frame integer 目标Server帧；已经执行的帧不可修改。
----@field x integer X轴意图，取值-1/0/1；不代表正式位置。
----@field z integer Z轴意图，取值-1/0/1；不代表正式位置。
----@field y integer 本课固定为0，保留与Native输入record一致的字段。
----@field skill integer 技能编号；0表示本帧不施放。
----@class FrameRecord
----@field input FrameInput 本帧正式采用的输入；缺输入时由Server补齐。
----@field supplied boolean true表示截止前收到并采用玩家输入。
----@field hash integer 本帧规范化Native状态的非安全校验值。
----@class FrameRuntimeOptions
----@field map_path string 已验证地图资产路径；只在创建时读取。
----@field future_window integer 最多接受的未来帧距离。
----@field max_frames integer 单场可保留的Replay输入记录上限。
----@class FrameRuntimeError
----@field code string 稳定错误码，供Worker转换成传输合同。
+---@field frame integer 目标权威帧号；由Server验证Deadline。
+---@field x integer -1,0,1。
+---@field z integer -1,0,1。
+---@field skill integer 0,1,2,3；缺输入永不继承技能。
 
 ---@class FrameRuntime
----@field engine userdata 独占Native模拟；close后不再调用。
----@field frame integer 已完成权威帧。
----@field winner integer 0未结束、1/2胜方、3平局。
----@field pending table<integer,FrameInput> 尚未执行输入；由该Runtime独占，最多future_window条。
----@field records FrameRecord[] 有界整场帧输入日志；不保留每帧完整状态。
----@field window integer 与配置future_window一致；用于拒绝过远的未来输入。
----@field max_frames integer records容量上限；达到后Battle停止追加并失败。
----@field missing integer 连续缺输入帧数；控制短时方向保持。
----@field last_x integer 最近正式输入方向X分量。
----@field last_z integer 最近正式输入方向Z分量。
----@field last_y integer 最近正式输入高度分量；本课恒为0。
+---@field engine userdata 独占 Native Engine；显式关闭。
+---@field frame integer 已完成的权威帧号。
+---@field winner integer 0运行、1玩家胜、2敌方胜、3平局。
+---@field seats integer[] 固定值[1]。
+---@field units table<integer,integer> seat_id -> 本席位可控单位ID。
+---@field pending table<integer,table<integer,FrameInput>> 未来窗口的席位输入。
+---@field last_input table<integer,FrameInput> 各席位上一正式方向。
+---@field missing table<integer,integer> 各席位连续缺输入次数。
+---@field records table[] 只含正式采用输入，不含伪造的客户端State。
+---@field window integer 未来最大有效帧窗口。
+---@field max_frames integer 帧日志/对战寿命上限。
 
---- 对规范化状态做32位FNV；不作安全校验，SHA256用于已发布地图资产身份；程序版本随发行包管理。
----@param bytes string 本次调用借用的Native状态。
----@return integer hash unsigned32。
+--- FNV32 是状态分歧诊断值，不是认证Hash。
+---@param bytes string Native规范化Checkpoint副本。
+---@return integer hash 32位无符号整数。
 function M.hash(bytes)
     local value = 2166136261
-    for i = 1, #bytes do
-        value = ((value ~ bytes:byte(i)) * 16777619) & 0xffffffff
+    for index = 1, #bytes do
+        value = ((value ~ bytes:byte(index)) * 16777619) & 0xffffffff
     end
     return value
 end
 
---- 读取固定小端状态头；不会把Lua字符串转成可写指针。
-local function header(bytes)
+--- 读取固定小端的格式版本/帧号/胜负；调用前已验证Native生成状态。
+local function read_header(bytes)
     local version, frame, winner = string.unpack("<I4I4I4", bytes)
-    assert(version == 1, "STATE_VERSION")
+    assert(version == 2, "STATE_VERSION") -- 第三课改动了单席位与Navigation状态格式。
     return frame, winner
 end
 
---- 建立独占Native模拟；启动资产I/O，失败以nil/error交给Worker。
----@param options FrameRuntimeOptions map路径与容量由Worker配置注入；不在Core读取环境变量。
----@return FrameRuntime|nil runtime, table|nil error
-function M.create(options)
-    local engine, err = native.open(options.map_path)
-    if not engine then
-        return nil, err
-    end
-    local initial, save_err = engine:save()
-    if not initial then
-        engine:close()
-        return nil, save_err
-    end
-    return
-    {
-        engine        = engine,
-        initial       = initial,
-        frame         = 0,
-        winner        = 0,
-        pending       = {},
-        records       = {},
-        window        = options.future_window,
-        max_frames    = options.max_frames,
-        last_x        = 0,
-        last_z        = 0,
-        last_y        = 0,
-        missing       = 0,
-    }
+local function valid_input(input)
+    if type(input) ~= "table" then return false end
+    local f, x, z, skill = input.frame, input.x, input.z, input.skill
+    return math.type(f) == "integer" and f >= 1 and
+        math.type(x) == "integer" and x >= -1 and x <= 1 and
+        math.type(z) == "integer" and z >= -1 and z <= 1 and
+        math.type(skill) == "integer" and skill >= 0 and skill <= 3
 end
 
---- 接受未来帧意图；重复相同输入幂等，不允许改写已接受输入。
---- 不yield、不修改正式位置；成功OK，失败稳定code。
----@param runtime FrameRuntime 当前Battle owner。
----@param input FrameInput 调用方借用的意图record；函数只复制标量字段。
----@return string code OK表示幂等接受；其他值是稳定拒绝原因。
-function M.accept(runtime, input)
-    local f = input.frame or 0
-    local x, z, skill, y = input.x or 0, input.z or 0, input.skill or 0, input.y or 0
-    if math.type(f) ~= "integer" or math.type(x) ~= "integer" or
-        math.type(z) ~= "integer" or math.type(skill) ~= "integer" or
-        math.type(y) ~= "integer" or y ~= 0 or x < -1 or x > 1 or
-        z < -1 or z > 1 or skill < 0 or skill > 3 then
-        return "BAD_INPUT"
-    end
-    if runtime.winner ~= 0 then
-        return "FINISHED"
-    end
-    if f <= runtime.frame then
-        return "LATE"
-    end
-    if f > runtime.frame + runtime.window then
-        return "INPUT_WINDOW"
-    end
-    local previous = runtime.pending[f]
-    if previous then
-        same = previous.x == x and previous.z == z and previous.skill == skill and previous.y == y
-        if same then
-            return "OK"
-        end
-        return "CONFLICT"
+local function copy_input(input)
+    return { frame = input.frame, x = input.x, z = input.z, skill = input.skill }
+end
+
+--- 创建独占Runtime；Native预载MapRegistry。失败清理临时Engine。
+---@param options table {map_id,window,max_frames,seat_units} 由Worker显式传入。
+---@return FrameRuntime|nil runtime 成功实例，失败为nil。
+---@return table|nil err 稳定错误Record。
+function M.create(options)
+    assert(options.window >= 1 and options.window <= 32)
+    assert(options.max_frames > 0)
+    assert(#options.seat_units == MAX_SEATS)
+
+    local engine, open_err = native.open(options.map_id)
+    if not engine then return nil, open_err or { code = "NATIVE_OPEN" } end
+
+    local checkpoint, save_err = engine:save()
+    if not checkpoint then
+        engine:close()
+        return nil, save_err or { code = "CHECKPOINT" }
     end
 
-    runtime.pending[f] = { frame = f, x = x, z = z, skill = skill, y = y }
+    local frame, winner = read_header(checkpoint)
+    assert(frame == 0 and winner == 0, "BATTLE_INITIAL_STATE")
+
+    local runtime =
+    {
+        engine     = engine,
+        initial    = checkpoint,
+        frame      = frame,
+        winner     = winner,
+        seats      = { 1 },
+        units      = { [1] = options.seat_units[1] },
+        pending    = {},
+        last_input = { [1] = { x = 0, z = 0 } },
+        missing    = { [1] = 0 },
+        records    = {},
+        window     = options.window,
+        max_frames = options.max_frames,
+    }
+    return runtime
+end
+
+--- 某席位提交未来输入；Worker已校验传输身份和该帧实际Deadline。
+--- 复制输入避免跨消息保留调用方临时table；不yield、不执行Native。
+---@param runtime FrameRuntime 当前Battle owner。
+---@param seat_id integer 服务端绑定席位，不允许读取客户端自填席位。
+---@param input FrameInput 网络已解析且不持有外部buffer的值record。
+---@return string code OK/LATE/INPUT_WINDOW/CONFLICT/BAD_INPUT/FINISHED。
+function M.accept(runtime, seat_id, input)
+    if not runtime.units[seat_id] then return "NO_SEAT" end
+    if not valid_input(input) then return "BAD_INPUT" end
+    if runtime.winner ~= 0 then return "FINISHED" end
+    if input.frame <= runtime.frame then return "LATE" end
+    if input.frame > runtime.frame + runtime.window then return "INPUT_WINDOW" end
+
+    local slot = runtime.pending[input.frame]
+    if not slot then
+        slot = {}
+        runtime.pending[input.frame] = slot
+    end
+
+    local previous = slot[seat_id]
+    if previous then
+        local same = previous.x == input.x and previous.z == input.z and
+                     previous.skill == input.skill
+        return same and "OK" or "CONFLICT"
+    end
+
+    slot[seat_id] = copy_input(input)
     return "OK"
 end
 
---- 推进下一帧；缺输入最多保持方向两帧，技能永不沿用。
---- Native失败不返回半步结果；Worker结束该Battle并显式close。
+--- 提取一帧全部席位输入，缺输入方向最多保持两帧，技能立即清零。
+--- 此函数不修改runtime，避免Native执行失败时last_input和missing先变更。
+local function prepare_frame(runtime, frame)
+    local slot = runtime.pending[frame] or {}
+    local adopted, next_last, next_missing, records = {}, {}, {}, {}
+
+    for _, seat_id in ipairs(runtime.seats) do
+        local source = slot[seat_id]
+        local supplied = source ~= nil
+        local missing = supplied and 0 or runtime.missing[seat_id] + 1
+        local hold = missing <= MAX_MISSING_HOLD
+        local last = runtime.last_input[seat_id]
+        local input = source or
+        {
+            frame = frame,
+            x = hold and last.x or 0,
+            z = hold and last.z or 0,
+            skill = 0,
+        }
+        local final = copy_input(input)
+        next_last[seat_id] = { x = final.x, z = final.z }
+        next_missing[seat_id] = missing
+
+        adopted[#adopted + 1] =
+        {
+            seat_id = seat_id,
+            unit_id = runtime.units[seat_id],
+            x = final.x,
+            z = final.z,
+            skill = final.skill,
+        }
+        records[#records + 1] =
+        {
+            seat_id = seat_id,
+            input = final,
+            supplied = supplied,
+        }
+    end
+    return adopted, records, next_last, next_missing
+end
+
+--- 提交完整权威帧；Native失败则Worker终止本Battle，不能继续半帧模拟。
 ---@param runtime FrameRuntime 当前Battle owner。
----@return table|nil record, table|nil error
+---@return table|nil record 本帧正式记录。
+---@return table|nil err 稳定错误记录。
 function M.step(runtime)
-    if runtime.winner ~= 0 then
-        return nil, { code = "FINISHED" }
-    end
+    if runtime.winner ~= 0 then return nil, { code = "FINISHED" } end
+    if runtime.frame >= runtime.max_frames then return nil, { code = "FRAME_LIMIT" } end
+
     local frame = runtime.frame + 1
-    local input = runtime.pending[frame]
-    local supplied = input ~= nil
-    if supplied then
-        runtime.last_x, runtime.last_z, runtime.last_y = input.x, input.z, input.y
-        runtime.missing = 0
-    else
-        -- 截止后该帧输入已固定；方向只短暂保持，技能不重放，避免迟到包改写历史。
-        runtime.missing = runtime.missing + 1
-        local hold = runtime.missing <= 2
-        input = { frame = frame, x = hold and runtime.last_x or 0,
-                  z = hold and runtime.last_z or 0, y = hold and runtime.last_y or 0, skill = 0 }
-    end
-    local ok, err = runtime.engine:step(input.x, input.z, input.skill)
-    if not ok then
-        return nil, err
-    end
+    local inputs, players, next_last, next_missing = prepare_frame(runtime, frame)
+    local ok, step_err = runtime.engine:step_frame(frame, inputs)
+    if not ok then return nil, step_err or { code = "NATIVE_STEP" } end
 
     local state, save_err = runtime.engine:save()
-    if not state then
-        return nil, save_err
-    end
-    runtime.frame, runtime.winner = header(state)
+    if not state then return nil, save_err or { code = "CHECKPOINT" } end
+    local confirmed, winner = read_header(state)
+    if confirmed ~= frame then return nil, { code = "FRAME_SEQUENCE" } end
+
+    runtime.frame = frame
+    runtime.winner = winner
+    runtime.last_input = next_last
+    runtime.missing = next_missing
     runtime.pending[frame] = nil
-    local record = { input = input, supplied = supplied, hash = M.hash(state) }
-    assert(#runtime.records < runtime.max_frames, "FRAME_LOG_LIMIT")
-    -- 只保存被正式执行的输入与摘要；完整状态通过Checkpoint按需生成。
+
+    local record = { frame = frame, players = players, hash = M.hash(state) }
     runtime.records[#runtime.records + 1] = record
     return record
 end
 
---- close幂等释放Native；Worker摘除索引后调用，GC不作为主释放路径。
----@param runtime FrameRuntime owner。
+--- 断线或同一席位恢复后丢弃它尚未采用的旧代数未来输入。
+--- 不修改已完成FrameRecord。
+---@param runtime FrameRuntime 当前Battle owner。
+---@param seat_id integer 恢复/断线的原席位。
+function M.clear_seat_pending(runtime, seat_id)
+    for frame, slot in pairs(runtime.pending) do
+        slot[seat_id] = nil
+        if next(slot) == nil then runtime.pending[frame] = nil end
+    end
+    runtime.last_input[seat_id] = { x = 0, z = 0 }
+    runtime.missing[seat_id] = MAX_MISSING_HOLD
+end
+
+--- 显式释放Native，GC仅兜底；调用后Runtime不得再执行step。
+---@param runtime FrameRuntime 当前Battle owner。
 function M.close(runtime)
     if runtime.engine then
         runtime.engine:close()
         runtime.engine = nil
     end
 end
+
 return M
 ```
 
-### server/tests/frame_runtime_test.lua
+### 5.11 `server/service/battle/frame_sync/worker.lua`
 
-**操作：新建。** 把输入窗口与缺输入规则独立于网络验证。
-
-学习导航：精读 正式输入记录包含实际采用的补缺结果；不把发送记录冒充确认。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 单玩家席位、token/generation、截止、追赶、重连和Replay。
 
 ```lua
---- 职责：Frame Runtime无网络聚焦单测；Native替身只控制帧/winner。
-package.path = "./?.lua;./lualib/?.lua;" .. package.path
-local closed = false
-package.preload.lesson_frame_native = function()
-    return { open = function()
-        local frame = 0
-        return {
-            step = function()
-        frame = frame + 1
-        return true
-    end,
-            save = function() return string.pack("<I4I4I4",1,frame,0) end,
-            close = function()
-        closed = true
-        return true
-    end,
-        }
-    end }
-end
-local core = require "battle.frame_sync.runtime"
-local state = assert(core.create({map_path="stub",future_window=8,max_frames=3600}))
-assert(core.accept(state,{frame=1,x=1,skill=3}) == "OK")
-assert(core.accept(state,{frame=1,x=1,skill=3}) == "OK")
-assert(core.accept(state,{frame=1,x=-1}) == "CONFLICT")
-assert(core.accept(state,{frame=9}) == "INPUT_WINDOW")
-assert(core.accept(state,{frame=2,x=1.5}) == "BAD_INPUT")
-assert(core.accept(state,{frame=2,y=1}) == "BAD_INPUT", "ground player cannot inject flight")
-local first = assert(core.step(state))
-assert(first.supplied and first.input.skill == 3)
-assert(core.accept(state,{frame=1}) == "LATE")
-for i=1,3 do
-    local record = assert(core.step(state))
-    assert(not record.supplied and record.input.skill == 0)
-    assert(record.input.x == (i<=2 and 1 or 0))
-end
-assert(#state.records == 4 and state.pending[1] == nil)
-core.close(state)
-core.close(state)
-assert(closed)
-print("FRAME_RUNTIME_OK")
-```
-
-```bash
-./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
-```
-
-预期 `FRAME_RUNTIME_OK`。这个测试使用Native替身，只证明窗口/缺输入/关闭合同，不把它称作真实Native或网络集成。
-
-### 5.4 Worker：每场独立截止与会话
-
-创建时先读随机凭据，再创建Native，避免I/O失败后遗留Engine。每场到期执行最多4次；一次超预算不能影响其它场的正式帧号。Recover校验token后代数递增、替换传输会话、清除旧未来输入和方向，返回当前正式Checkpoint；不会让旧输入跨会话继续施法。
-
-断线后保留30秒，仍按明确缺输入规则推进；结束也保留30秒供读取日志。leave直接标记移除。清除Battle时先摘索引再close，回放凭据到期后返回NOT_FOUND。这里没有把断线暂停所有AI或无限保留日志当成默认行为。
-
-### server/service/battle/frame_sync/worker.lua
-
-**操作：新建。** 把纯Runtime放入长驻Worker；一个心跳按稳定Battle ID推进多场战斗。
-
-学习导航：精读 no-yield更新、deadline/catchup、会话generation、结束保留、Core异常关闭与恢复。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
-
-```lua
---- 职责：拥有有界Battle实例并调度fixed Tick；不持有fd/codec，不让Core yield。
---- 输入：Dispatch注入handle与配置、业务命令；输出：控制响应和frame_push消息。
+--- 职责：固定分片的BattleWorker；拥有多个Battle并定时推进整条权威输入流。
+--- 边界：Skynet Battle进程；不接触Gateway fd或Protobuf bytes，Core同步no-yield。
+--- 输入/输出：create/join/recover/leave/replay及inputs/disconnect -> 回包/定向FramePush。
+--- ownership：每场Battle独占Runtime/Native Engine；本Service独占seats及Deadline。
+--- 不负责：账号登录、持久化进程崩溃恢复、跨机Battle迁移。
 local skynet = require "skynet"
-local core = require "battle.frame_sync.runtime"
-local native = require "lesson_frame_native"
-local config = require "config.frame_sync"
-local meta = require "config.frame_sync_asset" -- 本课构建工具验证并生成。
-local battles, order = {}, {}
-local dispatcher = nil -- composition root注入，唯一结果接收者。
+local core   = require "battle.frame_sync.runtime"
+local conf   = require "config.frame_sync"
+local asset  = require "config.frame_sync_asset"
+
+local battles      = {}  -- battle_id -> BattleRuntime；仅当前Service修改。
+local order        = {}  -- battle_id稳定升序数组；Heartbeat一次推进多场。
+local dispatcher   = nil -- composition root注入；唯一可信的消息发送者。
 
 ---@class FrameSession
----@field gateway_epoch string Gateway实例身份；回推时原样携带。
----@field connection_id integer 已握手连接；不是玩家永久身份。
----@alias FrameWorkerCommand "configure"|"inputs"|"disconnect"|"create"|"recover"|"replay"|"leave"
----@class FrameInputBatch
----@field generation integer 请求所属会话代数；恢复后旧代数输入失效。
----@field inputs FrameInput[] 同一请求中按帧独立判定的意图列表。
----@class FrameWorkerRequest
----@field battle_id integer Dispatcher分配且不复用的Battle ID。
----@field session FrameSession 当前请求的传输身份；只含Gateway epoch/connection ID。
----@field request FrameInputBatch|table Proto解码后的业务body；不含fd或借用buffer。
----@class FrameBattle
----@field id integer Dispatcher分配的Battle ID；Worker内作为索引键。
----@field core FrameRuntime Worker独占的Battle模拟与Native Engine。
----@field token string 32字节恢复凭据；Battle生命周期内由本Worker持有。
----@field generation integer 重连代数；每次恢复递增以拒绝旧连接迟到消息。
----@field session FrameSession 当前有效传输身份。
----@field due integer 下一权威tick截止时刻，单位Skynet tick。
----@field failed boolean|nil 终止标记；失败Battle保留至retention到期。
----@field failure_code string|nil 稳定失败码；仅failed时存在。
----@field finished integer|nil 完成/失败时刻，单位Skynet tick。
----@field disconnected integer|nil 断线时刻，单位Skynet tick。
----@class FramePushData
----@field session FrameSession 推送目标连接，不包含Socket fd。
----@field data table FramePushResponse业务结果。
+---@field gateway_epoch string 网关实例身份；不含fd引用。
+---@field connection_id integer 网关会话数字ID，断线后可以被重用。
 
---- 使用操作系统熵生成32bytes凭据；I/O失败不退化为math.random。
----@return string 由操作系统熵生成的32字节恢复凭据；I/O失败抛TOKEN_IO。
-local function token()
+local function random_token()
     local file = assert(io.open("/dev/urandom", "rb"))
-    local value = file:read(32)
+    local bytes = file:read(32)
     file:close()
-    assert(value and #value == 32, "TOKEN_IO")
-    return value
+    assert(bytes and #bytes == 32, "TOKEN_IO")
+    return bytes
 end
---- 对恢复凭据做固定长度比较，避免提前退出的位置泄露。
----@param a string|nil Battle持有的凭据。
----@param b string|nil 客户端提交的凭据。
----@return boolean 固定长度逐字节比较结果。
-local function token_equal(a, b)
+
+local function equal_token(a, b)
     if type(a) ~= "string" or type(b) ~= "string" or #a ~= 32 or #b ~= 32 then
         return false
     end
@@ -2202,296 +2754,346 @@ local function token_equal(a, b)
     for i = 1, 32 do diff = diff | (a:byte(i) ~ b:byte(i)) end
     return diff == 0
 end
---- 生成控制状态；仅加入/恢复会读取完整Native状态。
----@param battle FrameBattle 由当前Worker拥有的Battle。
----@param initial boolean true时生成不含恢复凭据的Replay起点Checkpoint。
----@return table 可序列化控制响应；Native状态复制为Lua string。
-local function snapshot(battle, initial)
-    local map_id, map_version = battle.core.engine:identity()
-    return
-    {
-        code         = "OK",
-        battle_id    = battle.id,
-        resume_token = initial and "" or battle.token,
-        generation   = battle.generation,
-        map_id       = map_id,
-        map_version  = map_version,
-        map_hash     = meta.map_hash,
-        frame        = initial and 0 or battle.core.frame,
-        checkpoint   = initial and battle.core.initial or assert(battle.core.engine:save()),
-    }
+
+local function same_session(a, b)
+    return a and b and a.gateway_epoch == b.gateway_epoch and
+        a.connection_id == b.connection_id
 end
---- 推送目标连接；request_id=0表示无请求关联；不等待客户端收到。
----@param battle FrameBattle 目标Battle；仅向其当前session发送。
----@param records FrameRecord[] 已正式推进的权威帧记录。
----@param code string 稳定结果码；request_id=0的异步推送不等待客户端。
----@param input_results table|nil 本批各输入逐项接受/拒绝结果。
-local function push(battle, records, code, input_results)
+
+local function active_seat(battle, seat_id, generation, session)
+    local seat = battle and battle.seats[seat_id]
+    return seat and seat.online and seat.generation == generation and
+        same_session(seat.session, session)
+end
+
+--- 发送到特定席位当前会话；request_id=0，与控制回包不同。
+local function push_to(battle, seat_id, data)
+    local seat = battle.seats[seat_id]
+    if not seat or not seat.online then return end
     skynet.send(dispatcher, "lua", "frame_push",
     {
-        session = battle.session,
-        data    = { battle_id = battle.id, generation = battle.generation,
-                    records = records, code = code, winner = battle.core.winner,
-                    input_results = input_results or {} },
+        session = seat.session,
+        data =
+        {
+            battle_id = battle.id,
+            generation = seat.generation,
+            records = data.records or {},
+            code = data.code or "OK",
+            winner = battle.core and battle.core.winner or 0,
+            checkpoint = data.checkpoint or "",
+        },
     })
 end
---- 检查当前连接和会话代数；旧连接迟到输入不可进入新会话。
----@param battle FrameBattle|nil Worker索引查得的实例。
----@param args FrameWorkerRequest 当前Dispatcher转发请求。
----@return boolean Battle、会话代数和连接身份均匹配时为true。
-local function owns(battle, args)
-    return battle and battle.generation == args.request.generation and
-        battle.session.gateway_epoch == args.session.gateway_epoch and
-        battle.session.connection_id == args.session.connection_id
+
+local function push_all(battle, data)
+    for seat_id = 1, conf.seats do push_to(battle, seat_id, data) end
 end
---- 建立Runtime与索引；无yield，失败返回稳定错误，由上层记录诊断。
----@param args FrameWorkerRequest Dispatcher分配Battle ID并显式传入session。
----@return table Join结果；失败返回稳定code，创建失败前释放Native。
+
+local function join_result(battle, seat_id, code, checkpoint)
+    local seat = assert(battle.seats[seat_id])
+    return
+    {
+        code          = code,
+        battle_id     = battle.id,
+        seat_id       = seat_id,
+        resume_token  = seat.token,
+        generation    = seat.generation,
+        map_id        = asset.map_id,
+        map_version   = asset.map_version,
+        map_hash      = asset.map_hash,
+        frame         = battle.core and battle.core.frame or 0,
+        checkpoint    = checkpoint or "",
+        tick_ms       = 50,
+        future_window = conf.future_window,
+        input_lead    = conf.input_lead,
+        simulation_version = conf.simulation_version,
+    }
+end
+
+local function add_seat(battle, seat_id, session, credential)
+    assert(not battle.seats[seat_id] and credential and #credential == 32)
+    battle.seats[seat_id] =
+    {
+        token = credential,
+        generation = 1,
+        session = { gateway_epoch = session.gateway_epoch,
+                    connection_id = session.connection_id },
+        online = true,
+    }
+end
+
 local function create(args)
-    if #order >= config.max_battles then
-        return { code = "BUSY" }
+    if not args.request or args.request.simulation_version ~= conf.simulation_version then
+        return { code = "SIMULATION_VERSION" }
     end
-    local credential = token() -- 先完成可能失败的I/O，避免创建Engine后泄漏。
-    local runtime, err = core.create(config)
-    if not runtime then
-        return { code = err.code }
-    end
-    local map_id, map_version = runtime.engine:identity()
-    if map_id ~= meta.map_id or map_version ~= meta.map_version then
-        core.close(runtime)
-        return { code = "ASSET_IDENTITY" }
-    end
-    local battle = { id = args.battle_id, core = runtime, token = credential, generation = 1,
-                     session = args.session, due = skynet.now() + 10, disconnected = nil }
+    if #order >= conf.max_battles then return { code = "BUSY" } end
+    if battles[args.battle_id] then return { code = "CONFLICT" } end
+    local credential = random_token() -- 不允许用math.random作为恢复凭据。
+    local runtime, err = core.create(
+    {
+        map_id      = asset.map_id,
+        window      = conf.future_window,
+        max_frames  = conf.max_frames,
+        seat_units  = { 1001 },
+    })
+    if not runtime then return { code = err and err.code or "NATIVE_OPEN" } end
+
+    local battle =
+    {
+        id = args.battle_id,
+        status = "RUNNING",
+        core = runtime,
+        seats = {},
+        due = skynet.now() + conf.tick_cs * conf.input_lead,
+    }
+    add_seat(battle, 1, args.session, credential)
     battles[battle.id] = battle
     order[#order + 1] = battle.id
     table.sort(order)
-    return snapshot(battle, false)
+    return join_result(battle, 1, "OK", assert(battle.core.engine:save()))
 end
---- 恢复凭据归Battle所有；重连原子更换session并清掉旧代数未来输入。
----@param args FrameWorkerRequest 凭据和新连接身份来自Dispatcher入站请求。
----@return table Checkpoint和新generation；凭据无效时统一返回NOT_FOUND。
+
+local function join(args)
+    local battle = battles[args.battle_id]
+    if not battle then return { code = "NOT_FOUND" } end
+    -- 本课不实现组队/多人席位；已有Battle只接受原席位的恢复流程。
+    if same_session(battle.seats[1].session, args.session) then
+        return { code = "ALREADY_JOINED" }
+    end
+    return { code = "FULL" }
+end
+
+local function find_seat_by_token(battle, credential)
+    for seat_id = 1, conf.seats do
+        local seat = battle.seats[seat_id]
+        if seat and equal_token(seat.token, credential) then return seat_id end
+    end
+    return nil
+end
+
+--- 恢复只更换本席位传输会话；清除旧generation尚未采用的输入。
 local function recover(args)
     local battle = battles[args.battle_id]
-    if not battle or not token_equal(battle.token, args.request.resume_token) then
-        return { code = "NOT_FOUND" }
-    end
-    if battle.failed then
-        return { code = battle.failure_code }
-    end
-    battle.generation = battle.generation + 1
-    battle.session = args.session
-    battle.disconnected = nil
-    battle.core.pending = {}
-    battle.core.last_x, battle.core.last_z, battle.core.last_y = 0, 0, 0
-    return snapshot(battle, false)
+    if not battle then return { code = "NOT_FOUND" } end
+    local seat_id = find_seat_by_token(battle, args.request.resume_token)
+    if not seat_id then return { code = "NOT_FOUND" } end
+    if battle.status == "FAILED" then return { code = battle.failure_code } end
+
+    local seat = battle.seats[seat_id]
+    seat.generation = seat.generation + 1
+    seat.session = { gateway_epoch = args.session.gateway_epoch,
+                     connection_id = args.session.connection_id }
+    seat.online = true
+    core.clear_seat_pending(battle.core, seat_id)
+    battle.empty_since = nil
+
+    local checkpoint = assert(battle.core.engine:save())
+    return join_result(battle, seat_id,
+        "OK", checkpoint)
 end
---- 输入只入有界未来窗口；拒绝通过FramePush明确通知，不把send当接受。
---- 截止以Worker处理时钟为准；Timer稍晚执行也不能给已到期帧重新开窗口。
----@param battle FrameBattle 当前Worker拥有的Battle。
----@param input FrameInput 未信任的玩家意图；Core再次验证整数范围和窗口。
----@return string 接受或拒绝code；不在此处修改正式状态。
-local function admit(battle, input)
-    local frame = input.frame or 0
+
+--- Deadline依赖Worker单调时钟；Skynet Timer晚执行不会重新开放过期的Frame。
+local function accept_input(battle, seat_id, input)
+    local frame = input.frame
     if math.type(frame) == "integer" and frame > battle.core.frame then
-        local deadline = battle.due + (frame - battle.core.frame - 1) * config.tick_cs
-        if skynet.now() >= deadline then
-            return "LATE"
+        local deadline = battle.due + (frame - battle.core.frame - 1) * conf.tick_cs
+        if skynet.now() >= deadline then return "LATE" end
+    end
+    return core.accept(battle.core, seat_id, input)
+end
+
+--- 根据当前Battle的可信Session查找席位；不依赖客户端上报seat_id。
+local function seat_by_session(battle, generation, session)
+    if not battle then return nil end
+    for seat_id = 1, conf.seats do
+        if active_seat(battle, seat_id, generation, session) then
+            return seat_id
         end
     end
-    return core.accept(battle.core, input)
+    return nil
 end
----@param args FrameWorkerRequest 从Dispatcher通过skynet.send收到；无返回值，结果异步push。
+
 local function inputs(args)
     local battle = battles[args.battle_id]
-    if not owns(battle, args) then
-        return
-    end
+    if not battle or battle.status ~= "RUNNING" then return end
+    local seat_id = seat_by_session(battle, args.request.generation, args.session)
+    if not seat_id then return end
 
     local batch = args.request.inputs or {}
-    if #batch == 0 then
-        push(battle, {}, "EMPTY_INPUT")
+    if #batch > conf.input_batch then
+        push_to(battle, seat_id, { code = "INPUT_BATCH" })
         return
     end
-    if #batch > config.input_batch then
-        push(battle, {}, "INPUT_BATCH_TOO_LARGE")
-        return
-    end
-
-    -- 每条输入独立判定；外层OK表示请求可处理，不表示批内全部成功。
-    local input_results = {}
     for _, input in ipairs(batch) do
-        input_results[#input_results + 1] =
-            { frame = input.frame or 0, code = admit(battle, input) }
+        local code = accept_input(battle, seat_id, input)
+        if code ~= "OK" then push_to(battle, seat_id, { code = code }) end
     end
-
-    push(battle, {}, "OK", input_results)
 end
---- 一页Replay最多256帧；只有有效凭据才能读取，离线initial不包含凭据。
----@param args FrameWorkerRequest 包含battle_id、resume_token和分页offset。
----@return table 有界Replay页与可选初始Checkpoint；凭据不匹配不泄露Battle存在性。
+
+local function leave(args)
+    local battle = battles[args.battle_id]
+    if not battle then return { code = "NOT_FOUND" } end
+    local seat_id = seat_by_session(battle, args.request.generation, args.session)
+    if not seat_id then return { code = "NOT_FOUND" } end
+    local seat = battle.seats[seat_id]
+    seat.online = false
+    core.clear_seat_pending(battle.core, seat_id)
+    local any_online = false
+    for i = 1, conf.seats do any_online = any_online or (battle.seats[i] and battle.seats[i].online) end
+    if not any_online then battle.empty_since = skynet.now() end
+    return { code = "OK" }
+end
+
+local function disconnect(session)
+    for _, battle_id in ipairs(order) do
+        local battle = battles[battle_id]
+        if battle then
+            for seat_id = 1, conf.seats do
+                local seat = battle.seats[seat_id]
+                if seat and seat.online and same_session(seat.session, session) then
+                    seat.online = false
+                    core.clear_seat_pending(battle.core, seat_id)
+                end
+            end
+            local any_online = false
+            for i = 1, conf.seats do
+                any_online = any_online or (battle.seats[i] and battle.seats[i].online)
+            end
+            if not any_online and not battle.empty_since then
+                battle.empty_since = skynet.now()
+            end
+        end
+    end
+end
+
+--- 回放仅返回分页；无凭据不可读取；不能把恢复Token写入Replay。
 local function replay(args)
     local battle = battles[args.battle_id]
-    if not battle or not token_equal(battle.token, args.request.resume_token) then
-        return { code = "NOT_FOUND" }
-    end
+    if not battle then return { code = "NOT_FOUND" } end
+    local seat_id = find_seat_by_token(battle, args.request.resume_token)
+    if not seat_id then return { code = "NOT_FOUND" } end
+
     local offset = args.request.offset or 0
-    if offset > #battle.core.records then
+    if math.type(offset) ~= "integer" or offset < 0 or offset > #battle.core.records then
         return { code = "REPLAY_OFFSET" }
     end
     local records = {}
-    for i = offset + 1, math.min(#battle.core.records, offset + config.replay_page) do
+    for i = offset + 1, math.min(#battle.core.records, offset + conf.replay_page) do
         records[#records + 1] = battle.core.records[i]
     end
+    local initial
+    if offset == 0 then
+        initial = join_result(battle, seat_id, "OK", battle.core.initial)
+        initial.resume_token = "" -- 回放文件绝不包含恢复凭据。
+        initial.frame = 0
+    end
     return { code = "OK", records = records, total = #battle.core.records,
-             initial = offset == 0 and snapshot(battle, true) or nil }
+             initial = initial }
 end
---- 标记客户端离开；释放逻辑发生在唯一心跳，避免边遍历边删order。
----@param args FrameWorkerRequest 当前session的离开请求。
----@return table OK或NOT_FOUND；实际Native释放延迟至heartbeat安全遍历阶段。
-local function leave(args)
-    local battle = battles[args.battle_id]
-    if not owns(battle, args) then
-        return { code = "NOT_FOUND" }
-    end
-    battle.remove = true
-    return { code = "OK" }
-end
---- Core异常只终止这一场；下一场继续，Runtime资源在删除时close。
----@param battle FrameBattle 由Heartbeat顺序推进的Battle。
----@param now integer 当前Skynet tick；绝不由墙钟或客户端提供。
+
 local function advance(battle, now)
-    if battle.core.winner ~= 0 or battle.failed then
-        return
-    end
-    local count = 0
-    -- 有界追赶避免单个Worker被长时间占用；超限时结束本场，不跳过权威帧。
-    while now >= battle.due and count < config.max_catchup do
+    if battle.status ~= "RUNNING" then return end
+    local catchup = 0
+    while now >= battle.due and catchup < conf.max_catchup do
         local ok, record, err = pcall(core.step, battle.core)
         if not ok or not record then
-            battle.failed = true
+            battle.status = "FAILED"
             battle.failure_code = "INTERNAL"
-            push(battle, {}, "INTERNAL")
-            local failure = ok and err and err.code or record
-            skynet.error("FRAME_CORE_FAILED id=", battle.id, " ", tostring(failure))
-            break
+            battle.finished_at = now
+            skynet.error("FRAME_CORE_FAILED battle_id=", battle.id,
+                " error=", tostring(ok and err and err.code or record))
+            push_all(battle, { code = "INTERNAL" })
+            return
         end
-        battle.due = battle.due + config.tick_cs
-        count = count + 1
-        push(battle, { record }, "OK")
+        catchup = catchup + 1
+        battle.due = battle.due + conf.tick_cs
+        push_all(battle, { records = { record }, code = "OK" })
         if battle.core.winner ~= 0 then
-            battle.finished = now
-            break
+            battle.status = "FINISHED"
+            battle.finished_at = now
+            return
         end
     end
-    if not battle.finished and not battle.failed and now >= battle.due then
-        battle.failed = true
+    if now >= battle.due then
+        battle.status = "FAILED"
         battle.failure_code = "OVERLOAD"
-        push(battle, {}, "OVERLOAD") -- 绝不跳帧伪装实时跟上。
-    end
-    if battle.failed then
-        battle.finished = now
+        battle.finished_at = now
+        push_all(battle, { code = "OVERLOAD" })
     end
 end
---- 一个Worker一个Timer；timeout回调无yield，order稳定；容量配置约束执行时间。
---- 唯一Battle Tick入口；同一Worker顺序推进并在本回调中回收过期资源。
+
+--- 一个Worker一个Timer；更新Battle时不yield，结束后清理独占Runtime。
 local function heartbeat()
-    local now, surviving = skynet.now(), {}
+    local now = skynet.now()
+    local surviving = {}
     for _, id in ipairs(order) do
         local battle = battles[id]
-        advance(battle, now)
-        local expiry = battle.finished or battle.disconnected
-        if battle.remove or (expiry and now - expiry >= config.retention_cs) then
-            core.close(battle.core)
-            battles[id] = nil
-        else surviving[#surviving + 1] = id end
+        if battle then
+            advance(battle, now)
+            local expiry = battle.finished_at or battle.empty_since
+            if battle.remove or (expiry and now - expiry >= conf.retention_cs) then
+                core.close(battle.core)
+                battles[id] = nil
+            else
+                surviving[#surviving + 1] = id
+            end
+        end
     end
     order = surviving
-    skynet.timeout(config.tick_cs, heartbeat)
+    skynet.timeout(conf.tick_cs, heartbeat)
 end
---- 断线通知由Dispatch转发；只摘除匹配传输会话，不改新会话。
----@param session FrameSession 由Dispatcher转发的Gateway断线身份。
-local function disconnect(session)
-    for _, id in ipairs(order) do
-        local battle = battles[id]
-        if battle.session.gateway_epoch == session.gateway_epoch and
-            battle.session.connection_id == session.connection_id then
-            battle.disconnected = skynet.now()
-            battle.core.pending = {}
-            battle.core.last_x, battle.core.last_z, battle.core.last_y = 0, 0, 0
-        end
-    end
-end
+
 skynet.start(function()
-    ---@param session integer Skynet call session；异步send可能为0。
-    ---@param source integer 调用方Service handle；必须等于已配置Dispatcher。
-    ---@param command FrameWorkerCommand 当前Service消息命令。
-    ---@param args table 命令payload；字段合同见FrameWorkerRequest及对应类型。
     skynet.dispatch("lua", function(session, source, command, args)
         if command == "configure" then
-            assert(dispatcher == nil)
-            dispatcher = assert(args.dispatcher)
-            skynet.timeout(config.tick_cs, heartbeat)
+            assert(dispatcher == nil and args.dispatcher)
+            dispatcher = args.dispatcher
+            skynet.timeout(conf.tick_cs, heartbeat)
             skynet.retpack(true)
             return
         end
         assert(source == dispatcher, "untrusted Worker sender")
-        if command == "inputs" then inputs(args)
-        elseif command == "disconnect" then disconnect(args)
-        elseif command == "create" then skynet.retpack(create(args))
+        if command == "create" then skynet.retpack(create(args))
+        elseif command == "join" then skynet.retpack(join(args))
         elseif command == "recover" then skynet.retpack(recover(args))
-        elseif command == "replay" then skynet.retpack(replay(args))
         elseif command == "leave" then skynet.retpack(leave(args))
+        elseif command == "replay" then skynet.retpack(replay(args))
+        elseif command == "inputs" then inputs(args)
+        elseif command == "disconnect" then disconnect(args)
         else error("unknown Frame Worker command: " .. tostring(command)) end
     end)
 end)
 ```
 
-### 5.5 Dispatch与组合根
+### 5.12 `server/service/battle/frame_sync/dispatch.lua`
 
-Dispatch启动固定数量Worker，把自身handle显式注入。`(battle_id-1)%workers+1` 是当前进程中的稳定分片；ID单调增加、不复用，也不在线重排Worker。控制Join/Recover/Replay/Leave使用call取得响应；输入与权威推帧用send。超时不会让Gateway停止读取其它帧。
-
-`cluster.open` 参数是reload中配置的**节点名**，不是直接传 `127.0.0.1:2538`。后者会被当成节点名查找并报is down。`cluster.register` 的固定跨进程边界与本地Service handle注入是两件事。
-
-### server/service/battle/frame_sync/dispatch.lua
-
-**操作：新建。** 由Battle进程选择Worker并回推控制响应/权威帧；Gateway不拥有玩家归属。
-
-学习导航：精读 稳定分片、显式Worker handles、send_data纯record边界、call yield后的回复身份。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 固定`battle_id % workers + 1`分片、Cluster与定向push。
 
 ```lua
---- 职责：帧同步Battle入口；拥有ID分配和Worker分片；不解析网络frame/Proto bytes。
---- 控制call可能yield；输入和frame_push用send，不等待客户端读包。
-local skynet = require "skynet"
+--- 职责：Battle Process的帧同步路由、Worker分片与跨进程FramePush发送。
+--- 边界：Skynet Service Adapter；不打开fd，不解Proto bytes，不持有Native State。
+--- 输入/输出：Proxy信任的route record -> Worker控制调用/输入转发/定向Gateway消息。
+--- ownership：本Service独占next_id和Worker handles；控制call允许yield。
+--- 不负责：连接身份的最终授权（Worker通过Session绑定验证）、Navigation和玩法。
+local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
-local config = require "config.frame_sync"
-local ids = require("gateway.protocol.navigation_registry").command_ids
----@alias FrameDispatchCommand "ready"|"send_data"|"disconnect"|"frame_push"
----@class FrameDispatchRoute
----@field gateway_epoch string Gateway实例身份，由Proxy转发。
----@field connection_id integer 当前连接ID；不是玩家持久身份。
----@field command_id integer Registry中的稳定命令ID。
----@field request_id integer 请求序号；0只允许Server主动FramePush。
----@field data table 解码后的Proto body；不含Socket fd或网络buffer。
-local workers, next_id = {}, 0
+local conf    = require "config.frame_sync"
+local ids     = require("gateway.protocol.navigation_registry").command_ids
 
---- ID到Worker稳定映射；workers在进程存活期间固定，不允许在线重排。
----@param id integer Dispatcher分配的Battle ID。
----@return integer|nil 稳定Worker handle；非法ID返回nil。
-local function worker(id)
-    if math.type(id) ~= "integer" or id < 1 or id > 0x7fffffff then
+local workers = {}  -- 固定数量的长期Service handles。
+local next_id = 0  -- 本Battle OS进程内单调BattleID；不重用。
+
+--- id路由是battle_id%worker_count+1；不同Battle不会因join落到另一Worker。
+local function worker_for(battle_id)
+    if math.type(battle_id) ~= "integer" or battle_id < 1 or battle_id > 0x7fffffff then
         return nil
     end
-    return workers[(id - 1) % #workers + 1]
+    return workers[battle_id % #workers + 1]
 end
---- 发回原传输会话；Gateway按epoch/id检查当前有效性，不保存fd。
----@param route table gateway_epoch/connection_id/command_id/request_id，由入站或Worker产生。
----@param response table 已验证响应body。
----@param route FrameDispatchRoute 入站请求或Worker推送的传输路由值。
----@param response table 已由Battle Worker生成的Proto body。
---- 通过cluster.send异步交给Gateway Proxy；本函数不yield、不保存fd。
+
+--- 请求/回推只带跨进程纯值record；不传fd、buffer借用或Lua userdata。
 local function reply(route, response)
-    local ok, err = pcall(cluster.send, config.gateway_node, "@frame_proxy", "send_data",
+    local ok, err = pcall(cluster.send, conf.gateway_node, "@frame_proxy", "send_data",
     {
         gateway_epoch = route.gateway_epoch,
         connection_id = route.connection_id,
@@ -2499,191 +3101,192 @@ local function reply(route, response)
         request_id    = route.request_id,
         data          = response,
     })
-    if not ok then
-        skynet.error("FRAME_REPLY_FAILED ", tostring(err))
-    end
+    if not ok then skynet.error("FRAME_REPLY_FAILED ", tostring(err)) end
 end
---- Join仅接受scenario_id；正式状态完全由Server构造。
----@param route FrameDispatchRoute Join/Recover/Replay/Leave控制请求。
----@return table 控制响应；skynet.call会yield，返回后只使用route值record。
+
 local function control(route)
-    local request = route.data
+    local req = route.data
     local args =
     {
-        battle_id = request.battle_id,
-        request   = request,
-        session   =
-        {
-            gateway_epoch = route.gateway_epoch,
-            connection_id = route.connection_id,
-        },
+        battle_id = req.battle_id,
+        request = req,
+        session = { gateway_epoch = route.gateway_epoch,
+                    connection_id = route.connection_id },
     }
     if route.command_id == ids.FRAME_JOIN then
-        if request.scenario_id ~= 1001 then
-            return { code = "BAD_SCENARIO" }
+        if req.scenario_id ~= 1001 then return { code = "BAD_SCENARIO" } end
+        if req.battle_id == 0 then
+            if next_id >= 0x7fffffff then return { code = "ID_EXHAUSTED" } end
+            next_id = next_id + 1
+            args.battle_id = next_id
+            return skynet.call(worker_for(next_id), "lua", "create", args)
         end
-        if next_id >= 0x7fffffff then
-            return { code = "ID_EXHAUSTED" }
-        end
-        next_id = next_id + 1
-        args.battle_id = next_id
-        return skynet.call(worker(next_id), "lua", "create", args)
+        return skynet.call(worker_for(req.battle_id), "lua", "join", args)
     end
-    local target = worker(args.battle_id)
-    if not target then
-        return { code = "NOT_FOUND" }
-    end
+    local target = worker_for(req.battle_id)
+    if not target then return { code = "NOT_FOUND" } end
     if route.command_id == ids.FRAME_RECOVER then
         return { state = skynet.call(target, "lua", "recover", args) }
-    elseif route.command_id == ids.FRAME_REPLAY then
-        return skynet.call(target, "lua", "replay", args)
     elseif route.command_id == ids.FRAME_LEAVE then
         return skynet.call(target, "lua", "leave", args)
+    elseif route.command_id == ids.FRAME_REPLAY then
+        return skynet.call(target, "lua", "replay", args)
     end
     return { code = "BAD_COMMAND" }
 end
---- 由Gateway Proxy转来的数据；控制yield只持有值record，不借用连接对象。
----@param route FrameDispatchRoute Gateway Proxy发送的已解码请求。
---- FRAME_INPUT经skynet.send异步投递；控制命令经skynet.call后回送原session。
+
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
-    assert(type(route.gateway_epoch) == "string")
-    assert(route.connection_id > 0 and route.request_id ~= 0)
+    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0 and
+        route.request_id ~= 0, "invalid gateway route")
     if route.command_id == ids.FRAME_INPUT then
-        local target = worker(route.data.battle_id)
+        local target = worker_for(route.data.battle_id)
         if target then
-            skynet.send(target, "lua", "inputs", { battle_id = route.data.battle_id,
-                request = route.data, session = { gateway_epoch = route.gateway_epoch,
-                                                 connection_id = route.connection_id } })
+            skynet.send(target, "lua", "inputs",
+            {
+                battle_id = route.data.battle_id,
+                request = route.data,
+                session = { gateway_epoch = route.gateway_epoch,
+                            connection_id = route.connection_id },
+            })
         end
         return
     end
-    local ok, result = pcall(control, route)
+    -- skynet.call可能yield；route只保存已经解码的值record，不保存fd或Socket buffer。
+    local ok, response = pcall(control, route)
     if not ok then
-        skynet.error("FRAME_CONTROL_FAILED ", tostring(result))
-        if route.command_id == ids.FRAME_RECOVER then
-            result = { state = { code = "INTERNAL" } }
-        else
-            result = { code = "INTERNAL" }
-        end
+        skynet.error("FRAME_CONTROL_FAILED ", tostring(response))
+        response = route.command_id == ids.FRAME_RECOVER and
+            { state = { code = "INTERNAL" } } or { code = "INTERNAL" }
     end
-    reply(route, result)
+    reply(route, response)
 end
+
 skynet.start(function()
-    for i = 1, config.workers do
-        workers[i] = skynet.newservice("battle/frame_sync/worker")
-        assert(skynet.call(workers[i], "lua", "configure", { dispatcher = skynet.self() }))
+    for index = 1, conf.workers do
+        workers[index] = skynet.newservice("battle/frame_sync/worker")
+        assert(skynet.call(workers[index], "lua", "configure",
+            { dispatcher = skynet.self() }))
     end
-        ---@param session integer Skynet session；ready响应使用retpack，其它消息走显式路由。
-    ---@param source integer 调用方Service handle；frame_push必须属于已创建Worker。
-    ---@param command FrameDispatchCommand Dispatcher入口命令。
-    ---@param payload FrameDispatchRoute|FrameSession route或断线身份record，不含fd。
     skynet.dispatch("lua", function(_, source, command, payload)
-        if command == "ready" then skynet.retpack(true)
-        elseif command == "send_data" then incoming(payload)
+        if command == "ready" then
+            skynet.retpack(true)
+        elseif command == "send_data" then
+            incoming(payload)
         elseif command == "disconnect" then
             for _, handle in ipairs(workers) do
                 skynet.send(handle, "lua", "disconnect", payload)
             end
         elseif command == "frame_push" then
             local trusted = false
-            for _, handle in ipairs(workers) do trusted = trusted or source == handle end
+            for _, handle in ipairs(workers) do
+                if source == handle then trusted = true; break end
+            end
             assert(trusted, "untrusted frame source")
-            reply({ gateway_epoch = payload.session.gateway_epoch,
-                    connection_id = payload.session.connection_id,
-                    command_id = ids.FRAME_PUSH, request_id = 0 }, payload.data)
-        else error("unknown Frame Dispatch command: " .. tostring(command)) end
+            reply(
+            {
+                gateway_epoch = payload.session.gateway_epoch,
+                connection_id = payload.session.connection_id,
+                command_id = ids.FRAME_PUSH,
+                request_id = 0, -- 无请求关联的Server主动FramePush。
+            }, payload.data)
+        else
+            error("unknown frame dispatch command: " .. tostring(command))
+        end
     end)
 end)
 ```
 
-### server/service/battle/frame_sync/main.lua
+### 5.13 `server/service/battle/frame_sync/main.lua`
 
-**操作：新建。** 组装独立Battle进程入口，保持第二课入口可用。
-
-学习导航：精读 cluster.register只对固定跨进程边界使用；子Service handles显式持有。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 先预热地图，再开放Battle Cluster。
 
 ```lua
---- 职责：Frame Battle进程组合根；启动Dispatch并开放Cluster，失败终止启动。
-local skynet = require "skynet"
+--- 职责：帧同步Battle进程组合根；先预热发布资产，再启动Worker/Cluster。
+--- 边界：仅Battle OS进程启动；Native MapRegistry在本进程内全局共享immutable BMAP。
+--- 输入/输出：进程配置和发布资产 -> @frame_dispatch对外Cluster入口。
+--- 不负责：Gateway监听、玩家认证、持久化重启恢复。
+local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
-local config = require "config.frame_sync"
+local native  = require "lesson_frame_native"
+local conf    = require "config.frame_sync"
+local asset   = require "config.frame_sync_asset"
+
 skynet.start(function()
+    assert(native.preload(conf.map_path, conf.unit_profiles_path), "FRAME_ASSET_PRELOAD_FAILED")
     local dispatch = skynet.newservice("battle/frame_sync/dispatch")
     assert(skynet.call(dispatch, "lua", "ready"))
-    cluster.reload({ [config.gateway_node] = config.gateway_address,
-                     [config.battle_node] = config.battle_address })
-    cluster.open(config.battle_node, 64)
+    cluster.reload({ [conf.gateway_node] = conf.gateway_address,
+                     [conf.battle_node] = conf.battle_address })
+    cluster.open(conf.battle_node, 64) -- 参数是Node名称，不是host:port。
     cluster.register("frame_dispatch", dispatch)
-    skynet.error("FRAME_BATTLE_READY address=", config.battle_address)
+    skynet.error("FRAME_BATTLE_READY node=", conf.battle_node, " map=", asset.map_id)
     skynet.exit()
 end)
 ```
 
-### server/service/gateway/frame_sync/proxy.lua
+### 5.14 `server/service/gateway/frame_sync/proxy.lua`
 
-**操作：新建。** 接入第二课已建立的双向异步边界，只转发传输record。
-
-学习导航：精读 Proxy持有Gateway handle，不持有Battle表；断线要送达Battle而非被吞掉。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Gateway仅转发纯值，不持有Battle或fd。
 
 ```lua
---- 职责：帧同步Gateway/Battle异步转发；不解释FrameInput或模拟状态。
---- 输入输出：send_data record原样跨Cluster；disconnect携带实例与连接身份。
-local skynet = require "skynet.manager"
+--- 职责：把FlyWow Gateway已解码请求转发给Frame Dispatch，并接收定向FramePush。
+--- 边界：Gateway OS进程；不解释技能、Navigation或权威状态。
+--- 输入/输出：Gateway record和断线事件 -> Cluster；Battle record -> Gateway发送。
+--- ownership：gateway handle由组合根bind一次，网络fd只由FlyWow Gateway持有。
+local skynet  = require "skynet.manager"
 local cluster = require "skynet.cluster"
-local config = require "config.frame_sync"
-local gateway = nil -- 组合根注入的本地Gateway handle。
+local conf    = require "config.frame_sync"
+local gateway = nil
 
----@class FrameGatewayData
----@field gateway_epoch string Gateway实例身份。
----@field connection_id integer 目标连接；0仅主动广播，帧同步使用具体连接。
----@field command_id integer 从唯一Proto生成的command。
----@field request_id integer 非0请求/响应，0主动消息。
----@field data table 已解码body；本Proxy不修改。
-
---- 尽力异步转发；Cluster失败由客户端控制超时/恢复收敛，不建立无限重试。
 local function forward(command, payload)
-    local ok, err = pcall(cluster.send, config.battle_node, "@frame_dispatch", command, payload)
-    if not ok then
-        skynet.error("FRAME_PROXY_SEND_FAILED ", tostring(err))
-    end
+    local ok, err = pcall(cluster.send, conf.battle_node,
+        "@frame_dispatch", command, payload)
+    if not ok then skynet.error("FRAME_PROXY_FORWARD_FAILED ", tostring(err)) end
 end
+
 skynet.start(function()
     skynet.dispatch("lua", function(_, source, command, payload)
         if command == "start" then
-            cluster.reload({ [config.battle_node] = config.battle_address,
-                             [config.gateway_node] = config.gateway_address })
-            cluster.open(config.gateway_node, 64)
+            cluster.reload({ [conf.battle_node] = conf.battle_address,
+                             [conf.gateway_node] = conf.gateway_address })
+            cluster.open(conf.gateway_node, 64)
             cluster.register("frame_proxy", skynet.self())
-            assert(cluster.call(config.battle_node, "@frame_dispatch", "ready"))
+            assert(cluster.call(conf.battle_node, "@frame_dispatch", "ready"))
             skynet.name(".frame_proxy", skynet.self())
             skynet.retpack(true)
         elseif command == "bind" then
-            assert(gateway == nil)
-            gateway = assert(payload.gateway)
+            assert(gateway == nil and payload.gateway)
+            gateway = payload.gateway
             skynet.retpack(true)
         elseif command == "send_data" then
             assert(gateway and type(payload.data) == "table")
-            if source == gateway then forward("send_data", payload)
-            else skynet.send(gateway, "lua", "send_data", payload) end
+            if source == gateway then
+                forward("send_data", payload)
+            else
+                -- 当前FlyWow Gateway必须支持request_id=0定向push；跨实例会重验epoch/id。
+                skynet.send(gateway, "lua", "send_data", payload)
+            end
         elseif command == "gateway_disconnect" then
             assert(source == gateway)
             forward("disconnect", payload)
-        else error("unknown Frame Proxy command: " .. tostring(command)) end
+        else
+            error("unknown frame proxy command: " .. tostring(command))
+        end
     end)
 end)
 ```
 
-### server/service/gateway/frame_sync/main.lua
+### 5.15 `server/service/gateway/frame_sync/main.lua`
 
-**操作：新建。** 先完成跨进程ready再监听客户端；复用现有FlyWow握手、framing与codec。
-
-学习导航：精读 handler_service当前合同是注册名称；覆盖项直接可见；Gateway不依赖地图。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Battle ready后启动FlyWow Gateway。
 
 ```lua
---- 职责：帧同步Gateway进程组合根；只创建Proxy/Gateway并注入依赖。
+--- 职责：Frame Gateway进程启动入口；依赖Ready的Battle后才监听客户端。
+--- 边界：网络接入；不加载Battle Native或地图。
+--- 输入/输出：监听配置 -> FlyWow TCP/Protobuf长连接服务。
 local skynet = require "skynet"
-local config = require "config.frame_sync"
+local conf = require "config.frame_sync"
 skynet.start(function()
     local proxy = skynet.newservice("gateway/frame_sync/proxy")
     assert(skynet.call(proxy, "lua", "start"))
@@ -2692,34 +3295,31 @@ skynet.start(function()
     assert(skynet.call(gateway, "lua", "start",
     {
         handler_service = ".frame_proxy",
-        host            = "127.0.0.1",
-        port            = config.gateway_port,
-        transport       = "tcp",
-        protocol_version = 3, -- 新增命令为兼容扩展，已有字段/枚举不重用。
+        host = "127.0.0.1",
+        port = conf.gateway_port,
+        transport = "tcp",
+        protocol_version = 3,
     }))
-    skynet.error("FRAME_GATEWAY_READY port=", config.gateway_port)
+    skynet.error("FRAME_GATEWAY_READY port=", conf.gateway_port)
     skynet.exit()
 end)
 ```
 
-### server/config/frame_battle_process.lua
+### 5.16 `server/config/frame_battle_process.lua`
 
-**操作：新建。** 独立进程配置消费新增Native产物，不覆盖第二课启动配置。
-
-学习导航：精读 所有相对路径以server为当前目录；共享库通过ORIGIN寻找frame_core.so。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Battle独立OS进程搜索路径，不重复赋值。
 
 ```lua
---- 职责：Frame Battle进程启动路径；不保存Battle动态状态。
--- 职责：Battle Skynet 进程启动配置；由 run_server.sh 直接传给 Skynet。
--- 边界：只设置进程级路径、日志和入口；业务参数仍由 config.battle 提供。
--- 相对路径：以下路径均以 Server 根目录为基准，因此启动前工作目录必须是 server/。
+--- 职责：Frame Battle OS进程启动配置；Server工作目录为所有相对路径的基准。
+--- 边界：仅入口、Skynet搜索路径、进程线程数和日志；不持有Battle动态状态。
+--- 不负责：Gateway监听、Unity资源读取、自动Git同步。
 thread = 4
 harbor = 0
-logger = "./logs/battle" -- Skynet 把日志文件参数交给 FlyWow Logger；按天写入此目录。
-logservice = "flywow_logger"
-flywow_logger_level = "normal" -- normal 及以上级别入盘，debug 被忽略。
-start = "battle/battle_main"
 bootstrap = "snlua bootstrap"
+start = "battle/frame_sync/main"
+logger = "./logs/frame_battle"
+logservice = "flywow_logger"
+flywow_logger_level = "normal"
 
 luaservice = "./service/?.lua;./third_party/skynet/service/?.lua"
 lualoader = "./third_party/skynet/lualib/loader.lua"
@@ -2728,37 +3328,30 @@ lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            "./third_party/skynet/lualib/?/init.lua;" ..
            "./third_party/skynet-flywow/navigation/lualib/?.lua;" ..
            "./third_party/skynet-flywow/logger/lualib/?.lua"
-lua_cpath = "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
+lua_cpath = "./build/frame_sync/?.so;" ..
+            "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
             "./third_party/skynet/luaclib/?.so;" ..
             "./third_party/skynet-flywow/build/native/?.so"
 cpath = "./third_party/skynet/cservice/?.so;" ..
         "./third_party/skynet-flywow/build/native/?.so"
 preload = "./third_party/skynet-flywow/logger/lualib/flywow_logger_preload.lua"
-start = "battle/frame_sync/main"
-logger = "./logs/frame_battle"
-lua_cpath = "./build/frame_sync/?.so;" .. lua_cpath
 ```
 
-### server/config/frame_gateway_process.lua
+### 5.17 `server/config/frame_gateway_process.lua`
 
-**操作：新建。** Gateway启动时只消费接入模块和共享Proto生成物。
-
-学习导航：精读 复用已验证路径，不让Gateway加载地图或Frame Native核心。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Gateway进程搜索路径，不加载Battle Native。
 
 ```lua
---- 职责：Frame Gateway进程启动配置；Gateway/Battle仍是独立OS进程。
--- 职责：Gateway Skynet 进程启动配置；由 run_server.sh 直接传给 Skynet。
--- 边界：只设置进程级路径、日志和入口；业务参数仍由 config.gateway 提供。
--- 相对路径：以下路径均以 Server 根目录为基准，因此启动前工作目录必须是 server/。
+--- 职责：Frame Gateway OS进程启动配置；只装载网络/协议/Logger模块。
+--- 边界：相对路径以server/为根，不在Gateway加载Battle Native或地图。
 thread = 4
 harbor = 0
-logger = "./logs/gateway" -- Skynet 把日志文件参数交给 FlyWow Logger；按天写入此目录。
-logservice = "flywow_logger"
-flywow_logger_level = "normal" -- normal 及以上级别入盘，debug 被忽略。
-start = "gateway/gateway_main"
 bootstrap = "snlua bootstrap"
+start = "gateway/frame_sync/main"
+logger = "./logs/frame_gateway"
+logservice = "flywow_logger"
+flywow_logger_level = "normal"
 
--- Service 文件分散在 Server、Skynet 和 FlyWow Gateway；Skynet 按顺序查找。
 luaservice = "./service/?.lua;./third_party/skynet/service/?.lua;" ..
              "./third_party/skynet-flywow/gateway/service/?.lua;" ..
              "./third_party/skynet-flywow/gateway/service/gateway/?.lua"
@@ -2774,573 +3367,624 @@ lua_cpath = "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
             "./third_party/skynet-flywow/build/native/?.so"
 cpath = "./third_party/skynet/cservice/?.so;" ..
         "./third_party/skynet-flywow/build/native/?.so"
-
--- Logger 的 Lua 适配在每个 Lua State 启动时加载，skynet.error API 保持不变。
 preload = "./third_party/skynet-flywow/logger/lualib/flywow_logger_preload.lua"
-start = "gateway/frame_sync/main"
-logger = "./logs/frame_gateway"
 ```
 
-### 5.6 把新Native接入现有公开build入口
+### 5.18 `server/tests/frame_binding_test.lua`
 
-**操作：局部修改 `server/scripts/linux/run_server.sh`，完整替换其中 `run_build()` 函数：**
+**操作：新建或整文件覆盖。** Lua5.4.7 Native对象及恢复负向测试。
 
-```bash
-run_build() {
-    prepare_runtime
-    "$SCRIPT_DIR/check_lua_varargs.sh"
-    cmake -S "$SERVER_ROOT/native/frame_sync" \
-      -B "$SERVER_ROOT/build/frame_sync" -DCMAKE_BUILD_TYPE=Release
-    cmake --build "$SERVER_ROOT/build/frame_sync" --parallel 4
-    ctest --test-dir "$SERVER_ROOT/build/frame_sync" --output-on-failure
-    python3 "$SERVER_ROOT/scripts/lessons/prepare_frame_sync.py"
-    log "BUILD_OK"
-}
+```lua
+--- 职责：验证固定Lua5.4.7 Binding的资源所有权、帧调用、非法输入和Checkpoint恢复。
+--- 输入：已发布BMAP、独立lesson_frame_native.so；失败断言立即退出。
+--- 运行：server目录 ./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua。
+package.cpath = "./build/frame_sync/?.so;" .. package.cpath
+local native = require "lesson_frame_native"
+assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap"))
+local first = assert(native.open(1001))
+local second = assert(native.open(1001))
+local initial = assert(first:save())
+assert(initial == second:save())
+assert(first:step_frame(1,
+{
+    { seat_id = 1, unit_id = 1001, x = 1, z = 0, skill = 0 },
+}))
+assert(first:save() ~= second:save())
+local bad, err = first:step_frame(2,
+{
+    { seat_id = 1, unit_id = 1001, x = 9, z = 0, skill = 0 },
+})
+assert(bad == nil and err and err.code)
+local stable = assert(first:save())
+local restored, restore_err = first:restore(stable .. "x")
+assert(restored == nil and restore_err and restore_err.code)
+assert(first:save() == stable)
+assert(first:restore(initial))
+assert(first:save() == initial)
+assert(first:close())
+assert(first:close())
+local failed = first:save()
+assert(failed == nil)
+assert(second:close())
+print("FRAME_BINDING_OK")
 ```
 
-FlyWow仍由prepare_runtime调用固定子模块的 `scripts/build_flywow.sh`，不新建第二个公共build脚本；本课只在宿主入口追加玩法Native和资产验证。新启动配置完整列出路径：Skynet配置求值环境没有dofile，不用 `dofile(base_config)` 隐藏依赖。
+### 5.19 `server/tests/frame_runtime_test.lua`
 
-执行：
+**操作：新建或整文件覆盖。** 单席位输入窗口、缺输入、顺序和复制隔离测试。
 
-```bash
-./scripts/linux/run_server.sh build
-./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
-./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
+```lua
+--- 职责：不用Skynet的单人帧输入收集、复制隔离、幂等/冲突/缺输入测试。
+--- 输入：已准备的BMAP和lesson_frame_native；输出FRAME_RUNTIME_OK或抛错。
+--- 用法：server/目录执行 ./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua。
+package.path = "./lualib/?.lua;./lualib/?/init.lua;" .. package.path
+package.cpath = "./build/frame_sync/?.so;" .. package.cpath
+local native = require "lesson_frame_native"
+local core = require "battle.frame_sync.runtime"
+assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap"))
+local runtime = assert(core.create({ map_id = 1001, window = 8, max_frames = 3600,
+                                     seat_units = { 1001 } }))
+local first = { frame = 1, x = 1, z = 0, skill = 0 }
+assert(core.accept(runtime, 1, first) == "OK")
+first.x = -1 -- 证明Runtime保存了值的拷贝，不是网络table地址。
+assert(core.accept(runtime, 1, { frame = 1, x = 1, z = 0, skill = 0 }) == "OK")
+assert(core.accept(runtime, 1, first) == "CONFLICT")
+local record = assert(core.step(runtime))
+assert(record.frame == 1 and #record.players == 1)
+assert(record.players[1].supplied)
+assert(record.players[1].input.x == 1)
+assert(core.accept(runtime, 1, { frame = 1, x = 0, z = 0, skill = 0 }) == "LATE")
+assert(core.accept(runtime, 1, { frame = 11, x = 0, z = 0, skill = 0 }) == "INPUT_WINDOW")
+local missing = assert(core.step(runtime))
+assert(not missing.players[1].supplied)
+assert(missing.players[1].input.x == 1)
+assert(missing.players[1].input.skill == 0)
+assert(core.step(runtime) and core.step(runtime))
+local stopped = assert(core.step(runtime))
+assert(stopped.players[1].input.x == 0)
+core.close(runtime)
+print("FRAME_RUNTIME_OK")
 ```
 
-预期各CTest和两Lua测试通过，最后build输出BUILD_OK。不要使用旧第三课的online启动命令；新进程入口如下。
+### 5.20 `server/tests/frame_sync_integration.py`
 
-## 6. 先运行真实双进程，再打开Unity
-
-### 6.1 启动、停止与日志
-
-WSL终端A，从server目录启动Battle：
-
-```bash
-./third_party/skynet/skynet config/frame_battle_process.lua
-```
-
-WSL终端B，从server目录启动Gateway：
-
-```bash
-./third_party/skynet/skynet config/frame_gateway_process.lua
-```
-
-日志分别写 `server/logs/frame_battle/日期.log`、`server/logs/frame_gateway/日期.log`。终端C检查：
-
-```bash
-rg -n 'FRAME_BATTLE_READY|FRAME_GATEWAY_READY|failed|error' logs/frame_battle logs/frame_gateway
-ss -ltnp 'sport = :19021 or sport = :2537 or sport = :2538'
-```
-
-预期两个READY以及三个监听端口。主Service执行 `skynet.exit()` 仅退出组合根，不会关闭Worker/Gateway；停止这两场前台进程分别在对应终端Ctrl+C。不要用 `pkill skynet` 杀掉其它正在学习的进程。
-
-### 6.2 新建真实链路测试
-
-下面测试复用第二课已有 `server/tests/gateway_handshake_client.py`，以实际P-256握手进入Gateway，使用真实TCP/Proto/Cluster/Worker/Native。测试中的通用Protobuf wire解析只属于Test；Runtime仍由唯一Proto生成的descriptor/Registry实现。它无需另外安装Python Protobuf，但需要第二课已经安装的cryptography。
-
-### server/tests/frame_sync_integration.py
-
-**操作：新建。** 用真实握手、TCP、Gateway、Cluster、Worker与Native证明输入日志能够重演。
-
-学习导航：精读 定向推送不串场、重连代数、错误凭据、连续帧hash与回放分页。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 单个真实TCP客户端完成握手/Join/权威帧验证。
 
 ```python
-# 职责：第三课真实双进程验收客户端；仅 Test 使用，不成为 Runtime 协议实现。
-# 输入：已启动的 Frame Gateway 及相同编译产物；输出断言与 FRAME_INTEGRATION_OK。
-# 这个轻量 wire reader 只减少测试环境依赖；字段编号仍以唯一 Proto 定义为准。
-from pathlib import Path
-import ctypes
+# 职责：通过真实P-256握手/TCP/Proto/Gateway/Cluster/BattleWorker验证玩家输入与权威帧。
+# 边界：第三课聚焦集成测试；手写wire读写仅为避免在测试机器另装Python Protobuf。
+# 输入：已启动的frame_battle和frame_gateway；输出FRAME_ONE_CLIENT_OK或异常退出。
+# 运行：server/目录执行 python3 tests/frame_sync_integration.py。
+# 不负责：代替Unity Editor Play、客户端Native Golden或安全压测。
 import socket
 import struct
-
 from gateway_handshake_client import perform
 
-ROOT = Path(__file__).resolve().parents[2]
+HOST = "127.0.0.1"
+PORT = 19021
+PROTO_VERSION = 3
+JOIN, INPUT, PUSH = 1101, 1102, 1103
 
 
-def varint(value):
-    """编码非负 Proto varint；调用方保证输入在协议允许范围内。"""
-    result = bytearray()
-    while value > 127:
-        result.append((value & 0x7F) | 0x80)
-        value >>= 7
-    result.append(value)
-    return bytes(result)
+def varint(n):
+    out = bytearray()
+    while n > 127:
+        out.append((n & 127) | 128)
+        n >>= 7
+    out.append(n)
+    return bytes(out)
 
 
-def number(field, value):
-    """编码 wire type 0 的整数测试字段。"""
-    return varint(field << 3) + varint(value)
+def number(tag, value):
+    return varint(tag * 8) + varint(value)
 
 
-def blob(field, value):
-    """编码 wire type 2 的 bytes 测试字段。"""
-    return varint((field << 3) | 2) + varint(len(value)) + value
+def signed(tag, value):
+    return number(tag, (value << 1) ^ (value >> 31))
 
 
-def zigzag(value):
-    """将本用例使用的有符号32位值映射为 Proto sint32。"""
-    return (value << 1) ^ (value >> 31)
+def binary(tag, payload):
+    return varint(tag * 8 + 2) + varint(len(payload)) + payload
 
 
-def fields(data):
-    """解析本课消息使用的 wire types；拒绝未知类型和超长 varint。"""
-    result = {}
+def decode_varint(data, offset):
+    value, shift = 0, 0
+    while offset < len(data) and shift <= 63:
+        byte = data[offset]
+        offset += 1
+        value |= (byte & 127) << shift
+        if not (byte & 128):
+            return value, offset
+        shift += 7
+    raise ValueError("BAD_VARINT")
+
+
+def parse(data):
+    fields = {}
     offset = 0
-
-    def read_varint():
-        nonlocal offset
-        value = 0
-        shift = 0
-        while True:
-            byte = data[offset]
-            offset += 1
-            value |= (byte & 0x7F) << shift
-            if byte < 0x80:
-                return value
-            shift += 7
-            assert shift <= 63, "varint exceeds 64 bits"
-
     while offset < len(data):
-        tag = read_varint()
-        field, wire = tag >> 3, tag & 7
-        if wire == 0:
-            value = read_varint()
-        elif wire == 2:
-            size = read_varint()
-            value = data[offset : offset + size]
-            assert len(value) == size, "truncated length-delimited field"
+        key, offset = decode_varint(data, offset)
+        field, kind = key >> 3, key & 7
+        if kind == 0:
+            value, offset = decode_varint(data, offset)
+        elif kind == 2:
+            size, offset = decode_varint(data, offset)
+            value = data[offset:offset + size]
             offset += size
-        elif wire == 5:
+            if len(value) != size:
+                raise ValueError("TRUNCATED_BYTES")
+        elif kind == 5:
             value = struct.unpack_from("<I", data, offset)[0]
             offset += 4
-        elif wire == 1:
-            value = struct.unpack_from("<Q", data, offset)[0]
-            offset += 8
         else:
-            raise AssertionError(f"unsupported wire type: {wire}")
-        result.setdefault(field, []).append(value)
-    return result
+            raise ValueError("UNEXPECTED_WIRE_KIND")
+        fields.setdefault(field, []).append(value)
+    return fields
 
 
-def one(data, field, default=0):
-    """读取本用例约定的第一个字段值；缺失时返回明确的测试默认值。"""
-    return data.get(field, [default])[0]
+def first(fields, field, default=None):
+    return fields.get(field, [default])[0]
 
 
 class Client:
-    """单连接测试客户端；socket 由实例拥有，close 负责释放。"""
-
     def __init__(self):
-        self.sock = socket.create_connection(("127.0.0.1", 19021), timeout=3)
-        self.sock.settimeout(3)
-        self.sock.setsockopt(socket.IPPROTO_TCP, socket.TCP_NODELAY, 1)
-        self.seq = 0
-        self.pushes = []  # request() 先读到的异步推送暂存于本连接。
-        perform(self.send, self.receive)
+        self.socket = socket.create_connection((HOST, PORT), timeout=3)
+        self.socket.settimeout(4)
+        perform(self.write_frame, self.read_frame)
+        self.request_id = 0
+        self.pushes = []
 
-    def exact(self, size):
-        """TCP read 可短读；累积至指定字节数，否则让连接错误显式失败。"""
-        data = b""
-        while len(data) < size:
-            part = self.sock.recv(size - len(data))
-            assert part, "unexpected EOF"
-            data += part
-        return data
+    def read_exact(self, size):
+        result = bytearray()
+        while len(result) < size:
+            chunk = self.socket.recv(size - len(result))
+            if not chunk:
+                raise ConnectionError("DISCONNECTED")
+            result += chunk
+        return bytes(result)
 
-    def send(self, data):
-        """用两字节大端长度前缀发送一个完整 Gateway frame。"""
-        self.sock.sendall(struct.pack(">H", len(data)) + data)
+    def read_frame(self):
+        size = struct.unpack(">H", self.read_exact(2))[0]
+        assert 0 < size <= 65535
+        return self.read_exact(size)
 
-    def receive(self):
-        """读取完整长度前缀与 payload；exact 处理任意 TCP 分段。"""
-        size = struct.unpack(">H", self.exact(2))[0]
-        return self.exact(size)
+    def write_frame(self, body):
+        assert 0 < len(body) <= 65535
+        self.socket.sendall(struct.pack(">H", len(body)) + body)
 
-    def send_request(self, command, body):
-        """分配本连接递增 request_id 并发送；不等待 Server 处理。"""
-        self.seq += 1
-        envelope = number(1, 3) + number(2, command) + number(3, self.seq) + blob(4, body)
-        self.send(envelope)
-        return self.seq
+    def send(self, command, body):
+        self.request_id += 1
+        envelope = number(1, PROTO_VERSION) + number(2, command) + \
+            number(3, self.request_id) + binary(4, body)
+        self.write_frame(envelope)
+        return self.request_id
+
+    def recv_envelope(self):
+        envelope = parse(self.read_frame())
+        assert first(envelope, 1) == PROTO_VERSION
+        return first(envelope, 2), first(envelope, 3, 0), first(envelope, 4)
 
     def request(self, command, body):
-        """等待匹配响应，同时保留先到的无关联 FramePush。"""
-        request_id = self.send_request(command, body)
-        for _ in range(100):
-            envelope = fields(self.receive())
-            response = fields(one(envelope, 4, b""))
-            if one(envelope, 3) == 0:
-                assert one(envelope, 2) == 1103
-                self.pushes.append(response)
-                continue
-            assert one(envelope, 3) == request_id
-            assert one(envelope, 2) == command
-            return response
-        raise AssertionError("control starved")
+        request_id = self.send(command, body)
+        while True:
+            got_command, got_id, payload = self.recv_envelope()
+            if got_id == request_id:
+                assert got_command == command
+                return parse(payload)
+            assert got_id == 0 and got_command == PUSH
+            self.pushes.append(parse(payload))
 
-    def push(self):
-        """返回排队推送，或继续读到下一条 request_id=0 的推送。"""
+    def next_push(self):
         if self.pushes:
             return self.pushes.pop(0)
-        envelope = fields(self.receive())
-        assert one(envelope, 3) == 0 and one(envelope, 2) == 1103
-        return fields(one(envelope, 4, b""))
+        command, request_id, payload = self.recv_envelope()
+        assert command == PUSH and request_id == 0
+        return parse(payload)
 
     def close(self):
-        """关闭本实例拥有的 socket；调用方在 finally 中执行。"""
-        self.sock.close()
+        self.socket.close()
 
 
-class Native:
-    """独立 Native Replay 校验器；只重放 Server 已正式采用的记录。"""
-
-    def __init__(self):
-        library = ROOT / "server/build/frame_sync/libframe_core.so"
-        self.lib = ctypes.CDLL(str(library))
-        self.lib.fs_open.argtypes = [ctypes.c_char_p]
-        self.lib.fs_open.restype = ctypes.c_void_p
-        self.lib.fs_close.argtypes = [ctypes.c_void_p]
-        self.lib.fs_step.argtypes = [ctypes.c_void_p, ctypes.c_int, ctypes.c_int, ctypes.c_int]
-        self.lib.fs_save.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
-        self.lib.fs_restore.argtypes = [ctypes.c_void_p, ctypes.c_void_p, ctypes.c_int]
-        map_path = ROOT / "shared/navigation/battle_1001/battle_1001.bmap"
-        self.handle = self.lib.fs_open(str(map_path).encode())
-        assert self.handle, "Native Engine creation failed"
-
-    def restore(self, data):
-        """从拥有的 bytes 恢复独立 Engine；不与 Server 共享可变状态。"""
-        assert self.lib.fs_restore(self.handle, data, len(data)) == 1
-
-    def save(self):
-        """复制 Native 输出到 Python bytes，缓冲区由本方法拥有。"""
-        output = ctypes.create_string_buffer(16384)
-        size = self.lib.fs_save(self.handle, output, len(output))
-        assert 0 < size <= len(output)
-        return output.raw[:size]
-
-    def step(self, record):
-        """应用一条 Server 正式帧记录，并核对该帧状态摘要。"""
-        command = fields(one(record, 1, b""))
-
-        def signed(field):
-            value = one(command, field)
-            return (value >> 1) ^ -(value & 1)
-
-        ok = self.lib.fs_step(self.handle, signed(2), signed(3), one(command, 4))
-        assert ok == 1, "Native replay step failed"
-        state = self.save()
-        digest = 2166136261
-        for byte in state:
-            digest = ((digest ^ byte) * 16777619) & 0xFFFFFFFF
-        assert digest == one(record, 3), "STATE_DIVERGENCE"
-
-    def close(self):
-        """释放本实例唯一拥有的 Native handle。"""
-        self.lib.fs_close(self.handle)
-        self.handle = None
+def command(frame, direction):
+    return number(1, frame) + signed(2, direction) + signed(3, 0) + number(4, 0)
 
 
-def run():
-    """验证双连接隔离、权威帧推送、重连及整段 Replay 确定性。"""
-    first = second = reconnected = engine = None
+def send_input(client, battle_id, generation, frame, direction):
+    body = number(1, battle_id) + number(2, generation) + binary(3, command(frame, direction))
+    client.send(INPUT, body)
+
+
+def records_from(push):
+    return [parse(record) for record in push.get(3, [])]
+
+
+def record_view(record):
+    players = []
+    for wire in record.get(2, []):
+        player = parse(wire)
+        inp = parse(first(player, 2))
+        players.append((first(player, 1), first(inp, 1), first(player, 3, 0),
+                        first(inp, 2, 0), first(inp, 3, 0), first(inp, 4, 0)))
+    return first(record, 1), tuple(players), first(record, 3)
+
+
+def main():
+    left = Client()
     try:
-        first = Client()
-        joined = first.request(1101, number(1, 1001))
-        assert one(joined, 1) == b"OK"
-
-        second = Client()
-        other_join = second.request(1101, number(1, 1001))
-        assert one(other_join, 1) == b"OK"
-        battle = one(joined, 2)
-        generation = one(joined, 4)
-        token = one(joined, 3)
-        assert len(token) == 32 and battle != one(other_join, 2)
-
-        engine = Native()
-        engine.restore(one(joined, 10))
-        frame = one(joined, 9)
-        # 每次仅发送未来意图；Replay 只采用收到的权威 FramePush record。
-        for _ in range(16):
-            target = frame + 3
-            command = number(1, target) + number(2, zigzag(1)) + number(4, 2)
-            first.send_request(1102, number(1, battle) + number(2, generation) + blob(3, command))
-            pushed = first.push()
-            assert one(pushed, 1) == battle and one(pushed, 2) == generation
-            assert one(pushed, 4) == b"OK"
-
-            for raw_record in pushed.get(3, []):
-                record = fields(raw_record)
-                record_frame = one(fields(one(record, 1, b"")), 1)
-                assert record_frame == frame + 1
-                engine.step(record)
-                frame = record_frame
-
-            isolated_push = second.push()
-            assert one(isolated_push, 1) == one(other_join, 2), "cross battle broadcast"
-        assert frame >= 16
-
-        first.close()
-        first = None
-        reconnected = Client()
-        denied = reconnected.request(1104, number(1, battle) + blob(2, b"x" * 32))
-        assert one(fields(one(denied, 1, b"")), 1) == b"NOT_FOUND"
-
-        recovered = reconnected.request(1104, number(1, battle) + blob(2, token))
-        current = fields(one(recovered, 1, b""))
-        assert one(current, 1) == b"OK"
-        assert one(current, 4) == generation + 1 and one(current, 9) >= frame
-        engine.restore(one(current, 10))
-        frame = one(current, 9)
-        pushed = reconnected.push()
-        assert one(pushed, 1) == battle and one(pushed, 2) == generation + 1
-        for raw_record in pushed.get(3, []):
-            engine.step(fields(raw_record))
-
-        replay = reconnected.request(1106, number(1, battle) + blob(2, token) + number(3, 0))
-        assert one(replay, 1) == b"OK" and one(replay, 3) > 0
-        initial = fields(one(replay, 4, b""))
-        assert one(initial, 3, b"") == b""
-        engine.restore(one(initial, 10))
-        expected = 0
-        for raw_record in replay.get(2, []):
-            record = fields(raw_record)
-            expected += 1
-            assert one(fields(one(record, 1, b"")), 1) == expected
-            engine.step(record)
-        assert expected == one(replay, 3)
-        print("FRAME_INTEGRATION_OK frames=", expected, "generation=", one(current, 4))
+        mismatch = left.request(JOIN, number(1, 1001) + number(3, 999))
+        assert first(mismatch, 1).decode() == "SIMULATION_VERSION"
+        first_join = left.request(JOIN, number(1, 1001) + number(3, 1))
+        assert first(first_join, 1).decode() == "OK"
+        battle_id = first(first_join, 2)
+        assert first(first_join, 3) == 1
+        assert first(first_join, 5) == 1  # 初始generation。
+        assert first(first_join, 9) == 0
+        assert first(first_join, 14) == 1
+        assert first(first_join, 10)  # 创建即开战；初始Checkpoint在Join响应中返回。
+        for frame in (4, 5):
+            send_input(left, battle_id, first(first_join, 5), frame, 1)
+        records = []
+        while len(records) < 12:
+            push = left.next_push()
+            code = first(push, 4, b"OK").decode()
+            if code not in ("OK", "LATE", "CONFLICT", "INPUT_WINDOW"):
+                raise RuntimeError("Unexpected push " + code)
+            records.extend(record_view(record) for record in records_from(push))
+        records = records[:12]
+        assert [record[0] for record in records] == list(range(1, 13))
+        for frame, players, state_hash in records:
+            assert len(players) == 1 and players[0][0] == 1
+            assert players[0][1] == frame
+            assert isinstance(state_hash, int)
+        print("FRAME_ONE_CLIENT_OK", "battle_id=", battle_id, "frames=12")
     finally:
-        # 各资源仅由本测试对象拥有；失败断言也必须关闭已创建实例。
-        for resource in (first, second, reconnected, engine):
-            if resource is not None:
-                resource.close()
-
+        left.close()
 
 if __name__ == "__main__":
-    run()
+    main()
 ```
 
-WSL终端C执行：
+### 5.21 `unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs`
 
-```bash
-python3 tests/frame_sync_integration.py
-```
-
-预期 `FRAME_INTEGRATION_OK frames=... generation=2`；帧数可能因调度在17/18等相邻值，不把日志的墙钟调度差异当成模拟分歧。断言逐帧连续和hash，不依赖固定网络包到达时刻。
-
-此测试覆盖两独立Battle定向推送、输入采用后的Native重演、错误凭据拒绝、断线恢复代数更新、Checkpoint恢复、第一页日志重演以及回放不包含凭据。它不是完整的容量压测，也不是Unity表现验收。
-
-失败排查顺序：无监听先看启动日志；有监听握手失败看FlyWow握手模块和固定版本；Join超时看Registry和两端Cluster节点名；Join成功无push回第3节审计条件；STATE_DIVERGENCE先比地图资产hash与双方发布的程序版本，再比规范化字段，不通过强制覆盖客户端状态掩盖固定规则错误。
-
-## 7. Windows构建同一Core，接入实际Unity客户端
-
-### 7.1 Windows DLL
-
-把已审核的WSL非Unity源码按Git流程同步到Windows工作区，确认相同submodule提交。Windows必须有C++17编译器与CMake；在相应Developer PowerShell中，仓库根执行：
-
-```powershell
-cmake -S server/native/frame_sync -B server/build/frame_sync_windows -A x64 -DLESSON_FRAME_LUA=OFF
-cmake --build server/build/frame_sync_windows --config Release --parallel 4
-ctest --test-dir server/build/frame_sync_windows -C Release --output-on-failure
-New-Item -ItemType Directory -Force unity/BattleNavigation/Assets/BattleNavigation/Plugins/FrameSync | Out-Null
-Copy-Item -LiteralPath server/build/frame_sync_windows/Release/frame_core.dll -Destination unity/BattleNavigation/Assets/BattleNavigation/Plugins/FrameSync/frame_core.dll
-```
-
-多配置生成器的Release产物在Release目录；使用单配置生成器时按CMake实际输出目录取DLL，不盲目假定路径。不要把Linux `.so` 改名成 `.dll`。Unity Plugin Inspector中禁用Any Platform，只启用Windows Editor/Standalone、CPU x86_64；这是本课Windows客户端的发布目标，不宣称已验证Android/iOS/WebGL。修改/重建DLL前退出Play并释放Native实例，必要时重启Editor解除DLL文件占用。
-
-FlyWow握手继续使用前两课已部署的 `Assets/BattleNavigation/Plugins/FlyWow/FlyWow.Gateway.dll` 与BouncyCastle DLL，Google.Protobuf继续使用已有插件，不再复制SDK源码到Assets形成第二份类型。
-
-### 7.2 Native桥：声明与规范化读取必须同源
-
-下面三个文件在Windows Unity工程新建，放进现有 `Assets/BattleNavigation/client/`，属于已有BattleNavigation.Replay程序集，它已经引用生成Proto所在的BattleNavigation.Client程序集。不要另建一个缺引用的asmdef。
-
-### unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs
-
-**操作：新建。** Unity只通过稳定C ABI推进与恢复本地模拟；不把Transform写回Server。
-
-学习导航：精读 Native handle的唯一owner、DLL位宽、规范化状态字段顺序、资源释放。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** Windows PInvoke SafeHandle、完整输入数组与CheckpointV3解码。
 
 ```csharp
-// 职责：Unity帧同步Native调用及只读渲染状态解码；不负责Socket或Server权威。
+// 职责：调用宿主FrameCore并将规范化State转换为Unity只读渲染视图。
+// 边界：Unity Windows Native Adapter；不处理Socket、Skynet和客户端权威。
+// 输入/输出：FrameInputs、Checkpoint bytes -> Native新状态或明确异常。
+// ownership：一个FrameNative拥有一个SafeHandle；仅Unity主线程调用；Dispose显式释放。
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Runtime.InteropServices;
 using Microsoft.Win32.SafeHandles;
+
 namespace BattleNavigation.FrameSync
 {
-    /// <summary>拥有单场客户端预测模拟的Native句柄；仅主线程访问，Dispose释放。</summary>
+    [StructLayout(LayoutKind.Sequential)]
+    public struct FsPlayerInput
+    {
+        public uint SeatId;
+        public uint UnitId;
+        public int X;
+        public int Z;
+        public int Skill;
+
+        public FsPlayerInput(uint seatId, uint unitId, int x, int z, int skill)
+        {
+            SeatId = seatId;
+            UnitId = unitId;
+            X = x;
+            Z = z;
+            Skill = skill;
+        }
+    }
+
     public sealed class FrameNative : IDisposable
     {
-        // C ABI只返回稳定整数成功标记；Native错误统一映射为下方托管异常。
+        private const int MaxCheckpointBytes = 65535; // 必须与Native和协议最终帧预算一致。
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr fs_open([MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+        private static extern int fs_preload_map(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern IntPtr fs_open(uint mapId);
+
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern int fs_preload_unit_profiles(
+            [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
         private static extern void fs_close(IntPtr handle);
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_step(FrameHandle handle, int x, int z, int skill);
+        private static extern int fs_step_frame(
+            FrameHandle handle, uint frame,
+            [In] FsPlayerInput[] inputs, uint count);
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_save(FrameHandle handle, byte[] bytes, int capacity);
+        private static extern int fs_save(FrameHandle handle, byte[] output, int capacity);
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
         private static extern int fs_restore(FrameHandle handle, byte[] bytes, int count);
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern uint fs_map_version(FrameHandle handle);
+
         [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
         private static extern uint fs_map_id(FrameHandle handle);
+
+        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
+        private static extern uint fs_map_version(FrameHandle handle);
+
         private sealed class FrameHandle : SafeHandleZeroOrMinusOneIsInvalid
         {
             public FrameHandle(IntPtr value) : base(true)
             {
                 SetHandle(value);
             }
+
             protected override bool ReleaseHandle()
             {
                 fs_close(handle);
                 return true;
             }
         }
-        private FrameHandle handle; // SafeHandle为P/Invoke借用自动保活；仍只在主线程使用。
-        /// <summary>当前Native实例加载的地图ID；与MapVersion共同标识地图资产。</summary>
-        public uint         MapId      => fs_map_id(handle);
-        /// <summary>当前Native实例加载的地图版本。</summary>
-        public uint         MapVersion => fs_map_version(handle);
-        /// <summary>读取UTF-8资产路径并拥有独占Native；失败抛MAP_LOAD，调用方主线程Dispose。</summary>
-        public FrameNative(string path)
+
+        private FrameHandle handle; // 唯一Native owner，生命周期不跨Unity对象销毁。
+
+        public uint MapId => fs_map_id(RequireHandle());
+        public uint MapVersion => fs_map_version(RequireHandle());
+
+        /// <summary>启动时加载发布地图与导航配置；Tick和Battle构造不读取文件。</summary>
+        public static void Preload(string path, string unitProfilesPath)
         {
-            handle = new FrameHandle(fs_open(path));
+            if (string.IsNullOrWhiteSpace(unitProfilesPath) ||
+                fs_preload_unit_profiles(unitProfilesPath) != 1)
+            {
+                throw new InvalidDataException("UNIT_PROFILE_PRELOAD");
+            }
+            if (string.IsNullOrWhiteSpace(path) || fs_preload_map(path) != 1)
+            {
+                throw new InvalidDataException("MAP_PRELOAD");
+            }
+        }
+
+        /// <summary>获取当前MapRegistry已经加载的地图；本实例只拥有模拟状态。</summary>
+        public FrameNative(uint mapId)
+        {
+            handle = new FrameHandle(fs_open(mapId));
             if (handle.IsInvalid)
-                throw new InvalidDataException("MAP_LOAD");
+            {
+                handle.Dispose();
+                handle = null;
+                throw new InvalidDataException("NATIVE_OPEN");
+            }
         }
-        /// <summary>同步推进50ms；方向-1/0/1、技能0..3；无I/O，失败不改变旧State。</summary>
-        public void Step(int x, int z, int skill)
+
+        private FrameHandle RequireHandle()
         {
-            if (fs_step(handle, x, z, skill) != 1)
-                throw new InvalidOperationException("NATIVE_STEP");
+            if (handle == null || handle.IsClosed || handle.IsInvalid)
+            {
+                throw new ObjectDisposedException(nameof(FrameNative));
+            }
+            return handle;
         }
-        /// <summary>分配并返回本实例规范化状态副本，最大16384bytes；调用方拥有数组。</summary>
+
+        /// <summary>同步推进一个50ms逻辑帧；唯一玩家输入由Core验证，AI状态由Core决定。</summary>
+        public void StepFrame(uint frame, FsPlayerInput[] players)
+        {
+            if (players == null || players.Length != 1 ||
+                players[0].SeatId != 1)
+            {
+                throw new ArgumentException("FRAME_SEATS", nameof(players));
+            }
+            if (fs_step_frame(RequireHandle(), frame, players, (uint)players.Length) != 1)
+            {
+                throw new InvalidOperationException("NATIVE_STEP");
+            }
+        }
+
+        /// <summary>返回独立的规范化Checkpoint副本；容量不够即失败，不允许截断。</summary>
         public byte[] Save()
         {
-            var buffer = new byte[16384];
-            int size   = fs_save(handle, buffer, buffer.Length);
+            var buffer = new byte[MaxCheckpointBytes];
+            int size = fs_save(RequireHandle(), buffer, buffer.Length);
             if (size <= 0)
+            {
                 throw new InvalidOperationException("NATIVE_SAVE");
+            }
             Array.Resize(ref buffer, size);
             return buffer;
         }
-        /// <summary>同步借用字节到调用返回；全部验证后替换State，失败保持旧State。</summary>
+
+        /// <summary>完整校验后原子恢复；失败不可部分修改State或Navigation。</summary>
         public void Restore(byte[] bytes)
         {
-            if (bytes == null || bytes.Length > 16384 ||
-        fs_restore(handle, bytes, bytes.Length) != 1)
+            if (bytes == null || bytes.Length == 0 || bytes.Length > MaxCheckpointBytes ||
+                fs_restore(RequireHandle(), bytes, bytes.Length) != 1)
+            {
                 throw new InvalidDataException("NATIVE_RESTORE");
+            }
         }
-        public void Dispose()
-        {
-            handle?.Dispose(); // 幂等；SafeHandle critical finalizer兜底。
-        }
-        /// <summary>计算状态诊断hash；不用于安全验证或程序版本协商。</summary>
-        /// <param name="bytes">由调用方拥有的规范化状态副本。</param>
-        /// <returns>32位FNV状态摘要。</returns>
+
+        /// <summary>诊断FNV32，跨平台对规范化Checkpoint bytes计算。</summary>
         public static uint Hash(byte[] bytes)
         {
             uint value = 2166136261;
-            foreach (byte b in bytes)
-                value = unchecked((value ^ b) * 16777619);
+            foreach (byte valueByte in bytes)
+            {
+                value = unchecked((value ^ valueByte) * 16777619);
+            }
             return value;
         }
+
+        public void Dispose()
+        {
+            handle?.Dispose();
+            handle = null;
+        }
     }
-    /// <summary>从Native规范化状态解码的单位只读表现数据，不是模拟状态owner。</summary>
+
     public sealed class FrameUnit
     {
-        /// <summary>单位ID、阵营、移动模式和三个技能的剩余冷却帧。</summary>
-        public uint Id, Camp, MoveMode, Ready1, Ready2, Ready3;
-        /// <summary>逻辑坐标，单位为毫米；转换Unity单位只发生在表现边界。</summary>
-        public long X, Y, Z;
-        /// <summary>当前权威逻辑HP。</summary>
-        public int  Hp;
+        public uint Id;
+        public uint ProfileId;
+        public uint Camp;
+        public uint MoveMode;
+        public uint Ready1;
+        public uint Ready2;
+        public uint Ready3;
+        public long X;
+        public long Y;
+        public long Z;
+        public int Hp;
     }
-    /// <summary>从Native规范化状态解码的弹丸表现数据。</summary>
+
     public sealed class FrameBolt
     {
-        /// <summary>由Server模拟分配的弹丸ID。</summary>
         public uint Id;
-        /// <summary>逻辑坐标，单位为毫米。</summary>
-        public long X, Y, Z;
+        public long X;
+        public long Y;
+        public long Z;
     }
-    /// <summary>单次状态解码创建的托管快照；不持有Native资源。</summary>
+
     public sealed class FrameState
     {
-        /// <summary>快照帧号和结束结果；Winner为0表示战斗仍在进行。</summary>
-        public uint     Frame, Winner;
+        public uint Frame;
+        public uint Winner;
         public readonly List<FrameUnit> Units = new List<FrameUnit>();
         public readonly List<FrameBolt> Bolts = new List<FrameBolt>();
-        /// <summary>验证版本、数量上限和完整消费长度后解码小端状态副本。</summary>
-        /// <param name="bytes">调用方拥有的Native状态副本，最大16384字节。</param>
-        /// <returns>新分配且由调用方拥有的托管快照。</returns>
-        /// <exception cref="InvalidDataException">格式、版本、容量或尾随字节无效。</exception>
-        public static FrameState        Decode(byte[] bytes)
+
+        /// <summary>读取V3完整字节布局；导航Route不用于渲染但必须验证边界。</summary>
+        public static FrameState Decode(byte[] bytes)
         {
-            if (bytes == null || bytes.Length > 16384)
+            if (bytes == null || bytes.Length > 65535)
+            {
                 throw new InvalidDataException("STATE_SIZE");
-            // BinaryReader按小端读取固定布局；每个计数先限界，避免恶意快照放大分配。
+            }
             using (var reader = new BinaryReader(new MemoryStream(bytes, false)))
             {
-                if (reader.ReadUInt32() != 1)
-                    throw new InvalidDataException("STATE_VERSION");
-                var state =
-                    new FrameState { Frame = reader.ReadUInt32(), Winner = reader.ReadUInt32() };
-                reader.ReadUInt32(); // next_bolt属于逻辑状态，表现不使用。
-                uint units = reader.ReadUInt32();
-                if (units > 64)
-                    throw new InvalidDataException("UNIT_LIMIT");
-                for (uint i = 0; i < units; i++)
-                    state.Units.Add(new FrameUnit {
-                        Id       = reader.ReadUInt32(),
-                        Camp     = reader.ReadUInt32(),
-                        MoveMode = reader.ReadUInt32(),
-                        X        = reader.ReadInt64(),
-                        Y        = reader.ReadInt64(),
-                        Z        = reader.ReadInt64(),
-                        Hp       = reader.ReadInt32(),
-                        Ready1   = reader.ReadUInt32(),
-                        Ready2   = reader.ReadUInt32(),
-                        Ready3   = reader.ReadUInt32(),
-                    });
-                uint bolts = reader.ReadUInt32();
-                if (bolts > 128)
-                    throw new InvalidDataException("BOLT_LIMIT");
-                for (uint i = 0; i < bolts; i++)
+                if (reader.ReadUInt32() != 3)
                 {
-                    uint id = reader.ReadUInt32();
-                    reader.ReadUInt32();
-                    reader.ReadUInt32();
-                    reader.ReadUInt32();
-                    reader.ReadInt32();
-                    state.Bolts.Add(new FrameBolt { Id = id, X = reader.ReadInt64(),
-                                                    Y = reader.ReadInt64(),
-                        Z = reader.ReadInt64()
-                    });
+                    throw new InvalidDataException("STATE_VERSION");
                 }
+
+                var result = new FrameState
+                {
+                    Frame = reader.ReadUInt32(),
+                    Winner = reader.ReadUInt32(),
+                };
+                reader.ReadUInt32(); // next_bolt_id属于Core，渲染不使用。
+
+                uint unitCount = reader.ReadUInt32();
+                if (unitCount > 64)
+                {
+                    throw new InvalidDataException("UNIT_LIMIT");
+                }
+                uint previousUnitId = 0;
+                for (uint i = 0; i < unitCount; i++)
+                {
+                    var unit = new FrameUnit
+                    {
+                        Id = reader.ReadUInt32(),
+                        ProfileId = reader.ReadUInt32(),
+                        Camp = reader.ReadUInt32(),
+                        MoveMode = reader.ReadUInt32(),
+                        X = reader.ReadInt64(),
+                        Y = reader.ReadInt64(),
+                        Z = reader.ReadInt64(),
+                        Hp = reader.ReadInt32(),
+                        Ready1 = reader.ReadUInt32(),
+                        Ready2 = reader.ReadUInt32(),
+                        Ready3 = reader.ReadUInt32(),
+                    };
+                    if (unit.Id <= previousUnitId)
+                    {
+                        throw new InvalidDataException("STATE_UNIT_ORDER");
+                    }
+                    previousUnitId = unit.Id;
+                    result.Units.Add(unit);
+                }
+
+                uint boltCount = reader.ReadUInt32();
+                if (boltCount > 128)
+                {
+                    throw new InvalidDataException("BOLT_LIMIT");
+                }
+                uint previousBoltId = 0;
+                for (uint i = 0; i < boltCount; i++)
+                {
+                    var bolt = new FrameBolt();
+                    bolt.Id = reader.ReadUInt32();
+                    reader.ReadUInt32(); // caster
+                    reader.ReadUInt32(); // target
+                    reader.ReadUInt32(); // expires
+                    reader.ReadInt32();  // damage
+                    bolt.X = reader.ReadInt64();
+                    bolt.Y = reader.ReadInt64();
+                    bolt.Z = reader.ReadInt64();
+                    if (bolt.Id <= previousBoltId)
+                    {
+                        throw new InvalidDataException("STATE_BOLT_ORDER");
+                    }
+                    previousBoltId = bolt.Id;
+                    result.Bolts.Add(bolt);
+                }
+
+                uint routeCount = reader.ReadUInt32();
+                if (routeCount > unitCount)
+                {
+                    throw new InvalidDataException("ROUTE_LIMIT");
+                }
+                uint previousRouteUnit = 0;
+                for (uint i = 0; i < routeCount; i++)
+                {
+                    uint unitId = reader.ReadUInt32();
+                    reader.ReadUInt32(); // target_unit_id
+                    reader.ReadInt64(); // planned_target_x
+                    reader.ReadInt64(); // planned_target_y
+                    reader.ReadInt64(); // planned_target_z
+                    reader.ReadUInt32(); // next_repath
+                    reader.ReadUInt32(); // blocked_frames
+                    uint valid = reader.ReadUInt32();
+                    uint pointCount = reader.ReadUInt32();
+                    uint nextIndex = reader.ReadUInt32();
+                    reader.ReadUInt64(); // segment_progress_mm
+                    reader.ReadUInt64(); // length_mm
+                    uint partial = reader.ReadUInt32();
+                    if (unitId <= previousRouteUnit || valid > 1 || partial > 1 ||
+                        pointCount > 1024 || nextIndex > pointCount)
+                    {
+                        throw new InvalidDataException("ROUTE_FORMAT");
+                    }
+                    previousRouteUnit = unitId;
+                    for (uint point = 0; point < pointCount; point++)
+                    {
+                        reader.ReadInt64(); // 真实X；Native Restore负责地图合法性。
+                        reader.ReadInt64(); // 真实Y。
+                        reader.ReadInt64(); // 真实Z。
+                    }
+                }
+
                 if (reader.BaseStream.Position != reader.BaseStream.Length)
+                {
                     throw new InvalidDataException("STATE_TRAILING");
-                return state;
+                }
+                return result;
             }
         }
     }
 }
 ```
 
-### unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs
+### 5.22 `unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs`
 
-**操作：新建。** 让实时连接同时持续收推帧和发输入；沿用FlyWow握手与两字节framing。
-
-学习导航：精读 读写线程独占职责、有界队列、控制请求超时、Dispose解除阻塞、禁止后台线程读Unity对象。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 独立读写线程、Protobuf、主动推送、控制超时与有界队列。
 
 ```csharp
-// 职责：单个实时TCP会话，复用FlyWow SDK握手与项目Envelope；不解释战斗模拟。
-// 两后台线程只处理网络/Proto；Unity主线程从有界Push队列读取，调用方Dispose。
+// 职责：维持一个长期TCP+Protobuf连接，区分控制回包与Server主动FramePush。
+// 边界：Unity Client Transport；不执行Native模拟，不读取Transform。
+// ownership：单个FrameConnection拥有Socket、读线程、写线程、出站与Push有界队列。
+// 失败：任何网络/队列错误关闭Socket、解除等待，主线程自行重连。
 using System;
 using System.Collections.Concurrent;
 using System.Collections.Generic;
@@ -3351,62 +3995,65 @@ using System.Threading.Tasks;
 using Battle.Navigation.V1;
 using Google.Protobuf;
 using FlyWow.Gateway;
+
 namespace BattleNavigation.FrameSync
 {
-    /// <summary>拥有一个TCP会话及其网络线程；后台线程只处理字节和Proto值。</summary>
     public sealed class FrameConnection : IDisposable
     {
-        // gate保护waiting；Command用于拒绝request_id正确但命令不匹配的响应。
         private sealed class Waiting
         {
-            public uint                           Command;
-            public TaskCompletionSource<Envelope> Result =
+            public uint Command;
+            public readonly TaskCompletionSource<Envelope> Result =
                 new TaskCompletionSource<Envelope>(
                     TaskCreationOptions.RunContinuationsAsynchronously);
         }
+
         private readonly TcpClient socket = new TcpClient();
-        private NetworkStream      stream;
-        // 入站调用生产、writer消费；128项满时关闭会话，防止内存无界增长。
-        private readonly BlockingCollection<byte[]> outgoing = new BlockingCollection<byte[]>(128);
-        // reader生产、Unity主线程消费；256项满时视为客户端过载并关闭。
+        private readonly BlockingCollection<byte[]> outgoing =
+            new BlockingCollection<byte[]>(128);
         private readonly BlockingCollection<FramePushResponse> pushes =
             new BlockingCollection<FramePushResponse>(256);
-        // 控制请求只在锁内增删/查找；响应超时后移除，迟到响应直接丢弃。
-        private readonly Dictionary<ulong, Waiting> waiting = new Dictionary<ulong, Waiting>();
-        private readonly object                     gate    = new object();
-        private Thread                              reader, writer;
-        private long                                nextRequest;
-        private int                                 closed;
-        private volatile string                     fault;
-        /// <summary>会话终止原因；null表示当前没有观察到传输失败。</summary>
-        public string                               Fault     => fault;
-        /// <summary>待Unity主线程读取的推送数量，用于诊断有界队列积压。</summary>
-        public int                                  PushDepth => pushes.Count;
+        private readonly Dictionary<ulong, Waiting> waiting =
+            new Dictionary<ulong, Waiting>();
+        private readonly object gate = new object();
 
-        /// <summary>后台连接与握手；超时3秒；成功调用方拥有连接并Dispose，不访问Unity对象。</summary>
+        private NetworkStream stream;
+        private Thread reader;
+        private Thread writer;
+        private long nextRequest;
+        private int closed;
+        private volatile string fault;
+
+        public string Fault => fault;
+        public int PushDepth => pushes.Count;
+
+        /// <summary>网络连接和握手在后台执行；成功后调用方负责Dispose。</summary>
         public static async Task<FrameConnection> Connect(string host, int port)
         {
-            var connection = new FrameConnection();
+            var value = new FrameConnection();
             try
             {
-                await Task.Run(() => connection.Open(host, port));
-                return connection;
+                await Task.Run(() => value.Open(host, port));
+                return value;
             }
             catch
             {
-                connection.Dispose();
+                value.Dispose();
                 throw;
             }
         }
-        /// <summary>执行连接、固定协议握手并启动专用读写线程；仅Connect调用。</summary>
+
         private void Open(string host, int port)
         {
             if (!socket.ConnectAsync(host, port).Wait(3000))
+            {
                 throw new TimeoutException("CONNECT_TIMEOUT");
-            socket.NoDelay      = true; // 小输入包不等待Nagle合并；TCP仍有队头阻塞。
-            stream              = socket.GetStream();
-            stream.ReadTimeout  = 3000;
+            }
+            socket.NoDelay = true; // 小输入不等待Nagle合并；TCP队头阻塞仍存在。
+            stream = socket.GetStream();
+            stream.ReadTimeout = 3000;
             stream.WriteTimeout = 3000;
+
             using (var handshake = new HandshakeClient())
             {
                 WriteFrame(handshake.Begin());
@@ -3414,85 +4061,94 @@ namespace BattleNavigation.FrameSync
                 handshake.Complete(ReadFrame(33));
             }
             stream.ReadTimeout = 10000;
-            reader             = new Thread(ReadLoop) { IsBackground = true, Name = "FrameRead" };
-            writer             = new Thread(WriteLoop) { IsBackground = true, Name = "FrameWrite" };
+
+            reader = new Thread(ReadLoop) { IsBackground = true, Name = "FrameRead" };
+            writer = new Thread(WriteLoop) { IsBackground = true, Name = "FrameWrite" };
             reader.Start();
             writer.Start();
         }
-        // TCP不保留消息边界；Exact负责把短读累积成固定长度的自有数组。
+
         private byte[] Exact(int count)
         {
-            var result = new byte[count];
+            var buffer = new byte[count];
             int offset = 0;
             while (offset < count)
             {
-                int n = stream.Read(result, offset, count - offset);
-                if (n == 0)
-                    throw new EndOfStreamException("DISCONNECTED");
-                offset += n;
+                int bytes = stream.Read(buffer, offset, count - offset);
+                if (bytes == 0) throw new EndOfStreamException("DISCONNECTED");
+                offset += bytes;
             }
-            return result;
+            return buffer;
         }
+
         private byte[] ReadFrame(int expected = 0)
         {
-            var header = Exact(2);
-            int size   = (header[0] << 8) | header[1];
+            byte[] header = Exact(2);
+            int size = (header[0] << 8) | header[1];
             if (size < 1 || (expected != 0 && size != expected))
+            {
                 throw new InvalidDataException("FRAME_LENGTH");
+            }
             return Exact(size);
         }
+
         private void WriteFrame(byte[] bytes)
         {
-            if (bytes.Length < 1 || bytes.Length > 65535)
+            if (bytes == null || bytes.Length < 1 || bytes.Length > 65535)
+            {
                 throw new InvalidDataException("FRAME_SIZE");
+            }
             var frame = new byte[bytes.Length + 2];
-            frame[0]  = (byte)(bytes.Length >> 8);
-            frame[1]  = (byte)bytes.Length;
+            frame[0] = (byte)(bytes.Length >> 8);
+            frame[1] = (byte)bytes.Length;
             Buffer.BlockCopy(bytes, 0, frame, 2, bytes.Length);
             stream.Write(frame, 0, frame.Length);
         }
-        private ulong Enqueue(uint command, IMessage body)
-        {
-            if (Volatile.Read(ref closed) != 0)
-                throw new IOException(fault ?? "CLOSED");
-            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
-            EnqueueEnvelope(command, body, id);
-            return id;
-        }
+
         private void EnqueueEnvelope(uint command, IMessage body, ulong id)
         {
-            var bytes = new Envelope { ProtocolVersion = 3, Command = command, RequestId = id,
-                                       Body = ByteString.CopyFrom(body.ToByteArray()) }
-                            .ToByteArray();
-            if (!outgoing.TryAdd(bytes))
+            var payload = new Envelope
+            {
+                ProtocolVersion = 3,
+                Command = command,
+                RequestId = id,
+                Body = ByteString.CopyFrom(body.ToByteArray()),
+            }.ToByteArray();
+
+            if (!outgoing.TryAdd(payload))
             {
                 Fail("OUTGOING_LIMIT");
                 throw new IOException("OUTGOING_LIMIT");
             }
         }
-        /// <summary>单向输入加入最多128项出站队列；不等待确认，满队列显式关闭。</summary>
+
+        /// <summary>单向发送当前Seat未来输入；有界队列满时显式失败。</summary>
         public void SendInputs(FrameInputRequest body)
         {
-            Enqueue((uint)CommandId.FrameInput, body);
+            if (Volatile.Read(ref closed) != 0) throw new IOException(fault ?? "CLOSED");
+            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
+            EnqueueEnvelope((uint)CommandId.FrameInput, body, id);
         }
-        /// <summary>控制请求最多8个，等待3秒；await期间只持有纯Proto对象，错误抛异常。</summary>
+
+        /// <summary>控制请求最多8个在途，超时3秒；网络线程不访问Unity对象。</summary>
         public async Task<Envelope> Request(CommandId command, IMessage body)
         {
-            var   item = new Waiting { Command = (uint)command };
-            ulong id   = checked((ulong)Interlocked.Increment(ref nextRequest));
+            var item = new Waiting { Command = (uint)command };
+            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
             lock (gate)
             {
-                if (closed != 0)
-                    throw new IOException(fault ?? "CLOSED");
-                if (waiting.Count >= 8)
-                    throw new IOException("CONTROL_LIMIT");
+                if (closed != 0) throw new IOException(fault ?? "CLOSED");
+                if (waiting.Count >= 8) throw new IOException("CONTROL_LIMIT");
                 waiting.Add(id, item);
             }
+
             try
             {
                 EnqueueEnvelope((uint)command, body, id);
                 if (await Task.WhenAny(item.Result.Task, Task.Delay(3000)) != item.Result.Task)
+                {
                     throw new TimeoutException("CONTROL_TIMEOUT");
+                }
                 return await item.Result.Task;
             }
             finally
@@ -3500,93 +4156,103 @@ namespace BattleNavigation.FrameSync
                 lock (gate) waiting.Remove(id);
             }
         }
-        /// <summary>非阻塞取出一个推送；仅Unity主线程调用，不持有网络锁。</summary>
-        public bool TryPush(out FramePushResponse push)
+
+        public bool TryPush(out FramePushResponse message)
         {
-            return pushes.TryTake(out push);
+            return pushes.TryTake(out message);
         }
-        // Reader独占NetworkStream读取；按request_id分派响应，request_id=0进入有界推送队列。
+
         private void ReadLoop()
         {
             try
             {
-                while (closed == 0)
+                while (Volatile.Read(ref closed) == 0)
                 {
                     var envelope = Envelope.Parser.ParseFrom(ReadFrame());
                     if (envelope.ProtocolVersion != 3)
+                    {
                         throw new InvalidDataException("PROTOCOL_VERSION");
+                    }
                     if (envelope.RequestId == 0)
                     {
                         if (envelope.Command != (uint)CommandId.FramePush)
+                        {
                             throw new InvalidDataException("PUSH_COMMAND");
+                        }
                         if (!pushes.TryAdd(FramePushResponse.Parser.ParseFrom(envelope.Body)))
+                        {
                             throw new IOException("PUSH_LIMIT");
+                        }
                         continue;
                     }
-                    Waiting item;
-                    lock (gate) waiting.TryGetValue(envelope.RequestId, out item);
-                    if (item == null)
-                        continue; // 已超时结果丢弃，不污染新请求。
-                    if (item.Command != envelope.Command)
+
+                    Waiting target;
+                    lock (gate) waiting.TryGetValue(envelope.RequestId, out target);
+                    if (target == null) continue; // 超时旧回复不污染新的request_id。
+                    if (target.Command != envelope.Command)
+                    {
                         throw new InvalidDataException("RESPONSE_COMMAND");
-                    item.Result.TrySetResult(envelope);
+                    }
+                    target.Result.TrySetResult(envelope);
                 }
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                Fail(ex.Message);
+                Fail(error.Message);
             }
         }
-        // Writer独占NetworkStream写入，保证多生产者发送仍按队列顺序串行化。
+
         private void WriteLoop()
         {
             try
             {
-                foreach (var bytes in outgoing.GetConsumingEnumerable())
+                foreach (byte[] bytes in outgoing.GetConsumingEnumerable())
+                {
                     WriteFrame(bytes);
+                }
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                Fail(ex.Message);
+                Fail(error.Message);
             }
         }
+
         private void Fail(string code)
         {
-            if (Interlocked.Exchange(ref closed, 1) != 0)
-                return;
+            if (Interlocked.Exchange(ref closed, 1) != 0) return;
             fault = code;
             outgoing.CompleteAdding();
-            socket.Close(); // 解除read/write等待；不使用Thread.Abort。
+            socket.Close(); // 中断阻塞的Read/Write；不使用Thread.Abort。
             lock (gate)
             {
-                foreach (var item in waiting.Values)
+                foreach (Waiting item in waiting.Values)
+                {
                     item.Result.TrySetException(new IOException(code));
+                }
                 waiting.Clear();
             }
         }
-        /// <summary>幂等终止会话、关闭Socket并有限等待后台线程退出。</summary>
+
         public void Dispose()
         {
             Fail("CLOSED");
-            if (reader != null && reader != Thread.CurrentThread)
-                reader.Join(1000);
-            if (writer != null && writer != Thread.CurrentThread)
-                writer.Join(1000);
-            // Collection可能仍被极少数退出路径借用，随此对象GC回收；Socket已同步关闭。
+            if (reader != null && reader != Thread.CurrentThread) reader.Join(1000);
+            if (writer != null && writer != Thread.CurrentThread) writer.Join(1000);
         }
     }
 }
 ```
 
-### unity/BattleNavigation/Assets/BattleNavigation/client/FrameBattleController.cs
+### 5.23 `unity/BattleNavigation/Assets/BattleNavigation/client/FrameBattleController.cs`
 
-**操作：新建。** 让实际按键在本地预测，并根据Server确认帧恢复重演；最终可在场景里观察。
-
-学习导航：精读 confirmed/predicted双实例、只对确认状态核对hash、窗口与GAP、重连清旧代数、回放只读输入。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
+**操作：新建或整文件覆盖。** 真实单席位Join、预测、确认、回滚、Replay与Unity表现。
 
 ```csharp
-// 职责：Unity输入、固定逻辑帧、预测/回滚、场景表现与回放接入；不是Server权威。
-// Native实例和GameObject只由主线程使用；FrameConnection后台只传纯Proto值。
+// 职责：单席位帧同步的Unity输入、预测、权威确认、回滚和场景表现。
+// 边界：Unity主线程Client Battle Adapter；业务规则只由共享Native Frame Core计算。
+// 输入/输出：本地WASD/J/K/L与FramePush -> 本地预测画面、确认HP、Replay文件。
+// ownership：Controller独占两个FrameNative、一个FrameConnection及创建的GameObject/Material。
+// 不负责：Skynet Tick、授权、Gateway握手实现、Navigation/A*与服务端权威决定。
 using System;
 using System.Collections.Generic;
 using System.IO;
@@ -3596,70 +4262,93 @@ using System.Threading.Tasks;
 using Battle.Navigation.V1;
 using Google.Protobuf;
 using UnityEngine;
+
 namespace BattleNavigation.FrameSync
 {
-    /// <summary>在Unity主线程采样输入、预测/校正并渲染；Server仍是战斗权威。</summary>
     public sealed class FrameBattleController : MonoBehaviour
     {
-        /// <summary>Frame Gateway主机和端口；只用于在线模式。</summary>
-        public string             Host       = "127.0.0.1";
-        public int                Port       = 19021;
-        /// <summary>空串表示在线；非空时离线读取该Replay路径。</summary>
-        public string             ReplayPath = "";
-        private FrameConnection   connection;
-        // confirmed只应用Server正式记录；predicted应用本地未来意图，两者不共享可变Native状态。
-        private FrameNative       confirmed, predicted;
-        private FrameJoinResponse session;
-        // 未确认输入按目标帧排序；重连后由Install清除，拒绝输入也会从这里移除。
-        private readonly SortedDictionary<uint, FrameCommand> pending =
-            new SortedDictionary<uint, FrameCommand>();
-        private readonly Dictionary<uint, GameObject> actors = new Dictionary<uint, GameObject>();
-        private readonly Dictionary<uint, GameObject> bolts  = new Dictionary<uint, GameObject>();
-        private FrameReplay                           replay;
-        private int                                   replayIndex;
-        private float                                 accumulated;
-        private int                                   queuedSkill;
-        private bool                                  ready, connecting, destroyed;
-        private string                                status = "connecting";
-        private uint                                  authorityFrame, predictedFrame, winner;
-        private int                                   rollbackCount;
-        private float                                 castPreviewUntil;
-        private string                                MapPath =>
-            Path.Combine(Application.streamingAssetsPath, "navigation/battle_1001.bmap");
+        public string Host = "127.0.0.1";
+        public int Port = 19021;
+        public uint JoinBattleId = 0;  // 0创建并立即开始单人Battle；非0请求连接已有Battle。
+        public string ReplayPath = ""; // 非空时读取离线回放，不连接Server。
 
-        /// <summary>Unity启用入口；创建两个独立模拟，并选择在线连接或本地Replay。</summary>
+        private const uint SimulationVersion = 1; // 与Server配置一致；不兼容玩法合同必须递增。
+        private const int MaxPredictionFrames = 8;
+        private const int LeadFrames = 2;
+        private const float TickSeconds = 0.05f;
+
+        private FrameConnection connection;
+        private FrameNative confirmed;
+        private FrameNative predicted;
+        private FrameJoinResponse session;
+        private FrameReplay replay;
+        private int replay_index;
+
+        private readonly SortedDictionary<uint, FrameCommand> pending =
+            new SortedDictionary<uint, FrameCommand>(); // 未确认的本席位输入，由客户端主线程独占。
+        private readonly Dictionary<uint, GameObject> actors =
+            new Dictionary<uint, GameObject>();
+        private readonly Dictionary<uint, GameObject> bolts =
+            new Dictionary<uint, GameObject>();
+        private readonly List<Material> owned_materials = new List<Material>();
+
+        private uint confirmed_frame;
+        private uint predicted_frame;
+        private uint winner;
+        private int rollback_count;
+        private int queued_skill;
+        private float clock_accumulator;
+        private float preview_until;
+        private string status = "initializing";
+        private bool ready;
+        private bool connecting;
+        private bool destroyed;
+        private bool saving_replay;
+
+        private string MapPath => Path.Combine(
+            Application.streamingAssetsPath, "navigation/battle_1001.bmap");
+
         private async void Start()
         {
             try
             {
-                confirmed = new FrameNative(MapPath);
-                predicted = new FrameNative(MapPath);
-                if (ReplayPath.Length > 0)
+                FrameNative.Preload(MapPath, Path.Combine(
+                    Application.streamingAssetsPath, "navigation/unit_profiles.cfg"));
+                confirmed = new FrameNative(1001);
+                predicted = new FrameNative(1001);
+
+                if (!string.IsNullOrEmpty(ReplayPath))
                 {
                     if (new FileInfo(ReplayPath).Length > 1024 * 1024)
+                    {
                         throw new InvalidDataException("REPLAY_LIMIT");
+                    }
                     replay = FrameReplay.Parser.ParseFrom(File.ReadAllBytes(ReplayPath));
-                    if (replay.FormatVersion != 1)
-                        throw new InvalidDataException("REPLAY_VERSION");
-                    if (replay.Records.Count < 1 || replay.Records.Count > 3600 ||
-                        replay.Initial == null || replay.Initial.Frame != 0)
-                        throw new InvalidDataException("REPLAY_RANGE");
-                    Install(replay.Initial);
+                    if (replay.FormatVersion != 1 || replay.Initial == null ||
+                        replay.Initial.SimulationVersion != SimulationVersion ||
+                        replay.Records.Count == 0 || replay.Records.Count > 3600)
+                    {
+                        throw new InvalidDataException("REPLAY_FORMAT");
+                    }
+                    session = replay.Initial;
+                    InstallCheckpoint(replay.Initial.Checkpoint.ToByteArray(), 0);
                     status = "offline replay";
+                    return;
                 }
-                else
-                    await Connect(false);
+
+                await Connect(false);
             }
-            catch (Exception ex)
+            catch (Exception error)
             {
-                StopWith(ex.Message);
+                StopWith(error.Message);
             }
         }
-        /// <summary>建立新会话或使用现有凭据恢复；await后重验对象是否已销毁。</summary>
-        private async Task Connect(bool resume)
+
+        // 恢复只携带本席位Token；不会创建另一场Battle或踢掉另一名玩家。
+        private async Task Connect(bool recover)
         {
             connecting = true;
-            ready      = false;
+            ready = false;
             connection?.Dispose();
             var next = await FrameConnection.Connect(Host, Port);
             if (destroyed)
@@ -3668,567 +4357,600 @@ namespace BattleNavigation.FrameSync
                 return;
             }
             connection = next;
-            FrameJoinResponse state;
-            if (resume)
+
+            FrameJoinResponse response;
+            if (recover)
             {
-                var       envelope =
-                    await connection.Request(CommandId.FrameRecover, new FrameRecoverRequest {
-                        BattleId   = session.BattleId,
-                        ResumeToken = session.ResumeToken
+                if (session == null) throw new IOException("NO_SESSION");
+                var envelope = await connection.Request(CommandId.FrameRecover,
+                    new FrameRecoverRequest
+                    {
+                        BattleId = session.BattleId,
+                        ResumeToken = session.ResumeToken,
                     });
-                state = FrameRecoverResponse.Parser.ParseFrom(envelope.Body).State;
+                response = FrameRecoverResponse.Parser.ParseFrom(envelope.Body).State;
             }
             else
             {
-                var envelope = await connection.Request(
-                    CommandId.FrameJoin,
-                    new FrameJoinRequest { ScenarioId = 1001 });
-                state        = FrameJoinResponse.Parser.ParseFrom(envelope.Body);
+                var envelope = await connection.Request(CommandId.FrameJoin,
+                    new FrameJoinRequest
+                    {
+                        ScenarioId = 1001,
+                        BattleId = JoinBattleId,
+                        SimulationVersion = SimulationVersion,
+                    });
+                response = FrameJoinResponse.Parser.ParseFrom(envelope.Body);
             }
-            if (destroyed)
+
+            if (destroyed) return;
+            if (response == null || response.Code != "OK")
             {
-                next.Dispose();
-                return;
+                throw new IOException(response?.Code ?? "EMPTY_SESSION");
             }
-            Install(state);
+            if (response.SeatId != 1 || response.SimulationVersion != SimulationVersion ||
+                response.FutureWindow != MaxPredictionFrames || response.TickMs != 50)
+            {
+                throw new InvalidDataException("FRAME_CONTRACT");
+            }
+
+            ValidateMapIdentity(response);
+            session = response;
+            status = "joined";
             connecting = false;
-        }
-        /// <summary>验证地图身份与Checkpoint帧号，再原子替换confirmed/predicted起点。</summary>
-        private void Install(FrameJoinResponse state)
-        {
-            if (state == null || state.Code != "OK")
-                throw new IOException(state?.Code ?? "EMPTY_STATE");
-            string mapHash;
-            using (var sha = SHA256.Create()) mapHash =
-                BitConverter.ToString(sha.ComputeHash(File.ReadAllBytes(MapPath)))
-                    .Replace("-", "")
-                    .ToLowerInvariant();
-            if (mapHash != state.MapHash || confirmed.MapId != state.MapId ||
-                confirmed.MapVersion != state.MapVersion)
-                throw new InvalidDataException("ASSET_IDENTITY");
-            confirmed.Restore(state.Checkpoint.ToByteArray());
-            predicted.Restore(state.Checkpoint.ToByteArray());
-            session  = state;
-            var view = FrameState.Decode(confirmed.Save());
-            if (view.Frame != state.Frame)
-                throw new InvalidDataException("CHECKPOINT_FRAME");
-            authorityFrame = predictedFrame = view.Frame;
-            winner                          = view.Winner;
-            pending.Clear();
-            accumulated = 0;
-            queuedSkill = 0;
-            ready       = true;
-            status      = "ready";
-            if (replay == null && winner == 0)
-                SeedLead();
-        }
-        // 默认2帧=100ms输入提前量；本地在未来帧先执行，Server按deadline采用。
-        /// <summary>预先生成默认2个未来帧，使首次按键有本地响应时间。</summary>
-        private void SeedLead()
-        {
-            for (int i = 0; i < 2; i++)
-                Predict(new FrameCommand { Frame = predictedFrame + 1 });
-        }
-        /// <summary>在预测Native推进一帧并记录意图；不改变confirmed权威帧。</summary>
-        private void Predict(FrameCommand input)
-        {
-            predicted.Step(input.X, input.Z, (int)input.Skill);
-            predictedFrame       = input.Frame;
-            pending[input.Frame] = input;
+            if (response.Code == "OK")
+            {
+                InstallCheckpoint(response.Checkpoint.ToByteArray(), response.Frame);
+            }
         }
 
-        /// <summary>在主线程限额消费推送，避免网络积压单帧占满Unity更新。</summary>
-        private void DrainFrames()
+        private void ValidateMapIdentity(FrameJoinResponse state)
         {
-            if (connection.Fault != null)
-                throw new IOException(connection.Fault);
-            int processed = 0;
-            while (connection.TryPush(out var push))
+            if (state.MapId != confirmed.MapId || state.MapVersion != confirmed.MapVersion)
             {
-                if (++processed > 256)
-                    throw new IOException("PUSH_BUDGET");
-                Receive(push);
+                throw new InvalidDataException("MAP_VERSION");
             }
-        }
-        /// <summary>采样一次性技能按键；预览可撤销，技能意图只随一个目标帧发送。</summary>
-        private void CaptureSkill()
-        {
-            int skill = Input.GetKeyDown(KeyCode.L)   ? 3
-                        : Input.GetKeyDown(KeyCode.K) ? 2
-                        : Input.GetKeyDown(KeyCode.J) ? 1
-                                                      : 0;
-            if (skill == 0)
-                return;
-            queuedSkill      = skill;
-            castPreviewUntil = Time.unscaledTime + .12f;
-        }
-        /// <summary>按50ms固定逻辑步推进；每次Update最多补算4步，超限显式停止。</summary>
-        private void AdvanceLocalClock()
-        {
-            accumulated += Time.unscaledDeltaTime;
-            int catchup = 0;
-            while (accumulated >= .05f && winner == 0)
+            using (var sha = SHA256.Create())
             {
-                if (++catchup > 4)
-                    throw new IOException("CLIENT_OVERLOAD");
-                accumulated -= .05f;
-                if (replay != null)
-                    PlaybackStep();
-                else
-                    LocalStep();
-            }
-        }
-        /// <summary>Unity主线程帧入口；依序收网络结果、采样输入、推进和渲染。</summary>
-        private void Update()
-        {
-            if (!ready || connecting)
-                return;
-            try
-            {
-                if (replay == null)
+                var bytes = File.ReadAllBytes(MapPath);
+                string digest = BitConverter.ToString(sha.ComputeHash(bytes))
+                    .Replace("-", "").ToLowerInvariant();
+                if (!string.Equals(digest, state.MapHash, StringComparison.OrdinalIgnoreCase))
                 {
-                    DrainFrames();
-                    CaptureSkill();
+                    throw new InvalidDataException("MAP_HASH_MISMATCH");
                 }
-                AdvanceLocalClock();
-                Render(FrameState.Decode(predicted.Save()));
-            }
-            catch (Exception ex)
-            {
-                StopWith(ex.Message);
             }
         }
-        /// <summary>把当前按键作为下一预测帧意图并异步排队；满窗口时拒绝继续预测。</summary>
-        private void LocalStep()
+
+        // 回滚入口：覆盖两个Native实例，清除旧代数未确认输入。
+        private void InstallCheckpoint(byte[] bytes, uint expected_frame)
         {
-            if (FrameState.Decode(predicted.Save()).Winner != 0)
-                return; // 预测结束时等待权威确认。
-            if (predictedFrame - authorityFrame >= 8 || pending.Count >= 64)
-                throw new IOException("PREDICTION_WINDOW");
-            int x       = (Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0);
-            int z       = (Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0);
-            var input   = new FrameCommand { Frame = predictedFrame + 1, X = x, Z = z,
-                                           Skill = (uint)queuedSkill };
-            queuedSkill = 0;
-            Predict(input);
-            connection.SendInputs(new FrameInputRequest { BattleId   = session.BattleId,
-                                                          Generation = session.Generation,
-                                                          Inputs     = { input } });
+            if (bytes == null || bytes.Length == 0) throw new InvalidDataException("CHECKPOINT_EMPTY");
+            confirmed.Restore(bytes);
+            predicted.Restore(bytes);
+            var view = FrameState.Decode(confirmed.Save());
+            if (view.Frame != expected_frame) throw new InvalidDataException("CHECKPOINT_FRAME");
+
+            confirmed_frame = view.Frame;
+            predicted_frame = view.Frame;
+            winner = view.Winner;
+            pending.Clear();
+            queued_skill = 0;
+            clock_accumulator = 0;
+            ready = true;
+            status = "running";
+
+            // 离线Replay必须严格从输入日志下一帧开始，不能多预测两帧。
+            if (replay == null && winner == 0)
+            {
+                for (int i = 0; i < LeadFrames; ++i)
+                {
+                    Predict(new FrameCommand { Frame = predicted_frame + 1 }, false);
+                }
+            }
         }
-        /// <summary>接收Server权威记录；验证连续帧和状态摘要后校正本地预测。</summary>
+
+        private const uint LocalUnitId = 1001;
+
+        private FsPlayerInput[] BuildInputs(FrameCommand local)
+        {
+            return new[] { new FsPlayerInput(1, LocalUnitId, local.X, local.Z, (int)local.Skill) };
+        }
+
+        private static FsPlayerInput[] AuthoritativeInputs(FrameRecord record)
+        {
+            if (record.Players.Count != 1 || record.Players[0].SeatId != 1)
+            {
+                throw new InvalidDataException("FRAME_PLAYER_ORDER");
+            }
+            var values = new FsPlayerInput[1];
+            for (int i = 0; i < 1; ++i)
+            {
+                var player = record.Players[i];
+                if (player.Input == null || player.Input.Frame != record.Frame)
+                {
+                    throw new InvalidDataException("FRAME_INPUT");
+                }
+                values[i] = new FsPlayerInput(player.SeatId,
+                    1001u,
+                    player.Input.X, player.Input.Z, (int)player.Input.Skill);
+            }
+            return values;
+        }
+
+        private void Predict(FrameCommand input, bool send)
+        {
+            if (input.Frame != predicted_frame + 1)
+            {
+                throw new InvalidOperationException("PREDICTION_SEQUENCE");
+            }
+            predicted.StepFrame(input.Frame, BuildInputs(input));
+            predicted_frame = input.Frame;
+            if (send)
+            {
+                pending[input.Frame] = input;
+                connection.SendInputs(new FrameInputRequest
+                {
+                    BattleId = session.BattleId,
+                    Generation = session.Generation,
+                    Inputs = { input },
+                });
+            }
+        }
+
         private void Receive(FramePushResponse push)
         {
-            if (push.BattleId != session.BattleId || push.Generation != session.Generation)
-                return;
+            if (session == null || push.BattleId != session.BattleId ||
+                push.Generation != session.Generation) return;
+
             if (push.Code != "OK")
             {
                 status = push.Code;
-                if (push.Code == "EMPTY_INPUT" || push.Code == "INPUT_BATCH_TOO_LARGE")
-                    return;
                 if (push.Code == "OVERLOAD" || push.Code == "INTERNAL")
+                {
                     throw new IOException(push.Code);
-                throw new InvalidDataException("FRAME_PUSH_CODE");
+                }
+                return; // LATE/CONFLICT等待正式输入帧校正，不重写权威历史。
             }
+            if (!ready) throw new IOException("FRAME_BEFORE_START");
 
-            // 逐项拒绝结果带有frame；移除本地被拒输入，之后从Confirmed重演。
-            foreach (var result in push.InputResults)
+            foreach (FrameRecord record in push.Records)
             {
-                if (result.Code == "OK")
-                    continue;
-                status = "INPUT_" + result.Code + "_FRAME_" + result.Frame;
-                pending.Remove(result.Frame);
-            }
-
-            foreach (var record in push.Records)
-            {
-                if (record.Input.Frame <= authorityFrame)
-                    continue;
-                if (record.Input.Frame != authorityFrame + 1)
+                if (record.Frame <= confirmed_frame) continue;
+                if (record.Frame != confirmed_frame + 1)
+                {
                     throw new InvalidDataException("FRAME_GAP");
-                confirmed.Step(record.Input.X, record.Input.Z, (int)record.Input.Skill);
+                }
+
+                confirmed.StepFrame(record.Frame, AuthoritativeInputs(record));
                 if (FrameNative.Hash(confirmed.Save()) != record.Hash)
+                {
                     throw new InvalidDataException("STATE_DIVERGENCE");
-                authorityFrame = record.Input.Frame;
-                pending.Remove(authorityFrame);
+                }
+                confirmed_frame = record.Frame;
+                pending.Remove(confirmed_frame);
             }
-            Reconcile();
-            winner = push.Winner;
+            winner = FrameState.Decode(confirmed.Save()).Winner;
+            if (winner == 0)
+            {
+                Reconcile();
+            }
+            else
+            {
+                predicted.Restore(confirmed.Save());
+                predicted_frame = confirmed_frame; // 已正式结束时停止预测未来帧。
+                pending.Clear();
+            }
         }
-        /// <summary>以confirmed状态为新基线，重演未确认输入并统计预测状态变化。</summary>
+
         private void Reconcile()
         {
-            var  before   = predicted.Save();
-            uint oldFrame = predictedFrame;
-            uint target   = Math.Max(predictedFrame, authorityFrame + 2);
-            predicted.Restore(confirmed.Save());
-            predictedFrame = authorityFrame;
-            ReplayPending(target);
-            if (oldFrame == predictedFrame &&
-                FrameNative.Hash(before) != FrameNative.Hash(predicted.Save()))
-                rollbackCount++;
-        }
-        /// <summary>按目标帧重演尚未确认输入；无输入的空帧使用中性意图。</summary>
-        private void ReplayPending(uint target)
-        {
-            if (FrameState.Decode(predicted.Save()).Winner == 0)
+            uint old_frame = predicted_frame;
+            var old_hash = FrameNative.Hash(predicted.Save());
+            uint target = Math.Max(old_frame, confirmed_frame + LeadFrames);
+            if (target - confirmed_frame > MaxPredictionFrames)
             {
-                for (uint frame = authorityFrame + 1; frame <= target; frame++)
+                throw new IOException("PREDICTION_WINDOW");
+            }
+
+            predicted.Restore(confirmed.Save());
+            predicted_frame = confirmed_frame;
+            while (predicted_frame < target && winner == 0)
+            {
+                uint frame = predicted_frame + 1;
+                if (!pending.TryGetValue(frame, out var local))
                 {
-                    if (!pending.TryGetValue(frame, out var input))
-                        input = new FrameCommand { Frame = frame };
-                    predicted.Step(input.X, input.Z, (int)input.Skill);
-                    predictedFrame = frame;
-                    if (FrameState.Decode(predicted.Save()).Winner != 0)
-                        break;
+                    local = new FrameCommand { Frame = frame };
                 }
+                predicted.StepFrame(frame, BuildInputs(local));
+                predicted_frame = frame;
+                if (FrameState.Decode(predicted.Save()).Winner != 0) break;
+            }
+            if (old_frame == predicted_frame && old_hash != FrameNative.Hash(predicted.Save()))
+            {
+                ++rollback_count;
             }
         }
-        /// <summary>离线逐条应用正式Replay输入，并校验每帧状态摘要和帧连续性。</summary>
-        private void PlaybackStep()
+
+        private void CaptureInput()
         {
-            if (replayIndex >= replay.Records.Count)
-                throw new InvalidDataException("REPLAY_INCOMPLETE");
-            var record = replay.Records[replayIndex++];
-            if (record.Input.Frame != predictedFrame + 1)
-                throw new InvalidDataException("REPLAY_FRAME_GAP");
-            predicted.Step(record.Input.X, record.Input.Z, (int)record.Input.Skill);
-            if (FrameNative.Hash(predicted.Save()) != record.Hash)
-                throw new InvalidDataException("REPLAY_DIVERGENCE");
-            predictedFrame = authorityFrame = record.Input.Frame;
-            winner                          = FrameState.Decode(predicted.Save()).Winner;
+            if (Input.GetKeyDown(KeyCode.J)) queued_skill = 1;
+            else if (Input.GetKeyDown(KeyCode.K)) queued_skill = 2;
+            else if (Input.GetKeyDown(KeyCode.L)) queued_skill = 3;
+            if (queued_skill != 0) preview_until = Time.unscaledTime + 0.12f;
         }
-        /// <summary>把逻辑毫米坐标转换为Unity米；只供表现层使用，不回写模拟。</summary>
+
+        private void LocalStep()
+        {
+            if (predicted_frame - confirmed_frame >= MaxPredictionFrames)
+            {
+                throw new IOException("PREDICTION_WINDOW");
+            }
+            int x = (Input.GetKey(KeyCode.D) ? 1 : 0) - (Input.GetKey(KeyCode.A) ? 1 : 0);
+            int z = (Input.GetKey(KeyCode.W) ? 1 : 0) - (Input.GetKey(KeyCode.S) ? 1 : 0);
+            var input = new FrameCommand
+            {
+                Frame = predicted_frame + 1,
+                X = x,
+                Z = z,
+                Skill = (uint)queued_skill,
+            };
+            queued_skill = 0;
+            Predict(input, true);
+        }
+
+        private void ReplayStep()
+        {
+            if (replay_index >= replay.Records.Count)
+            {
+                throw new InvalidDataException("REPLAY_END");
+            }
+            FrameRecord record = replay.Records[replay_index++];
+            if (record.Frame != predicted_frame + 1)
+            {
+                throw new InvalidDataException("REPLAY_FRAME_GAP");
+            }
+            predicted.StepFrame(record.Frame, AuthoritativeInputs(record));
+            if (FrameNative.Hash(predicted.Save()) != record.Hash)
+            {
+                throw new InvalidDataException("REPLAY_DIVERGENCE");
+            }
+            predicted_frame = confirmed_frame = record.Frame;
+            winner = FrameState.Decode(predicted.Save()).Winner;
+        }
+
+        private void Update()
+        {
+            if (destroyed || connecting) return;
+            try
+            {
+                if (connection != null)
+                {
+                    if (connection.Fault != null) throw new IOException(connection.Fault);
+                    int processed = 0;
+                    while (connection.TryPush(out var push))
+                    {
+                        if (++processed > 256) throw new IOException("PUSH_BUDGET");
+                        Receive(push);
+                    }
+                }
+
+                if (!ready) return;
+                if (replay == null) CaptureInput();
+                clock_accumulator += Time.unscaledDeltaTime;
+                int executed = 0;
+                while (clock_accumulator >= TickSeconds && winner == 0)
+                {
+                    if (++executed > 4) throw new IOException("CLIENT_OVERLOAD");
+                    clock_accumulator -= TickSeconds;
+                    if (replay != null) ReplayStep();
+                    else LocalStep();
+                }
+                Render(FrameState.Decode(predicted.Save()));
+            }
+            catch (Exception error)
+            {
+                StopWith(error.Message);
+            }
+        }
+
         private static Vector3 World(long x, long y, long z)
         {
             return new Vector3(x / 1000f, y / 1000f, z / 1000f);
         }
-        private readonly List<Material> ownedMaterials = new List<Material>();
-        private bool                    savingReplay;
-        /// <summary>销毁由本Controller创建的实例材质与GameObject。</summary>
-        private void                    DestroyActor(GameObject actor)
-        {
-            var material = actor.GetComponent<Renderer>().sharedMaterial;
-            ownedMaterials.Remove(material);
-            Destroy(material);
-            Destroy(actor);
-        }
-        /// <summary>按逻辑ID复用表现对象；材质由Controller创建并统一释放。</summary>
-        private GameObject Actor(uint id, bool projectile)
+
+        private GameObject GetActor(uint id, bool projectile)
         {
             var index = projectile ? bolts : actors;
-            if (index.TryGetValue(id, out var existing))
-                return existing;
-            var primitive = projectile ? PrimitiveType.Sphere : PrimitiveType.Capsule;
-            var actor     = GameObject.CreatePrimitive(primitive);
+            if (index.TryGetValue(id, out var value)) return value;
+
+            var actor = GameObject.CreatePrimitive(projectile ? PrimitiveType.Sphere : PrimitiveType.Capsule);
             actor.name = (projectile ? "Bolt_" : "Unit_") + id;
-            Destroy(actor.GetComponent<Collider>()); // 表现不驱动Native碰撞。
-            actor.transform.localScale = projectile ? Vector3.one * .25f : new Vector3(.4f, 1, .4f);
-            ownedMaterials.Add(actor.GetComponent<Renderer>().material);
+            Destroy(actor.GetComponent<Collider>()); // Unity碰撞不能进入Native权威模拟。
+            actor.transform.localScale = projectile ? Vector3.one * .25f :
+                new Vector3(.4f, 1f, .4f);
+            owned_materials.Add(actor.GetComponent<Renderer>().material);
             index.Add(id, actor);
             return actor;
         }
-        /// <summary>只把已解码快照投影到GameObject；不从Transform回写模拟状态。</summary>
-        private void Render(FrameState state)
+
+        private void DestroyActor(GameObject actor)
         {
-            foreach (var unit in state.Units)
+            var renderer = actor.GetComponent<Renderer>();
+            if (renderer != null)
             {
-                var actor = Actor(unit.Id, false);
-                var official =
-                    replay != null
-                        ? unit
-                        : FrameState.Decode(confirmed.Save()).Units.First(u => u.Id == unit.Id);
-                actor.SetActive(official.Hp > 0);
-                var goal = World(unit.X, unit.Y, unit.Z) + Vector3.up;
-                // 差异较大直接贴权威预测点，小差异100ms内收敛；只改显示Transform。
-                actor.transform.position =
-                    Vector3.Distance(actor.transform.position, goal) > 2
-                        ? goal
-                        : Vector3.Lerp(actor.transform.position, goal,
-                                       1 - Mathf.Exp(-Time.unscaledDeltaTime * 30));
-                var color = unit.Camp == 1 ? Color.green : Color.red;
-                if (unit.Id == 1001 && Time.unscaledTime < castPreviewUntil)
+                var material = renderer.material;
+                owned_materials.Remove(material);
+                Destroy(material);
+            }
+            Destroy(actor);
+        }
+
+        private void Render(FrameState view)
+        {
+            var official = replay == null ? FrameState.Decode(confirmed.Save()) : view;
+            foreach (FrameUnit unit in view.Units)
+            {
+                var actor = GetActor(unit.Id, false);
+                var confirmed_unit = official.Units.First(u => u.Id == unit.Id);
+                actor.SetActive(confirmed_unit.Hp > 0);
+                Vector3 target = World(unit.X, unit.Y, unit.Z) + Vector3.up;
+                float distance = Vector3.Distance(actor.transform.position, target);
+                actor.transform.position = distance > 2f ? target :
+                    Vector3.Lerp(actor.transform.position, target,
+                        1f - Mathf.Exp(-Time.unscaledDeltaTime * 30f));
+                Color color = unit.Camp == 1 ? Color.green : Color.red;
+                if (unit.Id == LocalUnitId && Time.unscaledTime < preview_until)
+                {
                     color = Color.yellow;
+                }
                 actor.GetComponent<Renderer>().material.color = color;
             }
+
             var present = new HashSet<uint>();
-            foreach (var bolt in state.Bolts)
+            foreach (FrameBolt bolt in view.Bolts)
             {
                 present.Add(bolt.Id);
-                var actor                = Actor(bolt.Id, true);
+                var actor = GetActor(bolt.Id, true);
                 actor.transform.position = World(bolt.X, bolt.Y, bolt.Z) + Vector3.up;
                 actor.GetComponent<Renderer>().material.color = Color.cyan;
             }
-            foreach (var id in bolts.Keys.ToArray())
+            foreach (uint id in bolts.Keys.ToArray())
+            {
                 if (!present.Contains(id))
                 {
                     DestroyActor(bolts[id]);
                     bolts.Remove(id);
                 }
+            }
         }
-        /// <summary>连接中断后尝试凭据恢复；失败进入停止状态，不伪造权威状态。</summary>
+
         private async void Recover()
         {
-            if (connecting || session == null || replay != null)
-                return;
-            try
-            {
-                await Connect(true);
-            }
-            catch (Exception ex)
-            {
-                connecting = false;
-                StopWith(ex.Message);
-            }
+            if (connecting || session == null || replay != null) return;
+            try { await Connect(true); }
+            catch (Exception error) { connecting = false; StopWith(error.Message); }
         }
-        /// <summary>保存初始Checkpoint和正式采用的输入记录；不保存被拒绝的本地意图。</summary>
+
         private async void SaveReplay()
         {
-            if (savingReplay || destroyed || replay != null)
-                return;
-            savingReplay = true;
+            if (saving_replay || destroyed || replay != null || session == null) return;
+            saving_replay = true;
             try
             {
-                if (winner == 0)
-                    throw new IOException("REPLAY_REQUIRES_FINISHED");
-                var  file   = new FrameReplay { FormatVersion = 1 };
-                uint offset = 0, total;
+                if (winner == 0) throw new IOException("REPLAY_REQUIRES_FINISHED");
+                var file = new FrameReplay { FormatVersion = 1 };
+                uint offset = 0;
+                uint total;
                 do
                 {
-                    var envelope = await connection.Request(
-                    CommandId.FrameReplay,
-                    new FrameReplayRequest
-                    {
-                        BattleId   = session.BattleId,
-                        ResumeToken = session.ResumeToken,
-                        Offset      = offset,
-                    });
-                    if (destroyed)
-                        return;
+                    var envelope = await connection.Request(CommandId.FrameReplay,
+                        new FrameReplayRequest
+                        {
+                            BattleId = session.BattleId,
+                            ResumeToken = session.ResumeToken,
+                            Offset = offset,
+                        });
                     var page = FrameReplayResponse.Parser.ParseFrom(envelope.Body);
-                    if (page.Code != "OK")
-                        throw new IOException(page.Code);
-                    if (offset == 0)
-                        file.Initial = page.Initial;
+                    if (page.Code != "OK") throw new IOException(page.Code);
+                    if (offset == 0) file.Initial = page.Initial;
                     file.Records.Add(page.Records);
                     offset += (uint)page.Records.Count;
                     total = page.Total;
                     if (total > 3600 || (page.Records.Count == 0 && offset < total))
+                    {
                         throw new InvalidDataException("REPLAY_PAGE");
+                    }
                 } while (offset < total);
+
                 string path = Path.Combine(Application.persistentDataPath, "frame_last.pb");
                 File.WriteAllBytes(path, file.ToByteArray());
                 status = "saved " + path;
             }
-            catch (Exception ex)
-            {
-                if (!destroyed)
-                    status = ex.Message;
-            }
-            finally
-            {
-                savingReplay = false;
-            }
+            catch (Exception error) { if (!destroyed) status = error.Message; }
+            finally { saving_replay = false; }
         }
-        /// <summary>停止当前会话并释放资源；code保留为可观察诊断原因。</summary>
+
         private void StopWith(string code)
         {
-            ready      = false;
+            ready = false;
             connecting = false;
-            status     = code;
+            status = code;
             connection?.Dispose();
         }
-        /// <summary>绘制连接、帧号、预测窗口和回滚计数等教学诊断信息。</summary>
+
         private void OnGUI()
         {
-            GUILayout.BeginArea(new Rect(10, 10, 520, 250), GUI.skin.box);
-            GUILayout.Label(
-                $"FrameSync {status} server={authorityFrame} " +
-                $"predicted={predictedFrame} rollback={rollbackCount} " +
-                $"winner={winner}");
-            GUILayout.Label(
-                "WASD移动，J近战，K表现弹丸，L逻辑火球；黄闪是本地施法预备反馈，HP由权威帧确认");
-            if (predicted != null)
-            {
-                var view = FrameState.Decode(replay != null ? predicted.Save() : confirmed.Save());
-                foreach (var unit in view.Units)
-                    GUILayout.Label(
-                        $"unit={unit.Id} hp={unit.Hp} mode={unit.MoveMode} y={unit.Y}mm " +
-                        $"skillReady={unit.Ready1}/{unit.Ready2}/{unit.Ready3}");
-            }
-            if (GUILayout.Button("重连 / 权威状态恢复"))
-                Recover();
-            if (GUILayout.Button("保存结束战斗输入回放"))
-                SaveReplay();
+            GUILayout.BeginArea(new Rect(10, 10, 570, 240), GUI.skin.box);
+            GUILayout.Label("FrameSync " + status + " battle=" +
+                (session != null ? session.BattleId.ToString() : "?") +
+                " seat=" + (session != null ? session.SeatId.ToString() : "?") +
+                " confirmed=" + confirmed_frame + " predicted=" + predicted_frame +
+                " rollback=" + rollback_count);
+            GUILayout.Label("WASD移动 J近战 K表现弹丸 L逻辑弹丸；黄色预备反馈可回滚");
+            if (GUILayout.Button("重连并恢复本席位")) Recover();
+            if (GUILayout.Button("保存结束战斗的正式输入回放")) SaveReplay();
             GUILayout.EndArea();
         }
-        /// <summary>Unity销毁入口；阻止await续体安装新对象并释放所有拥有资源。</summary>
+
         private void OnDestroy()
         {
             destroyed = true;
-            ready     = false;
+            ready = false;
             connection?.Dispose();
             confirmed?.Dispose();
             predicted?.Dispose();
-            foreach (var actor in actors.Values)
-                DestroyActor(actor);
-            foreach (var bolt in bolts.Values)
-                DestroyActor(bolt);
+            foreach (var actor in actors.Values) DestroyActor(actor);
+            foreach (var bolt in bolts.Values) DestroyActor(bolt);
+            foreach (var material in owned_materials) Destroy(material);
+            actors.Clear(); bolts.Clear(); owned_materials.Clear();
         }
     }
 }
 ```
 
-## 8. 接线与观察：每一步有具体证据
+## 6. 操作顺序：从第二课真实基线直接执行
 
-### 8.1 准备场景与发布资产
+所有命令均在仓库根或明确标注的`server/`执行。下面每个步骤在成功后再进入下一个步骤；未编译的源码不能称作实际已交付。
 
-1. Unity打开已有 `Assets/BattleNavigation/Scenes/Battle_1001.unity`。执行Save As，保存为 `Battle_1001_FrameSync.unity`，保持静态地形、Camera、Light；不要再次运行地图重建/Bake菜单覆盖手工修改。
-2. 在新场景中禁用第二课的 `BattleReplayRuntime` 或挂有旧Replay组件的运行对象，避免它同时生成另一批单位。原第二课场景保持独立可运行。
-3. 新建空GameObject `FrameBattleRuntime`，Add Component `FrameBattleController`。Inspector设置Host=`127.0.0.1`、Port=`19021`、ReplayPath留空。
-4. 保证 `Assets/StreamingAssets/navigation/battle_1001.bmap` 是第二课发布的同一BMAP。若尚无此文件，创建该目录并从Windows已发布 `shared/navigation/battle_1001/battle_1001.bmap`复制这个客户端消费文件。不是让Server读取Unity目录。
-5. 先完成第4节Unity协议生成，让Editor编译；Console不能有重复Proto类型、找不到FramePush或DllNotFound。保存新场景。
-
-如果Windows到WSL的localhost转发在你的WSL网络模式中不可用，Host填写可达WSL地址并调整Gateway监听地址；不要把Windows驱动器绝对路径写进Server Runtime。默认验收只监听127.0.0.1。
-
-### 8.2 正常Play验收
-
-保持第6节双进程运行，Unity进入Play。画面出现地面玩家和两个敌人；飞行敌人出生在高处，然后AI根据目标移动与升降，HUD显示其mode=2和变化的Y毫米值。地面敌人mode=1，按地面规则寻路。
-
-按WASD：玩家应在本地固定步响应，不等网络控制响应。HUD server/predicted帧递增，predicted通常领先少量帧。靠近障碍时地面单位不穿过阻挡，飞行敌人可越过地面障碍但不能穿透地表。玩家没有升降按键。
-
-按J/K/L：立即黄闪是可撤销预备反馈；J只能命中地面目标；K正式伤害发生在施放成功帧，球飞到目标不再扣一次；L正式伤害在逻辑球到达帧才发生。HP与死亡HUD来自confirmed，不使用黄闪或粒子碰撞作为命中证据。无合法目标/距离不足/冷却未结束时Server Core不消费冷却、不扣血。
-
-GameObject Collider被移除，Unity物理不参与战斗。Unit Transform是predicted位置的表现收敛；Native State才是逻辑位置。飞行Y同样是Native整数坐标，不靠Animator抬高模型替代。
-
-### 8.3 预测、回滚和表现
-
-Controller保留两个Native实例：confirmed只执行Server正式帧，predicted执行未来本地意图。未确认输入表不是另一个全局共享Battle；恢复会清空它。每次正式输入到达，先严格验证连续帧和hash，再恢复/重演。正常重复帧可忽略；中间缺帧不能直接跳到最新帧。
-
-表现对象以逻辑unit_id/bolt_id索引。回滚后不存在的Bolt被销毁，新Bolt重新创建；不会用一次性粒子回调重复结算伤害。Material由Controller明确拥有，销毁对象时释放；OnDestroy先关闭网络，再释放Native和表现对象。渲染Lerp只处理显示误差，不允许Lerp后的Transform影响下一步逻辑。
-
-`rollbackCount`是同一预测帧重演后字节hash变化的观察计数；不是抗作弊指标，也不是所有权威确认次数。你还应同时观察正式frame、未来窗口和错误code，不能只盯一个数字判断同步正确。
-
-### 8.4 断线和超窗恢复
-
-关闭Gateway会使读线程或控制请求显式失败，Controller停止继续预测。Battle进程仍运行时，30秒内重启Gateway，点击“重连/权威状态恢复”：新连接重新握手，提交battle_id/token；Server generation递增，返回当前Checkpoint，客户端清掉旧未来输入，重新建立预测提前量。
-
-若是纯客户端网络断线，也通过相同恢复按钮重新建立连接。超过保留期/错误token返回NOT_FOUND；不能悄悄新建另一个Battle冒充原场恢复。若Battle进程重启，内存Battle已不存在，本课没有数据库恢复，不假装resume_token能还原已经销毁的Server状态。
-
-若发生FRAME_GAP、STATE_DIVERGENCE或PREDICTION_WINDOW，停止预测并通过同一入口请求正式恢复。反复分歧要审计源码/资产；恢复按钮不是修复确定性错误的方式。此实现让恢复显式可观察，不设置未说明的无限自动重试。
-
-## 9. 输入回放：与旧第二课事件播放器独立
-
-### 9.1 保存
-
-战斗结束后30秒内点击“保存结束战斗输入回放”。客户端按256帧分页拉取日志，组装FrameReplay，写到 `Application.persistentDataPath/frame_last.pb`，HUD显示实际路径。第一页面携带初始Checkpoint及map/rules身份，但没有resume_token。单场不超过3600帧；保存是结束后的控制任务，不把每帧完整世界状态作为常规消息。
-
-保存文件包含正式采用输入与逐帧hash，不包含客户端曾发送但被拒绝/迟到的意图。`supplied=false` 的补缺输入同样要保存，因为它也影响正式位置和技能。
-
-### 9.2 离线播放
-
-退出Play；Inspector将ReplayPath设置为刚保存文件的完整路径，再进入Play。无需连接Gateway，Controller验证格式版本、文件大小、地图hash和初始Checkpoint，再按50ms逐条执行输入并核对每帧hash。你看到的是重新模拟的状态，不是旧Event Log根据墙钟播放动画。
-
-修改回放输入或hash应得到REPLAY_DIVERGENCE；删除中间帧应得到REPLAY_FRAME_GAP；更换BMAP应得到ASSET_IDENTITY。Replay必须使用与创建记录时兼容的客户端程序版本；程序版本由发布包管理，不从源码字节推导。
-
-## 10. 审计、失败验证与性能记录
-
-### 10.1 每层证据不能混用
-
-|层|执行项|证明什么|
-|---|---|---|
-|Native|CTest与Golden|相同逻辑输入、恢复与结果字节|
-|Binding|frame_binding_test.lua|加载、实例隔离、返回错误、关闭|
-|Runtime|frame_runtime_test.lua|窗口、幂等/冲突、补缺、不重复技能|
-|Gateway|gateway_async_test.lua|定向push与旧合同边界；是替身单测|
-|网络|frame_sync_integration.py|真实握手/Cluster/Worker/回放hash|
-|Unity|Play和离线回放|预测手感、主线程边界、表现与生命周期|
-|跨OS|Windows与Linux同一Golden输入|当前发布目标整数规则一致性|
-|负载/网络|实际配置下计时与故障注入|预算是否适合目标运行条件|
-
-### 10.2 你在实操时还要执行的负向用例
-
-|操作|预期|观察点|
-|---|---|---|
-|先跑新Gateway测试但保留旧条件|定向push断言失败|证明测试抓得到旧错误|
-|恢复旧epoch或不存在目标id|不写任一客户端|Gateway unit断言|
-|握手未完成推送|丢弃|ready开关单测；真实连接不得先拿业务消息|
-|一批内发送已截止/窗口内/未来9帧输入|逐项返回LATE/OK/INPUT_WINDOW|仅窗口内输入进入pending；FrameRecord确认正式采用|
-|批次为空|请求级EMPTY_INPUT|不处理输入，input_results为空|
-|批次超过8条|请求级INPUT_BATCH_TOO_LARGE，整批拒绝|不接受任何批内输入|
-|同一批重复同帧相同/不同输入|逐项OK/CONFLICT|首条有效输入保持不变|
-|恢复后旧generation发输入|拒绝，不影响新会话|Worker owns判定|
-|另一连接操作本场但不提供token|不能写本场意图|epoch/id/generation归属|
-|满Worker容量后Join|BUSY|不创建额外Native实例|
-|Native输入错误或坏Checkpoint|nil/error，旧状态不变|真实Binding断言|
-|Worker迟滞超过4帧预算|OVERLOAD|不skip帧，不扩大dt|
-|Client不读socket|Gateway现有写缓冲规则关闭慢连接|不能无限保留消息|
-|结束/断线30秒后恢复或回放|NOT_FOUND|索引摘除、Native close|
-|反复Play/Stop/恢复|线程与Native对象释放|不留多个连接/渲染对象|
-|替换规则DLL或地图版本|ASSET_IDENTITY|进入模拟前拒绝|
-|删/改回放中间输入|GAP/DIVERGENCE|不能悄悄跳过坏帧|
-
-测试每条时只注入一个变量，记录真实命令、错误code和状态变化。上表是实操验收，不等于作者已经对全部情况做了发布压力测试。
-
-### 10.3 跨平台Golden
-
-WSL Server目录：
+### 6.1 检查仓库与固定依赖
 
 ```bash
-./build/frame_sync/frame_test ../shared/navigation/battle_1001/battle_1001.bmap > /tmp/frame_linux_golden.txt
+# WSL项目根；不改变已有修改
+git status --short
+git submodule status
+git -C server/third_party/skynet-flywow status --short
+
+# 工具与正式地图已经是第二课验收的一部分
+test -f shared/navigation/battle_1001/battle_1001.bmap
+test -f shared/navigation/battle_1001/battle_1001.manifest.json
+test -f shared/protocol/navigation_query.proto
 ```
 
-Windows仓库根：
+若FlyWow子模块并非课程锁定版本，先根据当前gitlink核对导航API，不能自动拉最新`main`。上面的整文件以已核对的课程锁定版本为基线。
+
+### 6.2 安装新建文件并验证协议（WSL）
+
+将第5节对应文件的**完整代码块**按路径保存。然后在主仓库根目录：
+
+```bash
+
+# 按上文专节亲自修改FlyWow Gateway，并先跑旧行为负向测试，再跑新行为正向测试
+
+# Proto唯一源自动生成：Server descriptor 和 Gateway Registry
+./server/protocol/build_server_descriptor.sh
+python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
+  --proto shared/protocol/navigation_query.proto \
+  --output server/lualib/gateway/protocol/navigation_registry.lua
+
+# 检查第二课已有命令号保持不变，新Frame命令也已生成
+rg -n 'FRAME_JOIN|FRAME_INPUT|FRAME_PUSH|FRAME_RECOVER|FRAME_LEAVE|FRAME_REPLAY' \
+  server/lualib/gateway/protocol/navigation_registry.lua
+```
+
+不直接写或复制生成后的`navigation_registry.lua`。FlyWow的改动需遵循子模块先提交/推送、主仓库再更新gitlink的项目流程；本教程不会自动提交或推送。
+
+### 6.3 构建Linux Native并跑核心测试（WSL）
+
+```bash
+cd server
+./scripts/linux/run_server.sh build
+python3 scripts/lessons/prepare_frame_sync.py
+
+cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release -DLESSON_FRAME_LUA=ON
+cmake --build build/frame_sync --parallel
+ctest --test-dir build/frame_sync --output-on-failure
+
+./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
+./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
+```
+
+其中`frame_binding_test.lua`与`frame_runtime_test.lua`要求正确的Lua5.4.7加载路径（脚本内已明确追加`package.cpath`）；若系统缺Lua`lua` CLI，按当前固定Skynet构建输出路径核对，不静默换用系统Lua5.1/5.3。应看到`FRAME_BINDING_OK`、`FRAME_RUNTIME_OK`。
+
+### 6.4 启动两套真实Skynet进程（WSL）
+
+```bash
+# 终端A，工作目录server/
+./third_party/skynet/skynet config/frame_battle_process.lua
+
+# 终端B，工作目录server/；确认A已写出FRAME_BATTLE_READY再启动
+./third_party/skynet/skynet config/frame_gateway_process.lua
+
+# 终端C，server/
+python3 tests/frame_sync_integration.py
+```
+
+重点检查`FRAME_BATTLE_READY`、`FRAME_GATEWAY_READY`和`FRAME_ONE_CLIENT_OK`。进程停止使用各自前台终端Ctrl+C，不向所有Skynet进程发送`pkill`。测试只证明当前一个真实客户端收到12个连续权威帧；不能证明Unity Play、客户端本地预测或高并发负载。
+
+### 6.5 Windows DLL与团结引擎（Windows编辑源）
+
+先按项目Git工作流将已经审查的协议、源码和正式BMAP同步到Windows工作区。Windows项目根执行：
 
 ```powershell
-$windowsGolden = & ./server/build/frame_sync_windows/Release/frame_test.exe ./shared/navigation/battle_1001/battle_1001.bmap
-$linuxGolden = wsl.exe -d Ubuntu -- cat /tmp/frame_linux_golden.txt
-$differences = Compare-Object $linuxGolden $windowsGolden -SyncWindow 0
-if ($differences) { $differences; throw '跨平台Golden不一致' }
-'FRAME_CROSS_PLATFORM_OK'
+./shared/protocol/build_unity_cs.ps1
+cmake -S ./server/native/frame_sync -B ./server/build/frame_sync_windows -DLESSON_FRAME_LUA=OFF
+cmake --build ./server/build/frame_sync_windows --config Release
+ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failure
 ```
 
-要求逐行相同的frame/hash，不只比较最后赢家。不一致时先确认客户端与Server使用兼容的发布版本，再比地图资产SHA、整型溢出/取整、导航tie-break和序列化字段。逐帧状态hash只用于定位模拟分歧，不充当程序版本身份。
+将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把已发布的同一份BMAP放入`Assets/StreamingAssets/navigation/battle_1001.bmap`，把`shared/battle/unit_profiles.cfg`原样放入`Assets/StreamingAssets/navigation/unit_profiles.cfg`。本教程使用的是Windows Native插件；不能将该结果外推成Android、iOS、Web已支持。
 
-### 10.4 性能与网络，不用样例规模代替预算
+在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即开始50ms固定模拟。
 
-首先记录当前commit/submodule、编译器、Release/Debug、CPU、地图尺寸、单位/弹丸数与活跃Battle数。Native每帧序列化+hash成本按状态大小增长；AI A*成本受地图与单位数影响；Worker消息/CPU预算、Gateway写缓冲与客户端队列是不同层的边界。
+检查Player 1001执行WASD、J/K/L，AI会追击；本地移动无需等网络RTT；确认HP与逻辑弹丸由正式输入派生。模拟网络抖动后观察confirmed/predicted和回滚次数，服务器控制的敌方单位由同一模拟规则推进，并在正式帧到达后收敛。
 
-对独立Native执行 `/usr/bin/time -v ./build/frame_sync/frame_test ...`只得到测试总成本，不是多人实时TPS。对真实Worker逐步增加独立连接与Battle，记录进程RSS、每Tick是否落后和OVERLOAD；达到配置上限必须BUSY，不通过提高所有上限掩盖失败。当前不提供已经验证的“每机支持多少万人”数字。
+### 6.6 Windows/Linux确定性Golden
 
-网络故障实验在你明确选定的测试接口执行Linux netem；不要给有其它任务的默认网络接口加全局丢包。先查 `ip route`与对应WSL本机通信接口，再在独立测试环境加延迟/抖动/丢包并移除规则。记录RTT、队头阻塞、迟到比例、预测窗口错误与恢复所需时间。对于50ms帧、提前2帧、最大8帧窗口，长时阻塞最终必须停止预测；不能无限猜测并将迟到输入写回旧历史。
+两个系统分别对**同一份BMAP、同一份Profile配置、同一份Git源码及固定测试输入**执行Native`frame_test`，逐行比较其`GOLDEN <frame> <hash>`输出，不只比较最后胜负。Windows和Linux打印环境非Golden尾行可分别处理；每帧应完全相同。
 
-真实运营前必须根据目标公网条件选择/验证传输、提前量与调度预算，Unity目标平台逐一跑确定性Golden。本文的运行核心、边界和失败机制可审计；本地测试不是所有网络/平台/容量的证明。
+如果首帧就不一致，检查地图字节、座位输入数组、Checkpoint V3、整数取整和Native布局；如果运行几十帧后分歧，优先检查AI目标顺序、A* tie-break、Path Cursor、DynamicOccupancy和弹丸迭代顺序。
 
-## 11. 原第三课知识点如何进入最终版
+## 7. 本课必须真正验收的故障和性能合同
 
-|原核心知识|本版实现|
+| 注入条件 | 预期效果 |
 |---|---|
-|在线Battle生命周期|Worker持有场次、deadline、session、generation、retention|
-|多Worker|固定分片、显式handles、每场独占Native|
-|导航与动态状态边界|immutable BMAP；Engine私有scratch；地面与空中通行分开|
-|AI|纯状态派生、最近目标、固定ID顺序、飞行升降|
-|基础技能|Def/ready/Bolt分离，三种Effect，目标类型与高度距离|
-|事件/状态观察|正式FrameRecord、hash、confirmed HUD与逻辑Bolt ID|
-|Replay|初始Checkpoint+正式采用输入日志，重新模拟核对hash|
-|断线恢复|凭据/会话代数、当前Checkpoint、清旧输入、保留期|
-|客户端表现|可撤销即时反馈、预测位置、确认HP、回滚对象清理|
+| 旧或错误generation向已恢复席位发输入 | 拒绝，不改变该Battle正式历史 |
+| 玩家断线，玩家继续提交 | 玩家不被踢下线，Server按每席位规则继续Tick |
+| 同席位重复相同FrameCommand | 幂等OK，不写第二次正式输入 |
+| 同席位同帧不同输入 | CONFLICT，保留首次接受者 |
+| 超过future_window | INPUT_WINDOW；不无限缓存 |
+| 缺输入3帧以上 | 方向清零、技能每帧清零，不会持续施法 |
+| 动态阻挡路径或AI目标移动 | 按规定触发重规划；无需每Tick A* |
+| 正常路径途中保存并恢复 | 后续每帧Checkpoint和Hash相同，不重置Cursor |
+| 错误Checkpoint或非法C ABI参数 | 原状态完整保留，返回明确失败 |
+| 服务器Heartbeat超catchup | OVERLOAD，不用扩大dt追赶、也不跳帧 |
+| Gateway定向主动Push | 只发送给目标epoch+connection_id当前会话 |
+| 旧的客户连接或错误token恢复 | NOT_FOUND/旧代数失效，不泄露其他席位 |
+| 客户端预测窗口耗尽 | 停止盲猜并发起受控Checkpoint恢复 |
+| 删除或篡改Replay中间输入 | 发生帧号/状态hash不一致并明确失败 |
 
-旧第三课Event Buffer、旧在线配置或旧Unity组件不是前置依赖。两版不为了共用模拟而增加复杂度；同一帧同步版本两端编译相同Core，是本版确定性合同的实现选择。
+性能记录必须包括CPU型号、编译器、Debug/Release、map尺寸、单位和场次数量：测试每场CPU每Tick p50/p95/p99、A*调用次数/扩展Node数、Native/Skynet RSS、Gateway队列深度、迟到比例和OVERLOAD次数。`4 workers * 128 battles`是初始资源保护参数，**不是已测得的吞吐承诺**。
 
-## 12. 本课完成检查
+不在本课做Battle OS进程崩溃后持久化恢复、规则源码Hash、Lua-in-Unity脚本框架、在线Native DLL热替换、多机场次迁移或状态同步/帧同步统一Battle Core。保留发布BMAP SHA-256与**每帧诊断State Hash**，不要将两者混为一项。
 
-- [ ] 从第二课基线逐节创建文件，未依赖旧第三课业务实现。
-- [ ] 你亲自完成并审计Gateway目标连接request_id=0修改，红/绿单测真实执行。
-- [ ] 唯一Proto、descriptor、Lua Registry与Unity生成物一致。
-- [ ] Native/Lua/真实双进程测试通过；报告失败路径与未验证项。
-- [ ] 玩家地面操作快速响应；地面敌人寻路、飞行敌人水平移动与升降。
-- [ ] 三种技能结算时刻可观察；高度影响正式距离/命中。
-- [ ] 输入确认、预测、恢复重演、超窗停止、重连代数边界可解释。
-- [ ] 结束输入回放不含凭据，逐帧hash一致。
-- [ ] Windows/Linux Golden一致；Unity实际Play、网络故障与资源释放已执行。
+## 8. 审计边界与完成检查
 
-### 作者验证记录
+- [ ] 第二课已有QueryCell/RunAutoBattle的Proto编号和运行行为不变。
+- [ ] 每个列出的源码文件只出现一次最终完整代码，不存在需要学习者自行合并的零散修改片段。
+- [ ] 不新增规则源码Hash或在线规则热替换合同；每帧State Hash只用于分歧诊断。
+- [ ] 创建战斗时校验simulation_version；恢复与回放沿用已记录版本信息。
+- [ ] Native C++17 Core、FlyWow公开Navigation目标、Lua5.4.7 Binding编译通过。
+- [ ] Linux Native CTest、Binding Test、Runtime Test真实通过。
+- [ ] 双Skynet进程、单TCP客户端Join/正式帧一致性真实通过。
+- [ ] Windows DLL和C#编译、团结引擎实际Play经过学习者验证。
+- [ ] 断线重连/迟到/阻挡/重规划/路径Checkpoint/回放全部逐项检查。
+- [ ] Golden逐帧跨平台一致，性能报告记录环境和实测数据。
 
-2026-10-10，代码在隔离目录编译/运行，未安装到当前Server/FlyWow源码。已执行Linux C++编译与Native CTest、Lua Binding/Runtime测试、Gateway替身单测、唯一Proto/Registry生成、真实双Skynet进程集成；Windows客户端使用现有Unity模块、Google.Protobuf和FlyWow SDK做C#编译。Windows Release Native CTest 通过；Windows/Linux Golden 238行逐行一致；Windows C#客户端连接真实Linux Gateway，连续30帧调用Windows Native核对Server hash通过。Gateway红/绿测试已真实验证旧条件使定向推送断言失败、隔离修复后通过。C# Native句柄使用SafeHandle，主路径Dispose，P/Invoke借用时自动保活。
+**验证记录：** 本文在本轮完成了文档结构与关键合同静态检查。文档中的代码在本轮未实际编译，也未启动仓库Server或Unity；重写后的版本尚未运行验证，不能声称测试通过。遇到固定子模块源码与文档不匹配时必须报告具体接口差异，不猜测“已可运行”。
 
-Unity Editor完整Play/场景表现、长期压力测试、所有网络故障及其它目标平台尚未由这些测试替代。按本课步骤实操时仍须完成对应验收，不把“源码可编译”写成“Unity游戏已联调通过”。
+
+## 9. 相对旧版教程的修改点
+
+本节用于学习者理解课程边界变化；它不是另一套待执行代码。
+
+- 保留帧同步主线：固定逻辑帧、客户端立即预测、服务端正式输入、迟到/缺失处理、逐帧校验、回滚重演、Checkpoint恢复、导航路径状态和真实网络接入。
+- 把场景收敛为一名玩家控制地面单位 `1001`，服务端控制地面敌人与飞行敌人；删除两名玩家共同对抗AI的组队玩法。玩家输入数组、Runtime席位、Unity预测输入、Native验证、测试和验收同步改为单席位。
+- FlyWow Navigation 从课程直接枚举并编译其内部 `.cpp`，改为链接公开目标 `FlyWow::Navigation`；真实静态库目标 `flywow_navigation_core` 及其源文件由 FlyWow 自己维护。
+- 移除自动改写 FlyWow Gateway 的 `自动 Gateway 修改脚本`。Gateway 定向主动推送仍是本课需要学习和审计的改动，由学习者按专节亲自修改，并通过旧行为负向测试和新行为正向测试验证。
+- 保留导航路径缓存、按条件重规划、Cursor随Checkpoint恢复的设计；不将每Tick重新A*描述为目标实现。
+- 增加整数simulation_version合同，创建战斗时匹配simulation_version，不匹配就拒绝；恢复和回放沿用已记录的版本信息；不加入规则源码Hash、规则发布平台或进行中战斗热替换系统。地图身份、协议合同、Checkpoint格式和逐帧诊断Hash仍按各自用途保留。
+- 新文档的代码和步骤没有在本轮实际运行。旧版或重改稿中的既有验证记录不代表本版通过；学习时按阶段执行并记录实际结果。
