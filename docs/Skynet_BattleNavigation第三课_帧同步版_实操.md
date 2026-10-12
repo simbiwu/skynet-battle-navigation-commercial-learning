@@ -822,6 +822,8 @@ std::int64_t strideForAxes(std::uint32_t base_stride, std::int32_t axis_count)
         return 0;
     if (axis_count == 1)
         return base_stride;
+    // 707/577 是 1/sqrt(2) 与 1/sqrt(3) 的千分比近似，使等幅多轴移动的合成距离接近基础步长。
+    // 例如基础步长 1000 mm 时，两轴各约 707 mm，三轴各约 577 mm；+500 后按毫米四舍五入。
     const std::uint32_t scale_permille = axis_count == 2 ? 707 : 577;
     return (static_cast<std::uint64_t>(base_stride) * scale_permille + 500) / 1000;
 }
@@ -1090,9 +1092,11 @@ void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
 
 void Engine::chaseGround(Unit &unit, const Unit &target)
 {
+    // 900 mm 是追击/停止移动距离；进入该距离后保留已有 Route，但本帧不再推进它。
     if (distance2(unit, target) <= 900 * 900)
         return;
     auto &route = routeFor(unit.instance_id);
+    // Route 按单位实例缓存；追击目标一旦改变，旧路径立即失去业务前提。
     if (route.target_instance_id != target.instance_id)
     {
         route.valid     = false;
@@ -1103,7 +1107,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     const bool target_moved = target.x != route.planned_target_x ||
                               target.y != route.planned_target_y ||
                               target.z != route.planned_target_z;
-    // 冷却到期只代表允许重规划；有效路径且目标未移动时继续复用。
+    // 只有路径失效或目标坐标变化且重规划冷却已到期时才重新 A*；其余 Tick 复用旧路径。
     if (state_.frame >= route.repath_at && (!route.valid || target_moved))
     {
         const auto &navigation_profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
@@ -1194,10 +1198,13 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
     if (index == state_.units.size() || state_.frame < unit.ready[skill_id - 1] ||
         distance2(unit, state_.units[index]) > skill.range_mm * skill.range_mm)
         return;
+    // 逻辑弹丸必须有活动槽位才允许施放；表现弹丸满槽时仍可保留已确认的技能伤害。
     if (skill.effect == 3 && state_.bolts.size() >= kMaxBolts)
         return;
 
+    // 冷却只在技能通过目标、射程和逻辑弹丸容量检查后开始。
     unit.ready[skill_id - 1] = state_.frame + skill.cooldown;
+    // effect=1 直接记伤害；effect=2 先记伤害再生成零伤害表现弹丸；effect=3 在弹丸抵达时记伤害。
     if (skill.effect == 1)
     {
         damage[index] += skill.damage;
@@ -1207,12 +1214,14 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
         damage[index] += skill.damage;
     if (state_.bolts.size() == kMaxBolts)
         return; // 纯表现弹丸满槽不撤销已结算伤害。
+    // 60 是当前 Core 的弹丸逻辑寿命；固定 50ms Tick 下最多存活 3 秒，超时不再命中。
     state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 60,
                             skill.effect == 2 ? 0 : skill.damage, unit.x, unit.y, unit.z});
 }
 
 void Engine::moveBolts(std::vector<std::int32_t> &damage)
 {
+    // 用新数组一次性收集仍活动的弹丸，避免遍历时删除导致漏处理后续弹丸。
     std::vector<Bolt> next;
     next.reserve(kMaxBolts);
     for (auto bolt : state_.bolts)
@@ -1222,6 +1231,7 @@ void Engine::moveBolts(std::vector<std::int32_t> &damage)
         if (it == state_.units.end() || bolt.expires <= state_.frame)
             continue;
         const auto dx = it->x - bolt.x, dy = it->y - bolt.y, dz = it->z - bolt.z;
+        // 每帧各轴按最大轴差等比例推进，最大单轴位移为 400 mm；到达判定也使用同一最大轴差。
         const auto span = std::max({absolute(dx), absolute(dy), absolute(dz)});
         if (span <= 400)
         {
@@ -1262,7 +1272,7 @@ void Engine::runFrame(const PlayerInput *inputs)
 {
     ++state_.frame;
     std::vector<std::int32_t>  damage(state_.units.size(), 0);
-    // 先冻结AI追击目标实例ID：移动先后不得改变本帧每人的目标选择。
+    // 先冻结 AI 移动阶段的目标实例 ID：单位移动的遍历先后不得改变本帧追击目标。
     std::vector<std::uint32_t> target_instance_ids(state_.units.size(), 0);
     for (std::size_t index = 0; index < state_.units.size(); ++index)
     {
@@ -1296,7 +1306,7 @@ void Engine::runFrame(const PlayerInput *inputs)
                 chaseAir(unit, *it);
         }
     }
-    // 固定顺序结算技能，伤害直到最后才提交，避免ID处理顺序取消同帧攻击。
+    // 移动完成后按稳定单位顺序选择施法；伤害先累加，最后统一提交以保留同帧互相命中的结果。
     for (auto &unit : state_.units)
     {
         if (unit.hp <= 0)
@@ -1355,6 +1365,7 @@ std::string Engine::save() const
 {
     if (poisoned_)
         throw std::runtime_error("STATE_POISONED");
+    // Checkpoint V3 按固定字段顺序逐项小端编码；不能序列化 C++ struct 布局、指针或导航 scratch。
     std::string out;
     out.reserve(4096);
     put(out, 3, 4);
@@ -1419,6 +1430,7 @@ void Engine::restore(const std::string &bytes)
 {
     if (poisoned_ || bytes.size() > kMaxState)
         throw std::runtime_error("STATE_INVALID");
+    // 先解析并验证到局部 candidate；只有路径和动态占位都重建成功后才替换当前 Battle 状态。
     std::size_t offset = 0;
     if (get(bytes, offset, 4) != 3)
         throw std::runtime_error("STATE_VERSION");

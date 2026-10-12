@@ -16,6 +16,8 @@
 
 2026-10-13 通用注释规则收口：项目规则覆盖所有模块、语言与课程可复制代码；FlyWow 规则仅约束 FlyWow 自有代码。帧同步 Core 的空中追击实现与实操副本已补充水平距离度量、追击高度公式、方向意图、步长门槛和三维停止距离说明，不改变运行行为。
 
+2026-10-13 注释审阅扩展：除空中追击外，帧同步 Core 与实操代码副本补充了多轴步长近似、地面路径缓存/重规划条件、技能效果与冷却、弹丸推进/寿命、帧内目标和伤害顺序、Checkpoint V3 编码与原子恢复说明；FlyWow HotUpgrade Native、控制器、Runtime 与模块暂存代码补充了随机令牌、规范路径/扫描边界、审计文件持久化、事务发布顺序、候选回滚、闭包重绑定及 yield/排空边界说明。均为注释变更，不改变运行行为。
+
 2026-10-13 结构体字段注释与对齐收口：项目与FlyWow编码Skill要求手写C++ `struct` 的每个字段说明业务职责，并在整个结构范围内对齐字段名、赋值符和 `///<` 注释。帧同步Core头文件及实操文档中的对应数据结构已同步；只调整注释与空格，保留字段顺序、类型、初始值、C ABI和Checkpoint V3布局。
 
 2026-10-11 CMake 归属收口：完整静态库、公开别名、Lua Binding、测试和 Benchmark 由 `navigation/native/CMakeLists.txt` 管理；删除 `grid_map/CMakeLists.txt`，Grid Map 仅作为 Navigation 内部实现源。`FlyWow::Navigation` 是构建树内 alias，不产生独立库文件；`flywow_navigation_lua` 生成供 Skynet 加载的 `flywow_navigation_native.so`。
