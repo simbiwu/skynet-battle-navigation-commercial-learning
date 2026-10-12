@@ -367,13 +367,29 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
 
 void Engine::chaseAir(Unit &unit, const Unit &target)
 {
-    const auto &profile    = profileFor(profiles_->units, unit.unit_profile_id);
-    const auto  horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
-    const auto  desired_y  = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
-    const std::int32_t x = sign(target.x - unit.x), z = sign(target.z - unit.z);
+    // 读取该单位的静态配置；升降方向的判断使用其每 Tick 基础步长。
+    const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
+
+    // 以 X/Z 两轴偏差的较大值作为水平追击间距，单位 mm；这不是欧氏直线距离。
+    const auto horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
+
+    // 当前追击高度规则：目标上方基础抬升 400 mm，再增加水平间距的一半，额外高度最多 2400 mm。
+    // 例如 horizontal=1000 mm 时，desired_y=target.y+900 mm；整数除法向下截去不足 1 mm 的部分。
+    // 400 和 2400 是 Frame Core 当前写定的规则值，不从 UnitProfile 读取。
+    const auto desired_y = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
+
+    // x/z/y 都是每轴方向意图（-1、0、1），不是坐标或毫米位移。
+    const std::int32_t x = sign(target.x - unit.x);
+    const std::int32_t z = sign(target.z - unit.z);
+
+    // 仅当高度误差至少达到一个基础 Tick 步长时才输出升降意图；更小误差会被置为 0。
+    // moveAir 再按本 Tick 同时活动的轴数计算每轴实际位移。
     const std::int32_t y = absolute(desired_y - unit.y) >= profile.move_stride_mm_per_tick
                                ? sign(desired_y - unit.y)
                                : 0;
+
+    // distance2 是三维距离平方，单位 mm²；超过 800 mm 的追击停止半径才继续靠近。
+    // 该半径是 AI 追击规则，不等同于技能自身的作用距离。
     if (distance2(unit, target) > 800 * 800)
         moveAir(unit, x, z, y);
 }
