@@ -552,91 +552,96 @@ constexpr std::size_t   kMaxState  = 65535;
 
 struct PlayerInput
 {
-    std::uint32_t seat_id          = 0; // 固定为1；由Worker会话授权后生成。
-    std::uint32_t unit_instance_id = 0; // 固定席位1控制1001；这是Battle实例ID。
-    std::int32_t  x       = 0; // -1/0/1，向X轴移动。
-    std::int32_t  z       = 0; // -1/0/1，向Z轴移动。
-    std::int32_t  skill   = 0; // 0空，1近战，2表现弹丸，3逻辑弹丸。
+    std::uint32_t seat_id          = 0;  ///< Worker授权后生成的输入席位；本课固定为席位1。
+    std::uint32_t unit_instance_id = 0;  ///< 该席位控制的Battle单位实例ID；不是静态UnitProfile配置键。
+    std::int32_t  x                = 0;  ///< 本帧X轴方向意图，取-1/0/1；表示方向，不是坐标。
+    std::int32_t  z                = 0;  ///< 本帧Z轴方向意图，取-1/0/1；表示方向，不是坐标。
+    std::int32_t  skill            = 0;  ///< 本帧技能命令：0无技能，1近战，2表现弹丸，3逻辑弹丸。
 };
 
 struct UnitProfile
 {
-    std::uint32_t unit_id                  = 0;
-    std::uint32_t movement_mode            = 0;       // 1地面，2空中；所有单位从配置读取。
-    std::uint32_t move_stride_mm_per_tick = 0;       // 基础每Tick位移；对角方向按整数比例归一化。
-    std::int32_t  max_hp                  = 0;       // 单位静态最大生命值；当前HP属于战斗状态。
-    std::uint32_t min_air_clearance_mm    = 0;       // 空中单位离当前地表的最小间隙。
-    std::uint32_t max_air_altitude_mm     = 0;       // 空中单位相对当前地表的最高高度。
-    flywow_navigation::NavigationProfile navigation; // 地面参数视图；源自本行配置。
+    std::uint32_t                        unit_id                 = 0;  ///< 静态配置键；不是Battle实例ID。
+    std::uint32_t                        movement_mode           = 0;  ///< 移动模式：1地面，2空中；由Lua配置加载。
+    std::uint32_t                        move_stride_mm_per_tick = 0;  ///< 每Tick基础移动量，单位mm。
+    std::int32_t                         max_hp                  = 0;  ///< 静态最大HP；当前值存入Unit。
+    std::uint32_t                        min_air_clearance_mm    = 0;  ///< 空中单位高于当前位置地表的最小间隙，单位mm。
+    std::uint32_t                        max_air_altitude_mm     = 0;  ///< 空中单位高于当前位置地表的最大高度，单位mm。
+    flywow_navigation::NavigationProfile navigation;                   ///< 该单位使用的地面导航规则；空中单位不使用。
 };
 
 using UnitProfileTable = std::vector<UnitProfile>;
 
 struct Skill
 {
-    std::int64_t  range_mm    = 0;
-    std::uint32_t cooldown    = 0;
-    std::int32_t  damage      = 0;
-    std::uint32_t target_mask = 0; // 1地面、2空中、3均可。
-    std::uint32_t effect      = 0; // 1即时、2表现弹丸、3逻辑弹丸。
+    std::int64_t  range_mm    = 0;  ///< 技能中心点最大作用距离，单位mm；命中规则包含高度。
+    std::uint32_t cooldown    = 0;  ///< 冷却时长，单位逻辑Tick；施放后换算为最早可用帧。
+    std::int32_t  damage      = 0;  ///< 技能命中后扣除的HP数值。
+    std::uint32_t target_mask = 0;  ///< 目标类别位：1地面、2空中、3两类均可。
+    std::uint32_t effect      = 0;  ///< 效果类型：1瞬发，2立即结算的表现弹丸，3到达后结算的逻辑弹丸。
 };
 
 using SkillTable = std::array<Skill, 3>;
 
 struct ProfileSnapshot
 {
-    UnitProfileTable units;
-    SkillTable       skills;
+    UnitProfileTable units;   ///< 本Battle固定持有的只读单位静态配置表。
+    SkillTable       skills;  ///< 本Battle固定持有的只读技能规则表。
 };
 
 struct Unit
 {
-    std::uint32_t instance_id    = 0; // Battle内唯一实例ID；用于输入、目标和动态占位。
-    std::uint32_t unit_profile_id = 0; // UnitProfile静态配置查询键；用于查找单位规则。
-    std::uint32_t camp          = 0; // 1玩家阵营，2敌方阵营。
-    std::uint32_t movement_mode = 0; // 从Profile派生并随Checkpoint校验的运行时缓存。
-    std::int64_t  x             = 0; // 整数毫米世界坐标。
-    std::int64_t  y             = 0;
-    std::int64_t  z             = 0;
-    std::int32_t  hp            = 0;
-    std::uint32_t ready[3]      = {}; // 下一次允许施放的逻辑帧。
+    std::uint32_t instance_id     = 0;   ///< Battle内唯一单位实例ID；用于输入、目标、路径和动态占位。
+    std::uint32_t unit_profile_id = 0;   ///< 静态UnitProfile查询键；所有单位都必须对应有效配置。
+    std::uint32_t camp            = 0;   ///< 阵营：1玩家方，2敌方；用于敌我筛选。
+    std::uint32_t movement_mode   = 0;   ///< 从UnitProfile复制的移动模式：1地面，2空中；恢复时校验。
+    std::int64_t  x               = 0;   ///< 单位当前世界X坐标，单位mm。
+    std::int64_t  y               = 0;   ///< 单位当前世界高度坐标，单位mm。
+    std::int64_t  z               = 0;   ///< 单位当前世界Z坐标，单位mm。
+    std::int32_t  hp              = 0;   ///< 单位当前HP；归零后进入死亡状态。
+    std::uint32_t ready[3]        = {};  ///< 三个技能槽各自最早可施放的逻辑帧号；索引对应技能1至3。
 };
 
 struct Bolt
 {
-    std::uint32_t id      = 0;
-    std::uint32_t caster_instance_id  = 0;
-    std::uint32_t target_instance_id  = 0;
-    std::uint32_t expires = 0;
-    std::int32_t  damage  = 0; // 0表示纯表现弹丸。
-    std::int64_t  x       = 0;
-    std::int64_t  y       = 0;
-    std::int64_t  z       = 0;
+    std::uint32_t id                 = 0;  ///< Battle内弹丸实例ID；用于稳定排序和分配下一个弹丸ID。
+    std::uint32_t caster_instance_id = 0;  ///< 创建该弹丸的单位实例ID。
+    std::uint32_t target_instance_id = 0;  ///< 该弹丸锁定的目标单位实例ID。
+    std::uint32_t expires            = 0;  ///< 弹丸失效的逻辑帧号；到期后从活动列表移除。
+    std::int32_t  damage             = 0;  ///< 到达目标时结算的伤害；0表示仅供表现的弹丸。
+    std::int64_t  x                  = 0;  ///< 弹丸当前世界X坐标，单位mm。
+    std::int64_t  y                  = 0;  ///< 弹丸当前世界高度坐标，单位mm。
+    std::int64_t  z                  = 0;  ///< 弹丸当前世界Z坐标，单位mm。
 };
 
 struct Route
 {
-    std::uint32_t           unit_instance_id = 0; // 当前路径唯一跟随者；不借用其他Unit的cursor。
-    std::uint32_t           target_instance_id = 0; // 当前追击目标；变化触发重新规划。
-    std::int64_t            planned_target_x = 0; // 上次A*看到的目标坐标；决定是否重规划。
-    std::int64_t            planned_target_y = 0;
-    std::int64_t            planned_target_z = 0;
-    std::uint32_t           repath_at        = 0;     // 允许再次A*的逻辑帧；防重复/失败刷查询。
-    std::uint32_t           blocked_frames   = 0;     // 路线动态阻挡持续Tick数。
-    std::uint32_t           next_point       = 1;     // 对应PathFollowCursor::next_point_index。
-    std::uint64_t           progress_mm      = 0;     // 当前路径线段已消费的整数毫米。
-    bool                    valid            = false; // 路线已规划且包含合法跟随点。
-    flywow_navigation::Path path; // FlyWow原始Path；帧间复用，Checkpoint只编码其值。
+    std::uint32_t           unit_instance_id   = 0;      ///< 拥有该路径的Battle实例ID；也用作Navigation占位句柄。
+    std::uint32_t           target_instance_id = 0;      ///< 当前追击目标单位实例ID；目标改变时当前路径失效。
+
+    std::int64_t            planned_target_x   = 0;      ///< 最近一次寻路采用的目标X坐标，单位mm；用于检测目标移动。
+    std::int64_t            planned_target_y   = 0;      ///< 最近一次寻路采用的目标高度坐标，单位mm；用于检测目标移动。
+    std::int64_t            planned_target_z   = 0;      ///< 最近一次寻路采用的目标Z坐标，单位mm；用于检测目标移动。
+
+    std::uint32_t           repath_at          = 0;      ///< 下一次允许发起路径查询的逻辑帧号；用于控制重规划时机。
+    std::uint32_t           blocked_frames     = 0;      ///< 自上次重规划以来路径被动态占位阻挡的帧数。
+
+    std::uint32_t           next_point         = 1;      ///< 下一个待跟随路径点索引。
+    std::uint64_t           progress_mm        = 0;      ///< 当前路径线段已推进的距离，单位mm；对应游标线段进度。
+
+    bool                    valid              = false;  ///< 缓存路径当前可继续推进；被阻挡、到达终点或目标切换后失效。
+    flywow_navigation::Path path;                        ///< FlyWow路径对象；各Tick复用。
 };
 
 struct State
 {
-    std::uint32_t      frame     = 0;
-    std::uint32_t      winner    = 0; // 0继续，1/2胜方，3平局。
-    std::uint32_t      next_bolt = 1;
-    std::vector<Unit>  units;  // 始终按instance_id严格升序。
-    std::vector<Bolt>  bolts;  // 始终按id严格升序。
-    std::vector<Route> routes; // 始终按unit_instance_id严格升序。
+    std::uint32_t      frame     = 0;  ///< 当前已提交的逻辑帧号；新Engine从0开始。
+    std::uint32_t      winner    = 0;  ///< Battle结果：0进行中，1/2为胜方阵营，3为平局。
+    std::uint32_t      next_bolt = 1;  ///< 下一个可分配的弹丸实例ID。
+
+    std::vector<Unit>  units;          ///< Battle单位状态表；始终按instance_id严格升序。
+    std::vector<Bolt>  bolts;          ///< 活动弹丸状态表；始终按弹丸id严格升序。
+    std::vector<Route> routes;         ///< 地面追击路径状态表；始终按unit_instance_id严格升序。
 };
 
 class Engine final
@@ -698,41 +703,41 @@ class Engine final
 // C ABI不传std::vector或std::string，不让C++异常穿过P/Invoke/Lua。
 struct FsPlayerInput
 {
-    std::uint32_t seat_id;
-    std::uint32_t unit_instance_id;
-    std::int32_t  x;
-    std::int32_t  z;
-    std::int32_t  skill;
+    std::uint32_t seat_id;           ///< 由Worker授权的输入席位ID；本课固定为1。
+    std::uint32_t unit_instance_id;  ///< 该席位控制的Battle单位实例ID。
+    std::int32_t  x;                 ///< 本帧X轴方向意图，取-1/0/1；不是世界坐标。
+    std::int32_t  z;                 ///< 本帧Z轴方向意图，取-1/0/1；不是世界坐标。
+    std::int32_t  skill;             ///< 技能命令：0无技能，1近战，2表现弹丸，3逻辑弹丸。
 };
 
-// C ABI配置记录是从现有Lua UnitProfile/NavigationProfile复制出的值，
-// 不包含Lua对象、指针或平台相关容器；宿主负责读取Lua和初步类型检查。
 struct FsUnitProfile
 {
-    std::uint32_t unit_id;
-    std::uint32_t movement_mode; // 1地面，2空中。
-    std::uint32_t move_stride_mm_per_tick;
-    std::int32_t  max_hp;
-    std::uint32_t min_air_clearance_mm;
-    std::uint32_t max_air_altitude_mm;
+    std::uint32_t unit_id;                  ///< 静态UnitProfile配置查询键。
+    std::uint32_t movement_mode;            ///< 移动模式：1地面，2空中。
+    std::uint32_t move_stride_mm_per_tick;  ///< 每逻辑Tick基础位移，单位mm。
+    std::int32_t  max_hp;                   ///< 单位静态最大HP。
+    std::uint32_t min_air_clearance_mm;     ///< 空中单位离当前地表的最小间隙，单位mm。
+    std::uint32_t max_air_altitude_mm;      ///< 空中单位相对当前地表的最高高度，单位mm。
 };
+
 struct FsNavigationProfile
 {
-    std::uint32_t unit_id;
-    std::int32_t  radius_mm;
-    std::int32_t  max_step_mm;
-    std::uint32_t max_slope_permille;
-    std::uint8_t  area_allowed[256];       // 已应用Lua默认值。
-    std::uint16_t area_cost_permille[256]; // 已应用Lua默认值。
+    std::uint32_t unit_id;                  ///< 与同一UnitProfile配置记录关联的静态查询键。
+    std::int32_t  radius_mm;                ///< 地面单位导航碰撞半径，单位mm。
+    std::int32_t  max_step_mm;              ///< 允许跨越的最大地面台阶高度，单位mm。
+    std::uint32_t max_slope_permille;       ///< 允许的最大地面坡度，单位千分比。
+    std::uint8_t  area_allowed[256];        ///< 每个Area是否允许通行；已应用Lua配置默认值。
+    std::uint16_t area_cost_permille[256];  ///< 每个Area的相对寻路代价，单位千分比；已应用Lua默认值。
 };
+
 struct FsSkillProfile
 {
-    std::uint32_t skill_id;
-    std::uint64_t range_mm;
-    std::uint32_t cooldown_ticks;
-    std::int32_t  damage;
-    std::uint32_t target_mask;
-    std::uint32_t effect;
+    std::uint32_t skill_id;        ///< 技能槽ID：1近战，2表现弹丸，3逻辑弹丸。
+    std::uint64_t range_mm;        ///< 技能最大作用距离，单位mm。
+    std::uint32_t cooldown_ticks;  ///< 技能冷却时长，单位逻辑Tick。
+    std::int32_t  damage;          ///< 技能命中后扣除的HP数值。
+    std::uint32_t target_mask;     ///< 目标类别位：1地面、2空中、3两类均可。
+    std::uint32_t effect;          ///< 效果类型：1瞬发，2表现弹丸，3逻辑弹丸。
 };
 static_assert(sizeof(FsUnitProfile) == 24, "Unit profile ABI changed");
 static_assert(sizeof(FsNavigationProfile) == 784, "Navigation profile ABI changed");

@@ -14,6 +14,8 @@
 
 2026-10-12 单位标识命名：Battle运行时单位统一使用 `instance_id` / `unit_instance_id`；`Unit.unit_profile_id` 对应 `UnitProfile.unit_id`，两者用于静态配置查询。同步帧同步文档、Native Core、Lua Runtime与Unity C# 输入字段；只改源代码标识符，C ABI字段顺序/尺寸和Checkpoint V3编码顺序/值保持不变。
 
+2026-10-13 结构体字段注释与对齐收口：项目与FlyWow编码Skill要求手写C++ `struct` 的每个字段说明业务职责，并在整个结构范围内对齐字段名、赋值符和 `///<` 注释。帧同步Core头文件及实操文档中的对应数据结构已同步；只调整注释与空格，保留字段顺序、类型、初始值、C ABI和Checkpoint V3布局。
+
 2026-10-11 CMake 归属收口：完整静态库、公开别名、Lua Binding、测试和 Benchmark 由 `navigation/native/CMakeLists.txt` 管理；删除 `grid_map/CMakeLists.txt`，Grid Map 仅作为 Navigation 内部实现源。`FlyWow::Navigation` 是构建树内 alias，不产生独立库文件；`flywow_navigation_lua` 生成供 Skynet 加载的 `flywow_navigation_native.so`。
 
 ## 用户最新约束
