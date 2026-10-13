@@ -7,9 +7,9 @@ description: 实现或评审本仓库源码、脚本、协议、配置、测试�
 
 本 Skill 统一约束本仓库源码、脚本、协议、配置、测试和教程中的可复制代码。课程门禁、编辑权限和架构边界由根目录 `AGENTS.md` 与当前任务的 Spec/Decision 决定。
 
-本仓库复用 FlyWow 的编码基线。规则来源为当前固定 submodule 中的 `server/third_party/skynet-flywow/AGENTS.md`、`.agents/skills/skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 及相关模块的格式配置。这里将其适用于本仓库源码和课程示例；项目自身的目录、依赖、API、协议、运行路径与架构合同仍以本仓库规则为准，不照搬 FlyWow 的模块边界或运行配置。
+本仓库源码和课程示例参考 FlyWow 的可读性与格式基线，规则来源为当前固定 submodule 中的 `AGENTS.md`、`.agents/skills/skynet-flywow-coding-standard/SKILL.md`、`.editorconfig` 及相关模块格式配置。FlyWow 子模块内部实现遵循子模块自己的规则；本 Skill 只约束本仓库自有内容、课程可复制代码及宿主接入部分。项目自身的目录、依赖、API、协议、运行路径与架构合同仍以本仓库规则为准。
 
-开始新增、修改或评审源码、脚本、协议、配置、测试及课程可复制代码前，必须先读取固定 FlyWow submodule 的 `AGENTS.md`、`.agents/skills/skynet-flywow-coding-standard/SKILL.md`，以及目标文件适用的格式配置。然后应用本 Skill 和本仓库合同；只落实当前需求需要的工程处理，不为了满足规则机械增加注释、Helper、抽象、配置或功能。
+开始新增、修改或评审本仓库自有源码、脚本、协议、配置、测试及课程可复制代码前，读取本 Skill 和目标文件适用的格式配置；涉及宿主接入时，再核对 FlyWow 子模块对应的 AGENTS.md、Skill 与模块合同。FlyWow 内部实现按子模块规则处理，不套用宿主课程规则。只落实当前需求需要的工程处理，不为了满足规则机械增加注释、Helper、抽象、配置或功能。
 
 ## FlyWow 格式与课程代码
 
@@ -83,7 +83,7 @@ local state =
 ## 可读性硬规则
 
 - 一个函数内存在两个或以上逻辑阶段时，阶段之间必须使用空行分隔，并在非显然处用短注释说明阶段目的；不得把参数校验、资源创建、核心处理和结果转换连续堆成一个无分段代码块。
-- 不以固定行数作为拆分函数的门槛。函数是否拆分取决于是否降低整体阅读成本、形成真实复用，或隔离独立复杂逻辑与资源生命周期；不要为了缩短函数机械拆分连续流程。
+- 函数拆分以降低整体阅读成本为准，不以行数作为硬性条件。即使超过 20 行，只要流程连续、逻辑清晰，也可以保留；优先用空行分隔阶段。只有明显降低理解成本、形成真实复用，或隔离独立复杂逻辑和资源生命周期时才拆分。禁止为缩短函数而机械拆分。
 - 空行用于表达逻辑边界，不得为了“看起来整齐”在每行之间插入空行；连续代码块应服务于同一不变量或同一资源生命周期。
 - 不把多条独立语句、多个动作或短控制流程挤在同一行。C++ 遵循所属模块 `.clang-format`：FlyWow Navigation/Lua Binding 使用 Allman、大括号独占行、4 空格缩进、100 列上限，并禁用单行函数/if/loop；不要把该 C++ 配置误用于 C#、CMake 或其它语言。
 - 代码评审发现长函数无法快速看出输入、状态变化、核心算法和输出边界时，视为可读性未完成，即使编译和测试通过也不能标记完成。
@@ -91,11 +91,11 @@ local state =
 
 ### LuaDoc 与编辑器可读性
 
-- Lua 源码中的文件职责、函数合同、字段合同和 Service 消息合同统一使用 LuaDoc：说明行使用 `---`，结构化类型使用标准 `---@param`、`---@return`、`---@class`、`---@field`、`---@alias` 标签；不要为同一合同同时维护普通 `--` 注释和 LuaDoc。
-- 跨 Service 的 request/result record、配置 record 和异步响应上下文必须有可被 Lua Language Server 识别的类型定义；字段说明同时写清来源、owner、生命周期、nil 语义和是否跨进程/网络边界。
-- `skynet.call`、`skynet.send`、`skynet.dispatch` 等动态 API 的稳定调用必须标注 Service handle、command、payload、返回值和 yield 边界；框架 API 提示使用独立 `---@meta` stub，不把 stub 当作运行时代码。
+- 对文件职责、公开/跨模块函数和需要长期维护的消息合同使用 LuaDoc，说明行使用 `---`，结构化类型使用标准 `---@param`、`---@return`、`---@class`、`---@field`、`---@alias` 标签。同一合同只维护一份说明。简单的局部消息或短 table 若字段含义从邻近代码已清楚，不要求逐字段补 LuaDoc。
+- 跨 Service 的 request/result、配置和异步响应上下文必须有可被 Lua Language Server 识别的类型定义；只为实际影响调用方的字段补充来源、owner、生命周期、nil 语义或进程/网络边界，不机械重复与当前合同无关的说明。
+- 跨 Service 的 `skynet.call`、`skynet.send`、`skynet.dispatch` 调用应能从集中定义或调用点看出 Service、command、消息类型和返回/yield 合同；在类型、封装或 dispatch 定义处已说明的合同不要求每个调用点重复注释。只有框架 API 提示确有需要时才维护独立 `---@meta` stub。
 - LuaDoc 描述负责让编辑器和人理解同一份合同；不要使用编辑器不认识的自定义标签表达唯一的类型语义。WHY、ownership、I/O、yield、失败和不变量写在同一 LuaDoc 块的中文说明中。
-- 动态 command 字符串必须有 `---@alias` 或明确的消息 record；不能只依赖字符串字面量和运行时 `assert` 让读者反推调用合同。
+- 动态 command 若构成跨模块稳定合同，应有可追溯的 alias、消息 record 或集中映射；简单局部调用不强制为字符串字面量另建类型。不能只靠运行时 `assert` 隐藏真实的跨模块合同。
 
 ## 实现边界
 
@@ -128,4 +128,4 @@ FlyWow 最终 Lua Native `.so` 统一放在 FlyWow 子模块的 `build/native/`�
 
 Server 脚本按公开入口、宿主辅助和课程专用分层，文件名统一使用“动作_对象.sh”。新脚本应使用 `run_server.sh`、`prepare_lesson_01.sh`、`run_lesson_02_processes.sh` 等明确名称，禁止新增无对象的 `build.sh`、`make.sh`、`run.sh`、`test.sh` 和 `prepare.sh`。
 
-每个 `.sh` 文件头必须说明职责、边界、调用者、调用时机、参数、输入、产物、副作用和失败行为，并给出完整调用示例。课程脚本放在 `server/scripts/lessons/`，FlyWow 模块构建必须通过 submodule 的公开脚本调用。
+对外入口、构建/部署脚本或具有非显然参数与副作用的脚本，在文件头简要说明用途、必要的调用方式、关键输入/产物及重要副作用或失败行为。简单的内部辅助脚本只需说明不显然的路径、环境变量、参数或状态影响；不要求固定字段清单或完整调用示例。课程脚本放在 `server/scripts/lessons/`，FlyWow 模块构建必须通过 submodule 的公开脚本调用。

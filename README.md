@@ -71,12 +71,10 @@ Lesson 2
 -> Unity Replay
 
 Lesson 3
-Player Command + GroundEnemy AI + FlyingEnemy AI
--> Ground Grid / Air Grid / NoFly
--> 瞬发、表现型弹丸、逻辑型弹丸
--> Server 权威伤害与死亡
--> Battle Snapshot / Event
--> Unity 完整显示移动和技能
+简单玩法基线：玩家操作 + Server AI + 移动/技能
+-> 两套独立战斗网络实现
+   帧同步：逻辑帧输入 -> 确认/预测/回滚 -> 确定性模拟
+   状态同步：玩家命令 -> Server 权威模拟 -> Event/Snapshot -> 客户端预测校正/远端插值
 
 Lesson 4（可选）
 Unity Navigation Source
@@ -84,7 +82,7 @@ Unity Navigation Source
 -> Bridge / Multi-level / Off-Mesh Link
 ```
 
-第三课使用同一个确定性 BattleWorker 支持两种运行方式：人工操作时按命令和 fixed tick 分段推进，发送 Event 并周期发送 Snapshot；纯自动 SLG 战斗时快速模拟到结束，返回完整 Event Log 供 Unity 回放。网络和回放层不能各自复制一套战斗结算。
+第三课从第二课基线分别实现帧同步和状态同步，两者是独立的战斗网络方案，不要求共用 Battle Core。帧同步围绕逻辑帧输入、确认、预测与回滚推进；状态同步围绕 Server 权威状态、事件/Snapshot、客户端预测校正与远端插值推进。具体边界和施工步骤以 [第三课 Spec](codex/LESSON_03_SPEC.md) 及两份实操文档为准：[帧同步版](docs/Skynet_BattleNavigation第三课_帧同步版_实操.md)、[状态同步版](docs/Skynet_BattleNavigation第三课_状态同步版_实操.md)。
 
 ## 教学顺序原则
 
@@ -236,14 +234,8 @@ WSL:
 ## Codex 第一条指令
 
 ```text
-先完整阅读根目录 AGENTS.md、docs/ 和 codex/。
+先读取根目录 AGENTS.md 和 codex/CODEX_START_HERE.md，再按当前任务只读相关 Lesson Spec、工程决策和具体文档；不要通读整个 docs/ 或 codex/。
 这是全新的独立 Battle Navigation 三课项目，不合并旧 Skynet-slg-learning。
 
-特别注意教学顺序：
-Lesson 1 只学习 Unity -> 2.5D Grid -> BMAP -> C++ GridMap -> Skynet Query。
-不要提前向我讲 AgentProfile、Path、NavigationContext、INavigationBackend 的完整设计。
-这些概念在真正需要时再引入。
-
-按照 codex/CODEX_START_HERE.md 检查现场，然后逐阶段辅导我亲手完成。
-不要一次性生成最终项目。
+按照当前课程和已有学习进度逐阶段推进；课程范围与完成条件以对应 Spec 和实操文档为准，不要一次性生成最终项目。
 ```

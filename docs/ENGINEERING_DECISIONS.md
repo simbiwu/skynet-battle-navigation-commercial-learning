@@ -6,7 +6,7 @@ Lesson 1 / 2 完成 2.5D Grid、A*、动态占位和确定性 BattleWorker。
 
 Lesson 3 最终版由帧同步与状态同步两份独立实操组成，分别从第二课完成基线学习实时输入预测/回滚和 Server 权威状态复制；两版玩法与战斗模拟可不同，不要求共用 Battle Core。
 
-Recast / Detour Polygon NavMesh 移到 Lesson 4 可选高级专题。典型单层 SLG 可以长期使用 Grid；技能和空中 Air Grid 不依赖 Detour。
+Recast / Detour Polygon NavMesh 移到 Lesson 4 可选高级专题。典型单层 SLG 可以长期使用 Grid；技能和可选空中导航不依赖 Detour。
 
 本文后续早期决策中写作“Lesson 3”的 Recast/Detour 内容，课程排期统一解释为“可选 Lesson 4”；其技术决策仍保留，不属于前三课前置要求。
 
@@ -598,3 +598,11 @@ Lesson 3 最终版由独立的帧同步和状态同步实操组成，学习顺�
 帧同步课程的 Unity 客户端接入 xLua Lua 5.4 后端，读取与 Skynet Server 相同的 Lua UnitProfile 和 FlyWow NavigationProfile 源文件。课程固定使用 Tencent/xLua v2.1.16_ndkr21b_with_win Release 中的 Lua 5.4 Windows 插件包；不要使用 GitHub 自动生成的 Source code 压缩包，也不得静默升级版本。
 
 Lua 仅作为静态配置源和启动期读取器，不执行帧模拟规则。Unity 和 Skynet 分别把 Lua 数据校验并复制为 Native C ABI typed records；Native 启动阶段再次校验，并为新建 Battle 保存只读配置副本。Battle Tick 不读 Lua，不解析配置文件。该决策只覆盖本课程验证的 Windows x64 Unity 插件与 Linux Skynet Native 模块，不声明其他 Unity 平台已验证。若未来更换 xLua 版本或扩展目标平台，先验证插件构建与配置加载，再更新本决策。
+
+## D044 - 可选空中导航作为 Navigation 资产组件
+
+按 `codex/work/FlyWow_可选空中导航实施方案.md`，在固定 FlyWow 子模块现有 Navigation 内提供可选 2.5D 空中导航。BMAP V1 保持原字节；同包增加 AIRN V1 `map.airnav`，稀疏 XZ 格保存多个闭 Y 区间，以完整 BMAP SHA-256、身份、尺寸和原点配对。Unity 专用 Collider LayerMask 默认关闭，AABB 保守导出；有空中包按版本化域标记和两文件 hash 共同命名、校验并原子发布。
+
+复用 GridMap、MapRegistry、NavigationContext、Path 和现有 Lua 产物；不新增注册表、Service 或独立 AirGrid。显式可选加载路径，错误文件失败且不替换旧快照。动态 AABB 与有界稀疏查询状态归 Context 单 owner；不额外增加 O(map_cell_count) 空中数组。固定高度八邻接寻路不自动升降，连续 move/sweep 可由调用者控制 Y；Path 保留体积、高度和快照，移动必须重验。完整资源预算、部分推进、确定首命中及发布合同见 FlyWow Navigation CONTRACT。
+
+交付只含基础 API、Unity 包导出、独立示例、测试与 Benchmark；本次不接入 Frame Core、Battle、技能/弹丸，也不修改第三课实操教程。Benchmark 原压力条件与硬上限保持不变，未通过时优化算法/实现。地面原实现回归与同机 Benchmark 分开报告，不以静态审阅代替运行结果。

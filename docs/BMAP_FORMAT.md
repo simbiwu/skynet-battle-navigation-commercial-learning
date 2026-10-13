@@ -288,7 +288,7 @@ Export Failed
 
 BMAP 是地面 Grid 的 Runtime Asset，也为固定离地飞行提供 ground height。
 
-第三课需要的 NoFly/Air Grid 使用独立、版本化的空中导航资产，不把空中规则塞进 BMAP V1 的保留位。
+可选空中导航使用同一 Navigation 包内的 `map.airnav`（AIRN V1），作为现有 GridMap 的不可变可选组件，复用 MapRegistry/NavigationContext；不另建 Air Grid 注册表，不把空中规则塞进 BMAP V1 的保留位。完整格式、配对 hash 与接口见 FlyWow `navigation/CONTRACT.md` 和 D044。固定高度 XZ 规划与调用者控制的连续升降分开；此处不接入第三课业务。
 
 可选第四课增加 DNAV，也不把 BMAP V1 变成“既能 Grid 又能 Polygon”的万能格式。
 
