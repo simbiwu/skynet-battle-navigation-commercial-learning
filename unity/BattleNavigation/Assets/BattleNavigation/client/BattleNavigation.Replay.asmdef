@@ -2,7 +2,8 @@
   "name": "BattleNavigation.Replay",
   "rootNamespace": "BattleNavigation.Client",
   "references": [
-    "BattleNavigation.Client"
+    "BattleNavigation.Client",
+    "Xlua.Core"
   ],
   "includePlatforms": [],
   "excludePlatforms": [],
