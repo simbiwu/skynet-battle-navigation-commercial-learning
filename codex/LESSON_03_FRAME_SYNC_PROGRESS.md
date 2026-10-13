@@ -67,5 +67,5 @@ Windows仅Unity编辑源；文档/Server非Unity文件通过Git工作流同步�
 
 用户可以按帧同步实操开始学习；随提问辅导与审计其实际修改。状态同步版仍待以后授权开展完整实操，不能把现有蓝图当成已完成教程。任何学习源码编辑仍遵守AGENTS/WORKSPACE_WORKFLOW/编码Skill。
 
-2026-10-13 AIRN 帧同步应用扩展：按当前授权在主实操后新增可选 AIRN V1 附录，说明 Unity Authoring 配对导出、显式双路径加载、飞行 AirBody Profile、Frame-local 动态 AABB、固定高度寻路与变高 move/sweep、Checkpoint V3 派生重建。Server/FlyWow 用户运行源码未提前部署；`battle_1001` 当前无 AIRN 静态文件，静态端到端加载需作者之后在 Windows 场景导出再同步。新增隔离 API 组合测试验证动态障碍/寻路/推进/扫掠/移动，AIR Benchmark 重跑 7 个场景全部达到既有断言。
-2026-10-13 AIRN 文档核对：Unity 操作按 MapRoot 的实际 `exportAirNavigation`、`airObstacleLayers`、`exportDirectory` 与版本化候选发布器说明；没有虚构文件名 Inspector。当前 `write_practical.py` 与 `complete_author.py` 早于 UnitProfile 完整稿，运行会把正式实操降回旧草稿；再次生成前必须先同步生成源。
+2026-10-13 AIRN 帧同步应用扩展：按当前授权将 AIRN V1 空中寻路改成第三课主实操第 5.24 节和第 4 阶段，说明 Unity Authoring 配对导出、显式双路径加载、飞行 AirBody Profile、Frame-local 动态 AABB、固定高度寻路与变高 move/sweep、Checkpoint V3 派生重建。Server/FlyWow 用户运行源码未提前部署；`battle_1001` 当前无 AIRN 静态文件，静态端到端加载需作者之后在 Windows 场景导出再同步。新增隔离 API 组合测试验证动态障碍/寻路/推进/扫掠/移动，AIR Benchmark 重跑 7 个场景全部达到既有断言。
+2026-10-13 AIRN 文档核对：章节操作按 MapRoot 的实际 `exportAirNavigation`、`airObstacleLayers`、`exportDirectory` 与版本化候选发布器说明；没有虚构文件名 Inspector。当前 `write_practical.py` 与 `complete_author.py` 早于 UnitProfile 完整稿，运行会把正式实操降回旧草稿；再次生成前必须先同步生成源。

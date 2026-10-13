@@ -4,13 +4,13 @@
 >
 > 基线：Skynet v1.8.0、自带 Lua 5.4.7、C++17、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7、Protobuf 唯一协议源、`server/third_party/skynet-flywow` 固定 gitlink。禁止按 GitHub 最新 `main` 猜测子模块 API。
 >
-> 重要：主实操正文包含其基线范围内每个受影响文件的**最终累计完整代码**，不要求学习者拼接局部片段。文末附录 A 是可选 AIRN V1 扩展，按明确标注的局部修改应用到隔离课程源码，不属于正文完整代码清单。文件内容本身不代表源码已落地，也不代表 Unity Play/压力/跨平台测试已通过。第三课代码从已验收的第二课出发，课程宿主的新文件可整体写入；FlyWow Gateway 内部文件由学习者按本课步骤亲自修改，并先运行负向测试确认旧行为，再运行正向测试审计新行为。
+> 重要：主实操正文包含其基线范围内每个受影响文件的**最终累计完整代码**，不要求学习者拼接局部片段。第 5.24 节是 AIRN V1 空中导航实操，属于第三课导航阶段，明确标注资产、配置、ABI、Frame Core 和测试的局部修改顺序。文件内容本身不代表源码已落地，也不代表 Unity Play/压力/跨平台测试已通过。第三课代码从已验收的第二课出发，课程宿主的新文件可整体写入；FlyWow Gateway 内部文件由学习者按本课步骤亲自修改，并先运行负向测试确认旧行为，再运行正向测试审计新行为。
 
 ## 0. 最终运行效果与课程主线
 
 ### 0.1 最小战斗场景
 
-场景保持简单：一名真实玩家控制地面单位 `1001`，服务端模拟地面 AI `2002` 和飞行 AI `2001`。地面单位受 BMAP、坡度、体型和动态占位约束；基础主线中的飞行单位沿明确的三轴整数规则移动，不使用地面 A* 模拟立体空域。附录 A 可选接入 AIRN V1，在固定飞行高度规划水平路径，并由连续扫掠校验可变高度移动；地面 BMAP 不能代替空中障碍资产。技能保留近战、表现弹丸、逻辑弹丸三种例子。需要证明的是**客户端与服务端在正式输入下复现相同战斗结果**；玩家/单位/技能数量不是架构成熟度指标。
+场景保持简单：一名真实玩家控制地面单位 `1001`，服务端模拟地面 AI `2002` 和飞行 AI `2001`。地面单位受 BMAP、坡度、体型和动态占位约束；基础主线中的飞行单位沿明确的三轴整数规则移动，不使用地面 A* 模拟立体空域。第 4 阶段为飞行 AI 接入 AIRN V1，在固定飞行高度规划水平路径，并由连续扫掠校验可变高度移动；地面 BMAP 不能代替空中障碍资产。技能保留近战、表现弹丸、逻辑弹丸三种例子。需要证明的是**客户端与服务端在正式输入下复现相同战斗结果**；玩家/单位/技能数量不是架构成熟度指标。
 
 操作手感必须立即响应。WASD/J/K/L 在 Unity 预测 Core 中下一固定步执行，网络侧把意图绑定到明确帧号发送。正式输入抵达后，以服务器确认 Core 为准回滚和重演未确认帧。回滚期间表现层需要处理动画、投射物和特效的重建与收敛；Unity Transform 不允许直接写回正式 State。
 
@@ -34,27 +34,28 @@ flowchart LR
     K --> L[从确认点重演本地未确认输入]
     L --> B
     B --> M[Unity 表现]
-    I --> N[FlyWow Grid Navigation]
+    I --> N[FlyWow Grid/AIR Navigation]
 ```
 
-Battle Process 中：`battle_id -> battle_id % worker_count + 1` 的固定路由符合本课多 Worker 要求。业务与 Skynet Service 的所有权边界按实际调用链安排：Gateway 持有 Socket；Proxy 持有转发路由；Dispatch 持有 Worker handles；Worker 持有多个 Battle；每场 Battle 独占 Runtime、Engine 和 NavigationContext；FlyWow MapRegistry 在**进程内**共享只读 GridMap。不同 OS 进程的 MapRegistry 不是同一实例。
+Battle Process 中：`battle_id -> battle_id % worker_count + 1` 的固定路由符合本课多 Worker 要求。业务与 Skynet Service 的所有权边界按实际调用链安排：Gateway 持有 Socket；Proxy 持有转发路由；Dispatch 持有 Worker handles；Worker 持有多个 Battle；每场 Battle 独占 Runtime、Engine 和 NavigationContext；FlyWow MapRegistry 在**进程内**共享只读地图快照（BMAP 与可选 AirAsset）；不同 OS 进程的 MapRegistry 不是同一实例。
 
 **一场 Battle 不等于一个 Skynet Service，也不等于一个 OS Worker Thread。** 每个 BattleWorker Service 的一个 Lua State 可以管理多场 Battle；同一 Native Engine 不能由两个协程交错进入。本文规定核心推进调用是同步、no-yield 的，任何 Skynet/Cluster I/O 均在该边界之外。
 
-### 0.3 10 个教学阶段
+### 0.3 11 个教学阶段
 
 | 阶段 | 本阶段核心问题 | 真正可检查的结果 |
 |---|---|---|
 | 1 | 输入帧究竟是什么、谁决定截止 | 文字合同、数值例子、时序图、负向用例 |
 | 2 | 两端为何能确定性运行 | C++17 Core、Checkpoint、Native Golden、无半步提交 |
 | 3 | 地面导航如何成为模拟的一部分 | FlyWow `FindPath`/`AdvancePath`/Occupancy、路径复用、重建 |
-| 4 | 玩家输入怎样形成一条权威帧 | 聚合、超窗、补缺、确认、稳定顺序 |
-| 5 | Gateway 如何回推帧 | 定向 Push、身份重验、边界测试 |
-| 6 | Skynet 如何调度多场 Battle | Runtime/Worker/Dispatch、过载和生命周期 |
-| 7 | Unity 如何立即响应 | confirmed/predicted、预测回滚、表现收敛 |
-| 8 | 如何恢复和复现一场战斗 | Checkpoint、重连、重放、逐帧 hash |
-| 9 | 如何真正跑通双进程 | 实际握手、单客户端、异常网络联调 |
-| 10 | 如何评价商业工程质量 | 测试分层、导航性能、Tick p99、容量边界、发布 |
+| 4 | 飞行单位如何绕过空域障碍并执行升降 | AIRN 配对导出/加载、固定高度寻路、动态 AABB、变高连续扫掠、确定性恢复 |
+| 5 | 玩家输入怎样形成一条权威帧 | 聚合、超窗、补缺、确认、稳定顺序 |
+| 6 | Gateway 如何回推帧 | 定向 Push、身份重验、边界测试 |
+| 7 | Skynet 如何调度多场 Battle | Runtime/Worker/Dispatch、过载和生命周期 |
+| 8 | Unity 如何立即响应 | confirmed/predicted、预测回滚、表现收敛 |
+| 9 | 如何恢复和复现一场战斗 | Checkpoint、重连、重放、逐帧 hash |
+| 10 | 如何真正跑通双进程 | 实际握手、单客户端、异常网络联调 |
+| 11 | 如何评价商业工程质量 | 测试分层、导航性能、Tick p99、容量边界、发布 |
 
 ### 0.4 操作目录与仓库约束
 
@@ -5348,161 +5349,15 @@ namespace BattleNavigation.FrameSync
 }
 ```
 
-## 6. 操作顺序：从第二课真实基线直接执行
+## 5.24 空中导航实操：从 AIRN 资产到帧同步移动
 
-所有命令均在仓库根或明确标注的`server/`执行。下面每个步骤在成功后再进入下一个步骤；未编译的源码不能称作实际已交付。
-
-### 6.1 检查仓库与固定依赖
-
-```bash
-# WSL项目根；不改变已有修改
-git status --short
-git submodule status
-git -C server/third_party/skynet-flywow status --short
-
-# 工具与正式地图已经是第二课验收的一部分
-test -f shared/navigation/battle_1001/battle_1001.bmap
-test -f shared/navigation/battle_1001/battle_1001.manifest.json
-test -f shared/protocol/navigation_query.proto
-```
-
-若FlyWow子模块并非课程锁定版本，先根据当前gitlink核对导航API，不能自动拉最新`main`。上面的整文件以已核对的课程锁定版本为基线。
-
-### 6.2 安装新建文件并验证协议（WSL）
-
-将第5节对应文件的**完整代码块**按路径保存。然后在主仓库根目录：
-
-```bash
-
-# 按上文专节亲自修改FlyWow Gateway，并先跑旧行为负向测试，再跑新行为正向测试
-
-# Proto唯一源自动生成：Server descriptor 和 Gateway Registry
-./server/protocol/build_server_descriptor.sh
-python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
-  --proto shared/protocol/navigation_query.proto \
-  --output server/lualib/gateway/protocol/navigation_registry.lua
-
-# 检查第二课已有命令号保持不变，新Frame命令也已生成
-rg -n 'FRAME_JOIN|FRAME_INPUT|FRAME_PUSH|FRAME_RECOVER|FRAME_LEAVE|FRAME_REPLAY' \
-  server/lualib/gateway/protocol/navigation_registry.lua
-```
-
-不直接写或复制生成后的`navigation_registry.lua`。FlyWow的改动需遵循子模块先提交/推送、主仓库再更新gitlink的项目流程；本教程不会自动提交或推送。
-
-### 6.3 构建Linux Native并跑核心测试（WSL）
-
-```bash
-cd server
-./scripts/linux/run_server.sh build
-python3 scripts/lessons/prepare_frame_sync.py
-
-cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release -DLESSON_FRAME_LUA=ON
-cmake --build build/frame_sync --parallel
-ctest --test-dir build/frame_sync --output-on-failure
-
-./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
-./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
-```
-
-其中`frame_binding_test.lua`与`frame_runtime_test.lua`要求正确的Lua5.4.7加载路径（脚本内已明确追加`package.cpath`）；若系统缺Lua`lua` CLI，按当前固定Skynet构建输出路径核对，不静默换用系统Lua5.1/5.3。应看到`FRAME_BINDING_OK`、`FRAME_RUNTIME_OK`。
-
-### 6.4 启动两套真实Skynet进程（WSL）
-
-```bash
-# 终端A，工作目录server/
-./third_party/skynet/skynet config/frame_battle_process.lua
-
-# 终端B，工作目录server/；确认A已写出FRAME_BATTLE_READY再启动
-./third_party/skynet/skynet config/frame_gateway_process.lua
-
-# 终端C，server/
-python3 tests/frame_sync_integration.py
-```
-
-重点检查`FRAME_BATTLE_READY`、`FRAME_GATEWAY_READY`和`FRAME_ONE_CLIENT_OK`。进程停止使用各自前台终端Ctrl+C，不向所有Skynet进程发送`pkill`。测试只证明当前一个真实客户端收到12个连续权威帧；不能证明Unity Play、客户端本地预测或高并发负载。
-
-### 6.5 Windows DLL与团结引擎（Windows编辑源）
-
-先按项目Git工作流将已经审查的协议、源码和正式BMAP同步到Windows工作区。Windows项目根执行：
-
-```powershell
-./shared/protocol/build_unity_cs.ps1
-cmake -S ./server/native/frame_sync -B ./server/build/frame_sync_windows -DLESSON_FRAME_LUA=OFF
-cmake --build ./server/build/frame_sync_windows --config Release
-ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failure
-```
-
-将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把已发布的同一份BMAP放入 Assets/StreamingAssets/navigation/battle_1001.bmap；将 server/config 中本课使用的 .lua 配置模块按原目录结构放入 Assets/StreamingAssets/config。其余平台不在本课验证范围内。
-
-在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即开始50ms固定模拟。
-
-检查Player 1001执行WASD、J/K/L，AI会追击；本地移动无需等网络RTT；确认HP与逻辑弹丸由正式输入派生。模拟网络抖动后观察confirmed/predicted和回滚次数，服务器控制的敌方单位由同一模拟规则推进，并在正式帧到达后收敛。
-
-### 6.6 Windows/Linux确定性Golden
-
-两个系统分别对**同一份BMAP、同一份Profile配置、同一份Git源码及固定测试输入**执行Native`frame_test`，逐行比较其`GOLDEN <frame> <hash>`输出，不只比较最后胜负。Windows和Linux打印环境非Golden尾行可分别处理；每帧应完全相同。
-
-如果首帧就不一致，检查地图字节、座位输入数组、Checkpoint V3、整数取整和Native布局；如果运行几十帧后分歧，优先检查AI目标顺序、A* tie-break、Path Cursor、DynamicOccupancy和弹丸迭代顺序。
-
-## 7. 本课必须真正验收的故障和性能合同
-
-| 注入条件 | 预期效果 |
-|---|---|
-| 旧或错误generation向已恢复席位发输入 | 拒绝，不改变该Battle正式历史 |
-| 玩家断线，玩家继续提交 | 玩家不被踢下线，Server按每席位规则继续Tick |
-| 同席位重复相同FrameCommand | 幂等OK，不写第二次正式输入 |
-| 同席位同帧不同输入 | CONFLICT，保留首次接受者 |
-| 超过future_window | INPUT_WINDOW；不无限缓存 |
-| 缺输入3帧以上 | 方向清零、技能每帧清零，不会持续施法 |
-| 动态阻挡路径或AI目标移动 | 按规定触发重规划；无需每Tick A* |
-| 正常路径途中保存并恢复 | 后续每帧Checkpoint和Hash相同，不重置Cursor |
-| 错误Checkpoint或非法C ABI参数 | 原状态完整保留，返回明确失败 |
-| 服务器Heartbeat超catchup | OVERLOAD，不用扩大dt追赶、也不跳帧 |
-| Gateway定向主动Push | 只发送给目标epoch+connection_id当前会话 |
-| 旧的客户连接或错误token恢复 | NOT_FOUND/旧代数失效，不泄露其他席位 |
-| 客户端预测窗口耗尽 | 停止盲猜并发起受控Checkpoint恢复 |
-| 删除或篡改Replay中间输入 | 发生帧号/状态hash不一致并明确失败 |
-
-性能记录必须包括CPU型号、编译器、Debug/Release、map尺寸、单位和场次数量：测试每场CPU每Tick p50/p95/p99、A*调用次数/扩展Node数、Native/Skynet RSS、Gateway队列深度、迟到比例和OVERLOAD次数。`4 workers * 128 battles`是初始资源保护参数，**不是已测得的吞吐承诺**。
-
-不在本课做Battle OS进程崩溃后持久化恢复、规则源码Hash、用Lua执行Unity帧模拟规则、在线Native DLL热替换、多机场次迁移或状态同步/帧同步统一Battle Core。xLua在本课只读取静态配置。保留发布BMAP SHA-256与**每帧诊断State Hash**，不要将两者混为一项。
-
-## 8. 审计边界与完成检查
-
-- [ ] 第二课已有QueryCell/RunAutoBattle的Proto编号和运行行为不变。
-- [ ] 每个列出的源码文件只出现一次最终完整代码，不存在需要学习者自行合并的零散修改片段。
-- [ ] 不新增规则源码Hash或在线规则热替换合同；每帧State Hash只用于分歧诊断。
-- [ ] 创建战斗时校验simulation_version；恢复与回放沿用已记录版本信息。
-- [ ] Native C++17 Core、FlyWow公开Navigation目标、Lua5.4.7 Binding编译通过。
-- [ ] Linux Native CTest、Binding Test、Runtime Test真实通过。
-- [ ] 双Skynet进程、单TCP客户端Join/正式帧一致性真实通过。
-- [ ] Windows DLL和C#编译、团结引擎实际Play经过学习者验证。
-- [ ] 断线重连/迟到/阻挡/重规划/路径Checkpoint/回放全部逐项检查。
-- [ ] Golden逐帧跨平台一致，性能报告记录环境和实测数据。
-
-**验证记录：** 本文在本轮完成了文档结构与关键合同静态检查。文档中的代码在本轮未实际编译，也未启动仓库Server或Unity；重写后的版本尚未运行验证，不能声称测试通过。遇到固定子模块源码与文档不匹配时必须报告具体接口差异，不猜测“已可运行”。
-
-
-## 9. 相对旧版教程的修改点
-
-本节用于学习者理解课程边界变化；它不是另一套待执行代码。
-
-- 保留帧同步主线：固定逻辑帧、客户端立即预测、服务端正式输入、迟到/缺失处理、逐帧校验、回滚重演、Checkpoint恢复、导航路径状态和真实网络接入。
-- 把场景收敛为一名玩家控制地面单位 `1001`，服务端控制地面敌人与飞行敌人；删除两名玩家共同对抗AI的组队玩法。玩家输入数组、Runtime席位、Unity预测输入、Native验证、测试和验收同步改为单席位。
-- FlyWow Navigation 从课程直接枚举并编译其内部 `.cpp`，改为链接公开目标 `FlyWow::Navigation`；真实静态库目标 `flywow_navigation_core` 及其源文件由 FlyWow 自己维护。
-- 移除自动改写 FlyWow Gateway 的 `自动 Gateway 修改脚本`。Gateway 定向主动推送仍是本课需要学习和审计的改动，由学习者按专节亲自修改，并通过旧行为负向测试和新行为正向测试验证。
-- 保留导航路径缓存、按条件重规划、Cursor随Checkpoint恢复的设计；不将每Tick重新A*描述为目标实现。
-- 增加整数simulation_version合同，创建战斗时匹配simulation_version，不匹配就拒绝；恢复和回放沿用已记录的版本信息；不加入规则源码Hash、规则发布平台或进行中战斗热替换系统。地图身份、协议合同、Checkpoint格式和逐帧诊断Hash仍按各自用途保留。
-- 新文档的代码和步骤没有在本轮实际运行。旧版或重改稿中的既有验证记录不代表本版通过；学习时按阶段执行并记录实际结果。
-## 附录 A：将可选 AIRN V1 接入帧同步版
-
-本附录是主实操完成后的可选扩展；要应用到课程源码，应在第 2.4 节构建之前按本附录修改隔离课程文件。本附录把 FlyWow 已验证的可选空中导航接到本课的 Frame Core。FlyWow 提供资产加载、固定高度八邻接寻路、动态 AABB、连续扫掠和原子移动；Frame Core 仍拥有单位位置、逐帧顺序与 AI 决策。这里不接入 Battle/Frame Core 以外的业务，也不改变玩家输入、技能或弹丸合同。
+这是第三课导航阶段的正式实操内容，安排在基础源码写入之后、Native 编译之前。学习者先完成地面 Grid Navigation，再沿本阶段为飞行 AI 接入可选 AIRN；没有已发布 AIRN 的地图只能通过 BMAP-only 兼容路径，不能验收静态空中绕障。本阶段把 FlyWow 已验证的可选空中导航接到本课的 Frame Core。FlyWow 提供资产加载、固定高度八邻接寻路、动态 AABB、连续扫掠和原子移动；Frame Core 仍拥有单位位置、逐帧顺序与 AI 决策。这里不接入 Battle/Frame Core 以外的业务，也不改变玩家输入、技能或弹丸合同。
 
 当前 `shared/navigation/battle_1001/` 只有 BMAP V1，没有 AIRN 文件。BMAP 描述地表，不能推导空中障碍。AIRN 是与同一 BMAP 的 map_id、map_version 和内容 SHA-256 配对的可选侧车文件；没有 AIRN 时，地图仍可加载，空中移动会受地表穿透、边界和 Battle 内动态空中单位限制。只有显式提供 AIRN 路径后，静态空中体积才生效；配置了路径但资产丢失、损坏或身份不匹配时，启动必须失败。
 
-### A.1 在 Unity Authoring 中导出配对 AIRN
+### 5.24.1 在 Unity Authoring 中导出配对 AIRN
 
-**操作：只读检查现有场景，然后在 Unity 编辑源局部修改 `Battle_1001_FrameSync` 场景。** Scene 中的 Air Volume 只声明静态世界障碍；动态单位仍由每场 Battle 的 Context 管理。
+**操作：只读检查现有场景，然后在 Unity 编辑源局部修改 `Battle_1001_FrameSync` 场景。** Scene 中专用 Layer 上的 Collider 只声明静态世界障碍；动态单位仍由每场 Battle 的 Context 管理。
 
 本步骤需要地图根对象在 Bake/Export 时同时找到地面 BMAP 数据与可选的 Air Navigation Authoring 配置。`Bounds` 是 Collider 在 World Space 的轴对齐包围盒，`LayerMask` 决定哪些 Collider 被当作静态空中障碍。查看 Inspector 中的中心、尺寸和 LayerMask；例如以毫米计的盒体 `center=(4000,3000,2000)`、`size=(2000,4000,1000)` 覆盖 X=[3000,5000]、Y=[1000,5000]、Z=[1500,2500]。AIRN 用闭区间保存保守盒体，所以接触边界也算阻挡。
 
@@ -5521,16 +5376,16 @@ ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failur
 
 在 FrameSync 场景唯一的 MapRoot Inspector 中启用 `exportAirNavigation`，把用于静态空中阻挡的启用 Collider 放入 `airObstacleLayers` 指定的 Layer；动态单位与不应阻挡飞行的 Collider 不放入。该采样使用 Collider 的 World Space AABB，旋转盒体和非 BoxCollider 会保守覆盖，可能封住模型原本可穿越的通道。`exportDirectory` 是相对 Unity 工程根目录的输出根；正式候选由 `Tools > FlyWow > Navigation > 00 一键执行：校验 -> 烘焙 -> 导出（推荐）` 生成，或在已完成 Bake 后调用 `03 导出当前场景 BMAP`。Exporter 会在输出根下创建 `map-<mapId>-v<mapVersion>-<packageHash>/`，包含 `map.bmap`、可选的 `map.airnav` 与 `map.manifest.json`，没有单独的 AIRN 文件名设置。把完整候选目录验证后发布到 `shared/navigation/battle_1001/`，再由 Server 与客户端消费同一内容；不要手工拼 AIRN 字节或把 Unity 工程绝对路径写进 Runtime。
 
-### A.2 显式加载：保持 BMAP V1，空中资产按路径选择
+### 5.24.2 显式加载：保持 BMAP V1，空中资产按路径选择
 
 **操作：局部修改 `server/config/frame_sync.lua`、Native 预加载 Binding 和 Unity 的 `FrameNative.Preload`。** 显式路径把构建/部署拓扑交给 composition root，避免 Native 猜相邻文件名或当前工作目录。
 
-在 `frame_sync.lua` 中增加两个运行时路径：Server 路径相对 `server/`；客户端路径相对 `Assets/StreamingAssets/`。空字符串表示本环境只使用 BMAP 与动态空中障碍。启用作者导出的 AIRN 时填写已发布文件的相对路径。
+在 `frame_sync.lua` 中为 Server 和客户端分别配置显式路径：Server 路径相对 `server/`；客户端路径相对 `Assets/StreamingAssets/`。发布器返回的版本目录以实际 `<packageHash>` 命名，配置时把下面占位段换成发布结果中的真实目录名。`map.bmap`、`map.airnav` 和 Manifest 必须来自同一个候选目录。
 
 ```lua
-    map_path          = "../shared/navigation/battle_1001/battle_1001.bmap",
-    airnav_path       = "../shared/navigation/battle_1001/battle_1001.airnav",
-    client_airnav_asset = "navigation/battle_1001/battle_1001.airnav",
+    map_path            = "../shared/navigation/battle_1001/map-1001-v1-<packageHash>/map.bmap",
+    airnav_path         = "../shared/navigation/battle_1001/map-1001-v1-<packageHash>/map.airnav",
+    client_airnav_asset = "navigation/battle_1001/map-1001-v1-<packageHash>/map.airnav",
 ```
 
 若当前发布包没有 AIRN，Server 的 `airnav_path` 和客户端的 `client_airnav_asset` 都设为空字符串。两端都必须选择同一资产身份：BMAP map_id/map_version/content hash 与 AIRN Header 配对，不允许 Server 有静态空中墙、客户端却静默退化为空地图。
@@ -5547,7 +5402,7 @@ LESSON_FRAME_API int fs_preload_map(const char *bmap_path, const char *airnav_pa
 
 **本步骤输出：** 两个进程通过相同 FlyWow Reader 取得同一 immutable `GridMap`，其中可选 `AirAsset` 随地图快照共同持有。`NavigationContext` 只引用该快照；替换 Registry 的地图不会改写已有 Battle 的静态数据。
 
-### A.3 Profile：为飞行单位声明碰撞体，不创建第二张配置表
+### 5.24.3 Profile：为飞行单位声明碰撞体，不创建第二张配置表
 
 **操作：局部修改已有 UnitProfile 与其 Native/C# ABI record。** 飞行单位仍使用统一 `unit_id`；只有地面单位需要 NavigationProfile。`AirBody` 描述轴对齐盒体的 XZ 半宽与 Y 半高，单位为毫米；它不属于 Ground NavigationProfile。
 
@@ -5565,7 +5420,7 @@ LESSON_FRAME_API int fs_preload_map(const char *bmap_path, const char *airnav_pa
 
 `UnitProfile` 内保存 `flywow_navigation::AirBody`，从静态配置复制；Checkpoint 不重复序列化配置。Unit 的 X/Y/Z 是正式 Battle 事实，飞行动态盒完全由位置、Profile 尺寸和存活状态重建。
 
-### A.4 Context：恢复与移动都按稳定实例顺序重建动态障碍
+### 5.24.4 Context：恢复与移动都按稳定实例顺序重建动态障碍
 
 **操作：局部修改 `Engine::buildContext` 和空中移动/AI。** 每个 Engine 独占一份 NavigationContext；静态 AirAsset 由地图快照共享，动态空中 AABB 由当前 Battle 的 Unit 状态生成。
 
@@ -5619,13 +5474,13 @@ if (route.value.count() > 1)
 
 其中 `vertical_intent` 是现有 AI 规则输出的 -1/0/1，`stride_mm` 仍按活动轴数做整数归一化。地面策略明确开启，`clearance_mm=0` 表示盒体不能穿过 BMAP 地表；单位中心到地面的最小/最大距离仍由 UnitFlightProfile 的 `sampleAir` 检查。`kNoPath` 是普通本帧停步，预算、容量或参数失败不能伪装成无路。
 
-### A.5 扫掠、同帧顺序和 Checkpoint
+### 5.24.5 扫掠、同帧顺序和 Checkpoint
 
 `moveAir` 已经提供 sweep-then-commit 原子合同；Frame Core 不应先调用 `sweepAir`，再把位置直接写进 Unit，那会绕开动态索引提交。`sweepAir` 用在只读预测、命中诊断和测试；正式移动用 `moveAir`。两者使用整数毫米与有理数接触参数，不把连续碰撞近似成逐帧端点检查。
 
 Frame Core 先按 `instance_id` 排序移动，后处理技能/伤害；本帧后序飞行单位看到前序单位已经提交的新盒体，执行顺序固定且两端一致。死亡单位在本帧统一伤害结算后，由下一帧的 Context 重建剔除；Checkpoint restore 则从候选 State 重建 Context。AIRN 静态体积和动态 AABB 都不单独写入 Checkpoint：前者随已校验地图身份固定，后者由 Unit 位置、生命状态和固定 Profile 派生。现有 Checkpoint V3 字节布局不变。
 
-### A.6 验证加载、寻路、动态阻挡和扫掠
+### 5.24.6 验证加载、寻路、动态阻挡和扫掠
 
 **操作：扩展 `frame_test.cpp`，完整保留已有 Golden 与回滚断言。** 加一个聚焦 AIR 查询：从 `MapRegistry::Find(1001)` 取同一地图快照，创建独立 `NavigationContext`，在空旷飞行高度注册一个挡路 AABB；断言 `findAirPath` 找到绕行路线，`advanceAirPath` 沿路线前进，`sweepAir` 对穿过盒体的直线返回 `kDynamic`，`moveAir` 遇到该盒体返回 `kBlocked` 并保留原盒与原中心。移除 blocker 后重复查询应成功。每个 request 都显式提供 body、handle 和 terrain policy。
 
@@ -5637,7 +5492,7 @@ Frame Core 先按 `instance_id` 排序移动，后处理技能/伤害；本帧�
 cd server/third_party/skynet-flywow
 ./scripts/build_flywow.sh ../skynet navigation
 ctest --test-dir build/cmake/navigation --output-on-failure
-./build/native/air_navigation_benchmark
+./build/cmake/navigation/air_navigation_benchmark
 
 cd ../../
 cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release -DLESSON_FRAME_LUA=ON
@@ -5648,11 +5503,11 @@ ctest --test-dir build/frame_sync --output-on-failure
 
 Benchmark 必须保留 FlyWow AIR 场景、地图尺寸、墙体长度、4096 动态对象及成功/无路/预算耗尽预期，不得降低次数或提高默认预算让门禁变绿。Frame 测试另记录每帧 AIR 查询次数、扩展数与 p50/p95/p99；若超预算，应优化重规划与空间查询实现，不能吞掉 `QUERY_BUDGET_EXCEEDED`。测试期间不要同时运行其它 Benchmark。
 
-本仓库当前没有 `battle_1001.airnav`，所以现有发布样例只能验证 BMAP-only 兼容模式和 Context 动态盒；AIRN 配对读写和固定高度几何由 FlyWow 的真实 Writer/Native/Unity EditMode 测试覆盖。学习者完成 Unity Authoring 导出后，需再执行显式双路径加载与跨平台 AIRN Golden。这项限制必须如实记录，不能把未存在的静态地图资产描述为已端到端运行。
+本仓库当前没有 `map.airnav`，所以现有发布样例只能验证 BMAP-only 兼容模式和 Context 动态盒；AIRN 配对读写和固定高度几何由 FlyWow 的真实 Writer/Native/Unity EditMode 测试覆盖。学习者完成 Unity Authoring 导出后，需再执行显式双路径加载与跨平台 AIRN Golden。这项限制必须如实记录，不能把未存在的静态地图资产描述为已端到端运行。
 
-### A.7 可直接应用的调用点修改
+### 5.24.7 可直接应用的调用点修改
 
-本小节是对第 A.2–A.6 节标注文件的局部修改清单；先读每条输入字段和 owner，再逐个修改，避免只更新 Server 或只更新 Unity。
+本小节是对第 5.24.2–5.24.6 节标注文件的局部修改清单；先读每条输入字段和 owner，再逐个修改，避免只更新 Server 或只更新 Unity。
 
 在 `server/config/frame_sync.lua` 添加：
 
@@ -5701,7 +5556,7 @@ Windows `FrameNative.cs` 的 `fs_preload_map` P/Invoke 增加 nullable UTF-8 字
 
 Profile 读取时，`movement.mode == "air"` 必须读取 `flight.air_body.radius_mm` 与 `flight.air_body.half_height_mm`。Native 校验这两个值都大于 0；`movement.mode == "ground"` 校验这两个值均为 0。UnitProfile 转换后赋给 `profile.air_body = {source.air_radius_mm, source.air_half_height_mm}`。C# `FsUnitProfile` 按相同顺序增加两个 `uint` 并把 `Marshal.SizeOf<FsUnitProfile>() == 32` 加入桥接测试。新旧二进制不可混用，必须由同一次课程源码构建 Server `.so` 和 Unity `.dll`。
 
-### A.8 `buildContext` 与空中追击的完整函数
+### 5.24.8 `buildContext` 与空中追击的完整函数
 
 **操作：局部修改 `frame_core.cpp` 中两个函数；保留地面分支及固定排序。** 这段函数展示本课所有存活单位如何在 reset/restore 时重建动态事实。
 
@@ -5813,6 +5668,171 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
 
 `moveAir` 的全段连续扫掠和 AABB 原子提交使 `chaseAir` 无需自行写 `setAirObstacle` 更新位置；手工更新会重复所有权并引入“位置已变、动态索引未变”的半提交状态。每帧重查路径是本课当前一名飞行 AI 的简单确定性规则；实际多空中单位地图应以新增 Frame AIR 查询 Benchmark 测量，并在超时之前优化路径复用/重规划，不得提高 AIR 硬预算或吞错误。
 
-### A.9 本节验收结果边界
+### 5.24.9 本节验收结果边界
 
 AIRN 文件由 Unity Editor 侧真实导出；本仓库现有 `battle_1001` 没有空中体积配置或 AIRN 资产，所以此处不伪造已跑过静态障碍的端到端结果。可先用 BMAP-only 配置完成 Frame Runtime 编译、动态对象测试和旧回归；随后在 Windows Authoring 场景配置一个可观察的盒体，发布配对 AIRN，将其同步后用两个显式路径跑 Server/Unity Native Golden。失败时优先核对 `(map_id,map_version,bmap_sha256)`，不要修改 BMAP V1 或关闭配对校验。
+
+## 6. 操作顺序：从第二课真实基线直接执行
+
+所有命令均在仓库根或明确标注的`server/`执行。下面每个步骤在成功后再进入下一个步骤；未编译的源码不能称作实际已交付。
+
+### 6.1 检查仓库与固定依赖
+
+```bash
+# WSL项目根；不改变已有修改
+git status --short
+git submodule status
+git -C server/third_party/skynet-flywow status --short
+
+# 工具与正式地图已经是第二课验收的一部分
+test -f shared/navigation/battle_1001/battle_1001.bmap
+test -f shared/navigation/battle_1001/battle_1001.manifest.json
+test -f shared/protocol/navigation_query.proto
+```
+
+若FlyWow子模块并非课程锁定版本，先根据当前gitlink核对导航API，不能自动拉最新`main`。上面的整文件以已核对的课程锁定版本为基线。
+
+### 6.2 安装新建文件并验证协议（WSL）
+
+将第5节对应文件的**完整代码块**按路径保存。然后在主仓库根目录：
+
+```bash
+
+# 按上文专节亲自修改FlyWow Gateway，并先跑旧行为负向测试，再跑新行为正向测试
+
+# Proto唯一源自动生成：Server descriptor 和 Gateway Registry
+./server/protocol/build_server_descriptor.sh
+python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
+  --proto shared/protocol/navigation_query.proto \
+  --output server/lualib/gateway/protocol/navigation_registry.lua
+
+# 检查第二课已有命令号保持不变，新Frame命令也已生成
+rg -n 'FRAME_JOIN|FRAME_INPUT|FRAME_PUSH|FRAME_RECOVER|FRAME_LEAVE|FRAME_REPLAY' \
+  server/lualib/gateway/protocol/navigation_registry.lua
+```
+
+不直接写或复制生成后的`navigation_registry.lua`。FlyWow的改动需遵循子模块先提交/推送、主仓库再更新gitlink的项目流程；本教程不会自动提交或推送。
+
+### 6.3 接入空中导航并验证 AIRN（WSL/Windows）
+
+按第 5.24 节完成 Unity Authoring 配置、AIRN 配对导出和 Frame Core 局部修改，再进入编译。先为静态空域障碍使用专用 Layer，并通过现有推荐菜单发布完整版本化候选目录；Server 与 Windows 必须使用相同 `map.bmap`、`map.airnav` 和 Manifest。当前仓库没有 `map.airnav`，所以学习者需在 Windows Unity 编辑源生成并审查该候选，未同步前只可运行 BMAP-only 与动态 AABB 用例。
+
+FlyWow 单元测试与 Benchmark 在宿主 Core 之前运行：
+
+```bash
+cd server/third_party/skynet-flywow
+./scripts/build_flywow.sh ../skynet navigation
+ctest --test-dir build/cmake/navigation --output-on-failure
+./build/cmake/navigation/air_navigation_benchmark
+cd ../../
+```
+
+Benchmark 维持地图尺寸、墙体长度、4096 个动态对象、查询次数、预算与成功/无路/预算耗尽预期；任何门槛失败都要优化实现，不能放宽阈值。然后按第 5.24.6 节把 AIR API 组合断言加到隔离 `frame_test.cpp`，保留旧 Golden、回滚和失败原子性断言。
+
+### 6.4 构建Linux Native并跑核心测试（WSL）
+
+```bash
+cd server
+./scripts/linux/run_server.sh build
+python3 scripts/lessons/prepare_frame_sync.py
+
+cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release -DLESSON_FRAME_LUA=ON
+cmake --build build/frame_sync --parallel
+ctest --test-dir build/frame_sync --output-on-failure
+
+./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
+./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
+```
+
+其中`frame_binding_test.lua`与`frame_runtime_test.lua`要求正确的Lua5.4.7加载路径（脚本内已明确追加`package.cpath`）；若系统缺Lua`lua` CLI，按当前固定Skynet构建输出路径核对，不静默换用系统Lua5.1/5.3。应看到`FRAME_BINDING_OK`、`FRAME_RUNTIME_OK`。
+
+### 6.5 启动两套真实Skynet进程（WSL）
+
+```bash
+# 终端A，工作目录server/
+./third_party/skynet/skynet config/frame_battle_process.lua
+
+# 终端B，工作目录server/；确认A已写出FRAME_BATTLE_READY再启动
+./third_party/skynet/skynet config/frame_gateway_process.lua
+
+# 终端C，server/
+python3 tests/frame_sync_integration.py
+```
+
+重点检查`FRAME_BATTLE_READY`、`FRAME_GATEWAY_READY`和`FRAME_ONE_CLIENT_OK`。进程停止使用各自前台终端Ctrl+C，不向所有Skynet进程发送`pkill`。测试只证明当前一个真实客户端收到12个连续权威帧；不能证明Unity Play、客户端本地预测或高并发负载。
+
+### 6.6 Windows DLL与团结引擎（Windows编辑源）
+
+先按项目Git工作流将已经审查的协议、源码和正式BMAP同步到Windows工作区。Windows项目根执行：
+
+```powershell
+./shared/protocol/build_unity_cs.ps1
+cmake -S ./server/native/frame_sync -B ./server/build/frame_sync_windows -DLESSON_FRAME_LUA=OFF
+cmake --build ./server/build/frame_sync_windows --config Release
+ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failure
+```
+
+将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把同一个已发布候选目录下的 `map.bmap` 与 `map.airnav` 一起放入 `Assets/StreamingAssets/navigation/battle_1001/map-1001-v1-<packageHash>/`，并让 `client_airnav_asset` 指向其中的 `map.airnav`；将 server/config 中本课使用的 .lua 配置模块按原目录结构放入 Assets/StreamingAssets/config。BMAP-only 兼容运行时，空中资产路径保持空串。其余平台不在本课验证范围内。
+
+在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即开始50ms固定模拟。
+
+检查Player 1001执行WASD、J/K/L，AI会追击；本地移动无需等网络RTT；确认HP与逻辑弹丸由正式输入派生。模拟网络抖动后观察confirmed/predicted和回滚次数，服务器控制的敌方单位由同一模拟规则推进，并在正式帧到达后收敛。
+
+### 6.7 Windows/Linux确定性Golden
+
+两个系统分别对**同一候选目录中的同一份BMAP/AIRN、同一份Profile配置、同一份Git源码及固定测试输入**执行Native`frame_test`，逐行比较其`GOLDEN <frame> <hash>`输出，不只比较最后胜负。先比较 BMAP/AIRN 原始字节和 manifest identity，防止两端误用不同地图包。Windows和Linux打印环境非Golden尾行可分别处理；每帧应完全相同。
+
+如果首帧就不一致，检查地图字节、座位输入数组、Checkpoint V3、整数取整和Native布局；如果运行几十帧后分歧，优先检查AI目标顺序、A* tie-break、Path Cursor、DynamicOccupancy和弹丸迭代顺序。
+
+## 7. 本课必须真正验收的故障和性能合同
+
+| 注入条件 | 预期效果 |
+|---|---|
+| 旧或错误generation向已恢复席位发输入 | 拒绝，不改变该Battle正式历史 |
+| 玩家断线，玩家继续提交 | 玩家不被踢下线，Server按每席位规则继续Tick |
+| 同席位重复相同FrameCommand | 幂等OK，不写第二次正式输入 |
+| 同席位同帧不同输入 | CONFLICT，保留首次接受者 |
+| 超过future_window | INPUT_WINDOW；不无限缓存 |
+| 缺输入3帧以上 | 方向清零、技能每帧清零，不会持续施法 |
+| 动态阻挡路径或AI目标移动 | 按规定触发重规划；无需每Tick A* |
+| 正常路径途中保存并恢复 | 后续每帧Checkpoint和Hash相同，不重置Cursor |
+| 错误Checkpoint或非法C ABI参数 | 原状态完整保留，返回明确失败 |
+| 服务器Heartbeat超catchup | OVERLOAD，不用扩大dt追赶、也不跳帧 |
+| Gateway定向主动Push | 只发送给目标epoch+connection_id当前会话 |
+| 旧的客户连接或错误token恢复 | NOT_FOUND/旧代数失效，不泄露其他席位 |
+| 客户端预测窗口耗尽 | 停止盲猜并发起受控Checkpoint恢复 |
+| 删除或篡改Replay中间输入 | 发生帧号/状态hash不一致并明确失败 |
+
+性能记录必须包括CPU型号、编译器、Debug/Release、map尺寸、单位和场次数量：测试每场CPU每Tick p50/p95/p99、A*调用次数/扩展Node数、Native/Skynet RSS、Gateway队列深度、迟到比例和OVERLOAD次数。`4 workers * 128 battles`是初始资源保护参数，**不是已测得的吞吐承诺**。
+
+不在本课做Battle OS进程崩溃后持久化恢复、规则源码Hash、用Lua执行Unity帧模拟规则、在线Native DLL热替换、多机场次迁移或状态同步/帧同步统一Battle Core。xLua在本课只读取静态配置。保留发布BMAP SHA-256与**每帧诊断State Hash**，不要将两者混为一项。
+
+## 8. 审计边界与完成检查
+
+- [ ] 第二课已有QueryCell/RunAutoBattle的Proto编号和运行行为不变。
+- [ ] 基础源码按文件提供唯一完整版本；第 5.24 节的 AIRN 改动明确标注局部修改点与完整函数替换，不要求学习者从文末附录猜测主线顺序。
+- [ ] 不新增规则源码Hash或在线规则热替换合同；每帧State Hash只用于分歧诊断。
+- [ ] 创建战斗时校验simulation_version；恢复与回放沿用已记录版本信息。
+- [ ] Native C++17 Core、FlyWow公开Navigation目标、Lua5.4.7 Binding编译通过。
+- [ ] Linux Native CTest、Binding Test、Runtime Test真实通过。
+- [ ] 双Skynet进程、单TCP客户端Join/正式帧一致性真实通过。
+- [ ] Windows DLL和C#编译、团结引擎实际Play经过学习者验证。
+- [ ] AIRN 配对身份、动态 AABB、固定高度绕障、变高扫掠阻挡与移动原子性逐项通过。
+- [ ] 断线重连/迟到/阻挡/重规划/路径Checkpoint/回放全部逐项检查。
+- [ ] Golden逐帧跨平台一致，性能报告记录环境和实测数据。
+
+**验证记录：** 本文在本轮完成了文档结构与关键合同静态检查。文档中的代码在本轮未实际编译，也未启动仓库Server或Unity；重写后的版本尚未运行验证，不能声称测试通过。遇到固定子模块源码与文档不匹配时必须报告具体接口差异，不猜测“已可运行”。
+
+
+## 9. 相对旧版教程的修改点
+
+本节用于学习者理解课程边界变化；它不是另一套待执行代码。
+
+- 保留帧同步主线：固定逻辑帧、客户端立即预测、服务端正式输入、迟到/缺失处理、逐帧校验、回滚重演、Checkpoint恢复、导航路径状态和真实网络接入。
+- 把场景收敛为一名玩家控制地面单位 `1001`，服务端控制地面敌人与飞行敌人；删除两名玩家共同对抗AI的组队玩法。玩家输入数组、Runtime席位、Unity预测输入、Native验证、测试和验收同步改为单席位。
+- FlyWow Navigation 从课程直接枚举并编译其内部 `.cpp`，改为链接公开目标 `FlyWow::Navigation`；真实静态库目标 `flywow_navigation_core` 及其源文件由 FlyWow 自己维护。
+- 将可选 AIRN 从概念性补充提升为帧同步导航的第 4 教学阶段和第 5.24 节实操，实际完成静态资产配对、空中 Profile、Battle-local 动态 AABB、固定高度寻路、变高移动和 Checkpoint 派生重建。
+- 移除自动改写 FlyWow Gateway 的 `自动 Gateway 修改脚本`。Gateway 定向主动推送仍是本课需要学习和审计的改动，由学习者按专节亲自修改，并通过旧行为负向测试和新行为正向测试验证。
+- 保留导航路径缓存、按条件重规划、Cursor随Checkpoint恢复的设计；不将每Tick重新A*描述为目标实现。
+- 增加整数simulation_version合同，创建战斗时匹配simulation_version，不匹配就拒绝；恢复和回放沿用已记录的版本信息；不加入规则源码Hash、规则发布平台或进行中战斗热替换系统。地图身份、协议合同、Checkpoint格式和逐帧诊断Hash仍按各自用途保留。
+- 新文档的代码和步骤没有在本轮实际运行。旧版或重改稿中的既有验证记录不代表本版通过；学习时按阶段执行并记录实际结果。
