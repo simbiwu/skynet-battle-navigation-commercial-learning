@@ -1,11 +1,15 @@
--- 职责：定义稳定 Unit 类型 ID=1 的通用基础配置。
--- 边界：Battle 进程级共享业务配置；由启动入口发布到 sharedata。
--- 输入/输出：无输入 -> 一份 UnitProfile record。
--- 生命周期：启动时发布；业务通过 sharedata 读取，不被 Navigation 复制或缓存。
--- 不负责：不包含导航专用参数，不保存单位运行时速度、位置或 Battle 状态。
-return {
-    unit_id = 1,
-    combat = {
-        attack_range_mm = 900, -- 双方中心 XZ 距离上限；导航半径不参与攻击判定。
+---@type UnitProfile
+return
+{
+    unit_id = 1, -- 静态UnitProfile配置查询键；不是战斗中的单位实例ID。
+    movement =
+    {
+        mode              = "ground", -- 地面单位按地图高度移动，并使用对应NavigationProfile。
+        speed_mm_per_sec = 3000,      -- 单轴速度，毫米/秒；每个60Hz Tick约50mm。
+    },
+    max_hp = 100, -- 初始HP和最大HP。
+    combat =
+    {
+        attack_range_mm = 900, -- 双方中心点XZ距离上限，毫米；不加导航半径。
     },
 }

@@ -4,7 +4,7 @@
 >
 > 基线：Skynet v1.8.0、自带 Lua 5.4.7、C++17、团结引擎 1.10.0（Unity 2022.3 LTS）、AI Navigation 1.1.7、Protobuf 唯一协议源、`server/third_party/skynet-flywow` 固定 gitlink。禁止按 GitHub 最新 `main` 猜测子模块 API。
 >
-> 重要：主实操正文包含其基线范围内每个受影响文件的**最终累计完整代码**，不要求学习者拼接局部片段。第 5.24 节是 AIRN V1 空中导航实操，属于第三课导航阶段，明确标注资产、配置、ABI、Frame Core 和测试的局部修改顺序。文件内容本身不代表源码已落地，也不代表 Unity Play/压力/跨平台测试已通过。第三课代码从已验收的第二课出发，课程宿主的新文件可整体写入；FlyWow Gateway 内部文件由学习者按本课步骤亲自修改，并先运行负向测试确认旧行为，再运行正向测试审计新行为。
+> 重要：主实操正文包含其基线范围内每个受影响文件的最终累计完整代码。本次已按该实操完成帧同步版实施：课程宿主代码与 Unity 客户端已落地，FlyWow Gateway 修改由实施者完成；你可以对照本节代码、实际差异和验证记录审核。源码构建、自动化测试与双进程联调的已通过范围见进度记录；Unity Editor Play、长期压力和未列出的目标平台仍需后续验证。
 
 ## 0. 最终运行效果与课程主线
 
@@ -65,7 +65,7 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 
 ## 1. 帧同步核心合同：帧号、采集、截止、正式执行
 
-一逻辑帧的模拟时间固定为 `50ms`。这个 `50ms` 是模拟输入，不是函数运行的真实 CPU 时间。假定 Tick=50ms，理论逻辑帧 `f` 的模拟时刻是 `f × 50ms`；第 10 帧产生的伤害不会因为服务器忙 100ms 而按 `dt=100ms` 执行。实际墙钟只决定某场 Battle **什么时候处理截止和推进**。
+每个逻辑帧固定代表 1/60 秒（约 16.667ms）的模拟时间。这个步长是模拟合同，不是函数运行的真实 CPU 时间。理论逻辑帧 `f` 的模拟时刻是 `f/60` 秒；第 10 帧产生的伤害不会因为服务器忙 100ms 而按 `dt=100ms` 执行。实际墙钟只决定某场 Battle **什么时候处理截止和推进**。
 
 用户按住右键、按下 J，并不会通过网络发送“当前位置 X=5200、HP=88”；发送的是 `{frame=51, x=1, z=0, skill=1}`，表示请求这些输入在第 51 帧生效。服务端先验证发送者是否是该 Battle 的相应玩家席位，再验证帧号和输入字段范围；合法且在截止前的请求被保存到席位输入槽，不马上推进 Core。
 
@@ -73,7 +73,7 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 
 ### 1.1 输入截止与迟到
 
-假设已确认 `frame=40`，Worker 的第 41 帧正式截止是本地单调时钟 `T41`，第 42 帧是 `T41+50ms`。如果 Skynet Timer 在 `T41+8ms` 才执行，仍不能把 `T41+3ms` 到达的第 41 帧输入当作准时输入：Deadline 是确定的边界，Timer 晚到不会重开历史。网络发送方自己的墙钟不可用于业务截止，因为客户端可伪造且与服务器时钟不同步。
+假设已确认 `frame=40`，Worker 后续帧的截止点由 60Hz 单调时间线计算；10ms Skynet Timer 只检查截止，不改变逻辑帧的 1/60 秒步长。Timer 晚执行不会重开历史；网络发送方自己的墙钟不可用于业务截止，因为客户端可伪造且与服务器时钟不同步。
 
 | 情况 | 服务端规则 | 客户端后续行为 |
 |---|---|---|
@@ -82,11 +82,11 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 | 同席位同帧提交不同内容 | `CONFLICT`；保留首次值 | 等正式帧校正 |
 | `frame <= last_confirmed` 或截止已过 | `LATE` | 不修改已运行的历史 |
 | 超出未来窗口 | `INPUT_WINDOW` | 减少发送提前量或恢复 |
-| 席位缺输入 | 最多保留前两帧的方向，技能始终为 0 | 正式帧以补缺结果为准 |
+| 席位缺输入 | 最多保留前六帧的方向，技能始终为 0 | 正式帧以补缺结果为准 |
 | 不同玩家不同延迟 | 各自独立收集与补缺，整场继续推进 | 同一正式帧必须一致 |
 | Worker 落后 | 固定 Tick 连续补帧，最多追赶指定次数 | 无跳帧，超过预算报告 `OVERLOAD` |
 
-缺输入计数器与上一帧方向**必须按席位保存**。例如玩家上一正式帧向右移动，连续缺输入时最多两帧沿用该方向，第三帧补零；每个缺输入帧的技能均补零。玩家断线时是否立即清空方向由合同规定；本课选择**断线后直接清空旧会话 future pending，之后每 Tick 按缺输入策略推进**，不会无限重复施法。
+缺输入计数器与上一帧方向**必须按席位保存**。例如玩家上一正式帧向右移动，连续缺输入时最多六帧（100ms）沿用该方向，第七帧补零；每个缺输入帧的技能均补零。玩家断线时是否立即清空方向由合同规定；本课选择**断线后直接清空旧会话 future pending，之后每 Tick 按缺输入策略推进**，不会无限重复施法。
 
 ### 1.2 输入序列、席位、帧号的关系
 
@@ -96,7 +96,7 @@ WSL 主编辑源：`~/workspace/skynet-battle-navigation-commercial-learning`，
 
 ### 1.3 输入提前量与客户端体验
 
-默认提前量两帧、预测上限八帧，是供本地实操起步的参数；公网 RTT 大于提前量覆盖区间时会出现大量迟到或超窗。必须实测并记录 40/80/120/200ms RTT 与抖动条件。客户端采用 `frame = last_confirmed + lead` 的窗口机制时，还需要保证帧编号**单调分配且不重复覆盖**；不能每个 Update 都写同一未来帧。服务器的具体起始执行时刻和客户端的输入 lead 在 Join Response 中约定或基于明确的当前 `frame/deadline` 计算。
+默认提前量六帧（100ms）、预测上限二十四帧（400ms），用于覆盖既定输入缓冲时长；公网RTT超过提前量覆盖区间时会出现迟到或超窗。必须实测并记录 40/80/120/200ms RTT 与抖动条件。客户端采用 `frame = last_confirmed + lead` 的窗口机制时，还需要保证帧编号**单调分配且不重复覆盖**；不能每个 Update 都写同一未来帧。服务器的具体起始执行时刻和客户端的输入 lead 在 Join Response 中约定或基于明确的当前 `frame/deadline` 计算。
 
 低延迟动作反馈不是可选优化：玩家本地按键应该立即进入 predicted Core 并显示可撤销的预备效果。正式结果依然由 confirmed Core 决定。若玩家连续八帧无法获得确认，应停止盲目继续预测、展示连接状态并走恢复流程，而非持续把 predicted 状态漂移到未来。
 
@@ -237,6 +237,8 @@ xLua 在这里仅负责加载现有 Lua 配置并转换为 C# POD 记录，不�
 
 **操作：只读现有配置，并在本课步骤中扩展已有记录。不要新建独立 CFG；本课扩展现有 UnitProfile Lua 记录。**
 
+帧率合同：Server Native Core 与 Unity 都只以整数逻辑帧推进；一帧恒为 1/60 秒。单位配置使用 mm/s，Core 按绝对帧号对累计距离做整数差分，因此 3000 mm/s 的单位每帧移动 50 mm，20000 mm/s 的飞行单位每帧移动 333/334 mm，连续移动60帧总计20000mm。单段间歇移动的整数毫米量化误差小于1mm；Core不使用浮点模拟时间。技能冷却、弹丸寿命和 AI 重规划仍以帧计量，并按相同实际时长换算。Skynet 的 10ms Timer 仅轮询截止；Worker 从单调时钟起点按绝对帧号计算截止并向上取整到 10ms，避免逐帧累加舍入误差。Checkpoint V3 的字段仍保存帧号和帧计量状态，布局不变；60Hz 是本课模拟合同，由 Join/Replay 元数据中的 simulation_version=2 与 tick_rate_hz=60 标识，旧 20Hz 客户端或回放必须拒绝。
+
 本课复用仓库已有的配置来源：
 
 - `server/config/unit_profiles.lua` 聚合通用 `UnitProfile`，具体记录位于 `server/config/unit_profiles/`。
@@ -254,7 +256,7 @@ Unity 在本课接入 Lua Runtime 后，加载同一套 Lua 配置模块。发�
 ```lua
 ---@class UnitMovementProfile
 ---@field mode string "ground"：地面移动；"air"：单位自己控制高度的飞行移动。
----@field speed_mm_per_tick integer 单个移动轴每个逻辑Tick的基础位移，单位毫米；本课Tick为50ms，多轴输入会确定性归一化。
+---@field speed_mm_per_sec integer 单个移动轴的速度，单位毫米/秒；每帧按绝对逻辑帧号做整数累计差分换算位移；连续移动时长期平均速度精确，单段间歇移动的量化误差小于1mm。多轴输入会确定性归一化。
 
 ---@class UnitFlightProfile
 ---@field min_air_clearance_mm integer 单位高于当前位置地表的最小间隙，单位毫米。
@@ -265,7 +267,7 @@ Unity 在本课接入 Lua Runtime 后，加载同一套 Lua 配置模块。发�
 
 ---@class UnitProfile
 ---@field unit_id integer 静态UnitProfile配置查询键；Battle实例使用独立的instance_id。
----@field movement UnitMovementProfile 移动模式与每Tick移动距离。
+---@field movement UnitMovementProfile 移动模式与毫米/秒速度。
 ---@field max_hp integer 战斗开始时的初始HP及允许达到的最大HP。
 ---@field flight UnitFlightProfile? 只供空中单位填写；地面单位省略。
 ---@field combat UnitCombatProfile 战斗基础属性。
@@ -294,7 +296,7 @@ return
     movement =
     {
         mode              = "ground", -- 地面单位按地图高度移动，并使用对应NavigationProfile。
-        speed_mm_per_tick = 150,       -- 单轴每个50ms逻辑Tick的基础位移，毫米。
+        speed_mm_per_sec = 3000,      -- 单轴速度，毫米/秒；每个60Hz Tick约50mm。
     },
     max_hp = 100, -- 初始HP和最大HP。
     combat =
@@ -314,7 +316,7 @@ return
     movement =
     {
         mode              = "air", -- 空中移动，不申请地面NavigationProfile。
-        speed_mm_per_tick = 1000,   -- 单轴每个50ms逻辑Tick的基础位移，毫米。
+        speed_mm_per_sec = 20000,  -- 单轴速度，毫米/秒；每个60Hz Tick约333/334mm。
     },
     max_hp = 100, -- 初始HP和最大HP。
     flight =
@@ -544,8 +546,8 @@ endif()
 
 namespace lesson_frame
 {
-constexpr std::uint32_t kTickMs    = 50;   // 固定模拟时间；不随真实调度时间改变。
-constexpr std::uint32_t kMaxFrames = 3600; // 180秒；限制每场Replay长度。
+constexpr std::uint32_t kTickRateHz = 60; // 固定逻辑频率；每帧推进1/60秒，不读取墙钟delta。
+constexpr std::uint32_t kMaxFrames = 10800; // 180秒；60 Tick/s下的单场Replay帧数。
 constexpr std::uint32_t kMaxUnits  = 16;   // 当前课例单位/AI数量上限。
 constexpr std::uint32_t kMaxBolts  = 128;  // 当前课例弹丸上限。
 constexpr std::uint32_t kMaxRoutes = 16;   // 最多为每个单位保持一条路径。
@@ -564,7 +566,7 @@ struct UnitProfile
 {
     std::uint32_t                        unit_id                 = 0;  ///< 静态配置键；不是Battle实例ID。
     std::uint32_t                        movement_mode           = 0;  ///< 移动模式：1地面，2空中；由Lua配置加载。
-    std::uint32_t                        move_stride_mm_per_tick = 0;  ///< 每Tick基础移动量，单位mm。
+    std::uint32_t                        move_speed_mm_per_sec = 0;  ///< 单轴速度，单位mm/s；每帧按固定频率累计换算。
     std::int32_t                         max_hp                  = 0;  ///< 静态最大HP；当前值存入Unit。
     std::uint32_t                        min_air_clearance_mm    = 0;  ///< 空中单位高于当前位置地表的最小间隙，单位mm。
     std::uint32_t                        max_air_altitude_mm     = 0;  ///< 空中单位高于当前位置地表的最大高度，单位mm。
@@ -715,7 +717,7 @@ struct FsUnitProfile
 {
     std::uint32_t unit_id;                  ///< 静态UnitProfile配置查询键。
     std::uint32_t movement_mode;            ///< 移动模式：1地面，2空中。
-    std::uint32_t move_stride_mm_per_tick;  ///< 每逻辑Tick基础位移，单位mm。
+    std::uint32_t move_speed_mm_per_sec;  ///< 单轴速度，单位mm/s。
     std::int32_t  max_hp;                   ///< 单位静态最大HP。
     std::uint32_t min_air_clearance_mm;     ///< 空中单位离当前地表的最小间隙，单位mm。
     std::uint32_t max_air_altitude_mm;      ///< 空中单位相对当前地表的最高高度，单位mm。
@@ -814,19 +816,26 @@ namespace lesson_frame
 namespace
 {
 constexpr std::int64_t  kPositionLimit = 500000000;
-constexpr std::uint32_t kRepathDelay   = 10; // 每10帧最多做一次正常跟随重规划。
-constexpr std::uint32_t kBlockedRetry  = 4;  // 已阻挡路线最早4帧后再次规划。
+constexpr std::uint32_t kRepathDelay   = 30; // 500ms重规划间隔；60 Tick/s下为30帧。
+constexpr std::uint32_t kBlockedRetry  = 12; // 200ms阻挡重试间隔；60 Tick/s下为12帧。
 
-std::int64_t strideForAxes(std::uint32_t base_stride, std::int32_t axis_count)
+std::int64_t strideForAxes(std::uint32_t speed_mm_per_sec, std::int32_t axis_count,
+                           std::uint32_t zero_based_frame)
 {
     if (axis_count == 0)
         return 0;
-    if (axis_count == 1)
-        return base_stride;
-    // 707/577 是 1/sqrt(2) 与 1/sqrt(3) 的千分比近似，使等幅多轴移动的合成距离接近基础步长。
-    // 例如基础步长 1000 mm 时，两轴各约 707 mm，三轴各约 577 mm；+500 后按毫米四舍五入。
-    const std::uint32_t scale_permille = axis_count == 2 ? 707 : 577;
-    return (static_cast<std::uint64_t>(base_stride) * scale_permille + 500) / 1000;
+    // 对角方向用整数千分比近似单位向量，避免多轴合成速度变快。
+    const std::uint32_t scale_permille =
+        axis_count == 1 ? 1000 : axis_count == 2 ? 707 : 577;
+    const std::uint64_t denominator = kTickRateHz * 1000ULL;
+    const std::uint64_t scaled_speed =
+        static_cast<std::uint64_t>(speed_mm_per_sec) * scale_permille;
+    // 用累计距离之差分配每帧整数毫米，避免每帧独立取整造成长期速度漂移。
+    const std::uint64_t before =
+        static_cast<std::uint64_t>(zero_based_frame) * scaled_speed / denominator;
+    const std::uint64_t after =
+        (static_cast<std::uint64_t>(zero_based_frame) + 1) * scaled_speed / denominator;
+    return static_cast<std::int64_t>(after - before);
 }
 
 std::int32_t sign(std::int64_t n)
@@ -1058,7 +1067,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
     if (x == 0 && z == 0)
         return false;
     const auto  &unit_profile = profileFor(profiles_->units, unit.unit_profile_id);
-    const auto   stride = strideForAxes(unit_profile.move_stride_mm_per_tick, (x != 0) + (z != 0));
+    const auto   stride = strideForAxes(unit_profile.move_speed_mm_per_sec, (x != 0) + (z != 0), state_.frame - 1);
     const auto   target_x = unit.x + x * stride;
     const auto   target_z = unit.z + z * stride;
     std::int64_t target_y = unit.y;
@@ -1080,7 +1089,7 @@ void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
 {
     const auto  &profile  = profileFor(profiles_->units, unit.unit_profile_id);
     const auto   axes     = (x != 0) + (z != 0) + (y != 0);
-    const auto   stride   = strideForAxes(profile.move_stride_mm_per_tick, axes);
+    const auto   stride   = strideForAxes(profile.move_speed_mm_per_sec, axes, state_.frame - 1);
     std::int64_t result_y = unit.y;
     const auto   new_y    = unit.y + y * stride;
     if (sampleAir(unit, unit.x + x * stride, unit.z + z * stride, new_y, result_y))
@@ -1140,7 +1149,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     const auto                              &navigation = profile.navigation;
     const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
     const auto result = flywow_navigation::GridPathfinder::AdvancePath(
-        *context_, agent, path, cursor, position(unit), profile.move_stride_mm_per_tick, policy());
+        *context_, agent, path, cursor, position(unit), strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1), policy());
     if (!result.ok())
         throw std::runtime_error("NAV_ADVANCE_FAILED");
     unit.x            = result.value.position.x_mm;
@@ -1180,7 +1189,8 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
 
     // 仅当高度误差至少达到一个基础 Tick 步长时才输出升降意图；更小误差会被置为 0。
     // moveAir 再按本 Tick 同时活动的轴数计算每轴实际位移。
-    const std::int32_t y = absolute(desired_y - unit.y) >= profile.move_stride_mm_per_tick
+    const std::int32_t y = absolute(desired_y - unit.y) >=
+            strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1)
                                ? sign(desired_y - unit.y)
                                : 0;
 
@@ -1215,8 +1225,8 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
         damage[index] += skill.damage;
     if (state_.bolts.size() == kMaxBolts)
         return; // 纯表现弹丸满槽不撤销已结算伤害。
-    // 60 是当前 Core 的弹丸逻辑寿命；固定 50ms Tick 下最多存活 3 秒，超时不再命中。
-    state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 60,
+    // 弹丸逻辑寿命固定为3秒，即180个60Hz逻辑帧；超时不再命中。
+    state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 180,
                             skill.effect == 2 ? 0 : skill.damage, unit.x, unit.y, unit.z});
 }
 
@@ -1232,16 +1242,17 @@ void Engine::moveBolts(std::vector<std::int32_t> &damage)
         if (it == state_.units.end() || bolt.expires <= state_.frame)
             continue;
         const auto dx = it->x - bolt.x, dy = it->y - bolt.y, dz = it->z - bolt.z;
-        // 每帧各轴按最大轴差等比例推进，最大单轴位移为 400 mm；到达判定也使用同一最大轴差。
+        // 弹丸速度为8000 mm/s；本帧位移使用与单位相同的整数帧号差分算法，到达判定按本帧位移检查。
         const auto span = std::max({absolute(dx), absolute(dy), absolute(dz)});
-        if (span <= 400)
+        const auto bolt_stride = strideForAxes(8000, 1, state_.frame - 1);
+        if (span <= bolt_stride)
         {
             damage[static_cast<std::size_t>(it - state_.units.begin())] += bolt.damage;
             continue;
         }
-        bolt.x += dx * 400 / span;
-        bolt.y += dy * 400 / span;
-        bolt.z += dz * 400 / span;
+        bolt.x += dx * bolt_stride / span;
+        bolt.y += dy * bolt_stride / span;
+        bolt.z += dz * bolt_stride / span;
         next.push_back(bolt);
     }
     state_.bolts.swap(next);
@@ -1504,7 +1515,7 @@ void Engine::restore(const std::string &bytes)
         };
         if (!bolt.id || bolt.id >= candidate.next_bolt || !unitExists(bolt.caster_instance_id) ||
             !unitExists(bolt.target_instance_id) || (bolt.damage != 0 && bolt.damage != 20) ||
-            bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 ||
+            bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 180 ||
             (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
             throw std::runtime_error("STATE_BOLT");
         candidate.bolts.push_back(bolt);
@@ -1599,15 +1610,15 @@ extern "C" LESSON_FRAME_API int fs_load_profiles(
             const auto &source = units[i];
             if (source.unit_id == 0 ||
                 (source.movement_mode != 1 && source.movement_mode != 2) ||
-                source.move_stride_mm_per_tick == 0 ||
-                source.move_stride_mm_per_tick > INT32_MAX || source.max_hp <= 0 ||
+                source.move_speed_mm_per_sec == 0 ||
+                source.move_speed_mm_per_sec > INT32_MAX || source.max_hp <= 0 ||
                 (i > 0 && units[i - 1].unit_id >= source.unit_id))
                 return 0;
 
             UnitProfile profile{};
             profile.unit_id = source.unit_id;
             profile.movement_mode = source.movement_mode;
-            profile.move_stride_mm_per_tick = source.move_stride_mm_per_tick;
+            profile.move_speed_mm_per_sec = source.move_speed_mm_per_sec;
             profile.max_hp = source.max_hp;
             profile.min_air_clearance_mm = source.min_air_clearance_mm;
             profile.max_air_altitude_mm = source.max_air_altitude_mm;
@@ -1808,7 +1819,7 @@ bool readUnitProfiles(const LuaTable &rows, std::vector<FsUnitProfile> &output)
             !row.readValue("max_hp", profile.max_hp) ||
             !row.readTable("movement", movement) ||
             !movement.readValue("mode", mode) ||
-            !movement.readValue("speed_mm_per_tick", profile.move_stride_mm_per_tick))
+            !movement.readValue("speed_mm_per_sec", profile.move_speed_mm_per_sec))
             return false;
         if (mode == "ground")
             profile.movement_mode = 1;
@@ -2137,7 +2148,8 @@ int main(int argc, char **argv)
         second.stepFrame(frame, inputs, 1);
         assert(first.save() == second.save());
         has_route |= !first.state().routes.empty();
-        std::cout << "GOLDEN " << frame << " " << hashBytes(first.save()) << "\n";
+        std::cout << "GOLDEN " << frame << " " << hashBytes(first.save()) << "
+";
     }
     const auto saved = first.save();
     try
@@ -2160,7 +2172,8 @@ int main(int argc, char **argv)
     assert(first.save() == saved);
     first.restore(initial);
     assert(first.save() == initial);
-    std::cout << "FRAME_NATIVE_OK route_seen=" << has_route << "\n";
+    std::cout << "FRAME_NATIVE_OK route_seen=" << has_route << "
+";
     return 0;
 }
 ```
@@ -2187,25 +2200,27 @@ if digest != manifest["content_sha256"]:
 
 target = root / "server/config/frame_sync_asset.lua"
 target.write_text(
-    "--- 构建生成的已验证地图身份；不要手改。\n"
-    'return { map_id = %d, map_version = %d, map_hash = "%s" }\n' %
+    "--- 构建生成的已验证地图身份；不要手改。
+"
+    'return { map_id = %d, map_version = %d, map_hash = "%s" }
+' %
     (manifest["map_id"], manifest["map_version"], digest),
     encoding="utf-8",
 )
 print("FRAME_ASSET_OK", digest)
 ```
 
-### 5.7 由你亲自修改 Gateway 定向主动消息，并先审计
+### 5.7 Gateway 定向主动消息：本次已实施，按合同审计
 
 #### 5.7.1 当前拒绝的具体含义
 
-`connection_id>0` 指定一个已经建立的逻辑连接；`request_id=0` 表示主动消息，不属于某个客户端请求的响应。这两个字段并不矛盾。当前 `flywow_gateway.lua` 的 `deliver_data()` 把这个组合当成非法；因此业务虽然产生正式FramePush，却发不到特定玩家。
+`connection_id>0` 指定一个已经建立的逻辑连接；`request_id=0` 表示主动消息，不属于某个客户端请求的响应。这两个字段并不矛盾。实施前基线中的 `flywow_gateway.lua` 的 `deliver_data()` 把这个组合当成非法；因此业务虽然产生正式FramePush，却发不到特定玩家。
 
 只允许 `connection_id=0/request_id=0` 的广播不能作为替代：广播会把某场战斗输入发给所有连接。也不能伪造一个旧非零request_id，把主动帧塞到控制请求的等待表。
 
-#### 5.7.2 局部修改 FlyWow Runtime
+#### 5.7.2 本次局部修改 FlyWow Runtime
 
-**操作：局部修改。WSL 子模块文件：**
+**本次已实施。WSL 子模块文件：**
 
 `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`
 
@@ -2583,9 +2598,9 @@ assert(#e.writes == 3, "unknown target must be dropped")
 print("GATEWAY_ASYNC_UNIT_OK")
 ```
 
-#### 5.7.4 先证明测试能抓住旧错误
+#### 5.7.4 验证旧行为与修复行为
 
-先放入测试，**暂不删除旧拒绝条件**，从Server工作目录执行：
+实施时先以旧拒绝条件运行测试，确认定向主动消息断言失败；应用局部修改后再次执行，确认测试通过。复查时可运行以下命令：
 
 ```bash
 ./third_party/skynet/3rd/lua/lua \
@@ -2593,7 +2608,7 @@ print("GATEWAY_ASYNC_UNIT_OK")
   third_party/skynet-flywow
 ```
 
-预期在 `target push must not broadcast` 断言失败。再按3.2删除条件，重新执行，预期 `GATEWAY_ASYNC_UNIT_OK`。
+修复后预期输出 `GATEWAY_ASYNC_UNIT_OK`。本次已完成旧行为负向验证和修复后正向验证；测试覆盖定向发送、广播隔离、epoch/ready/关闭/未知目标边界。
 
 审计时逐条回答：指定连接是否只写对应fd？出站request_id是否仍为0？旧epoch、未ready、已关闭、不存在的目标是否直接丢弃？未知目标是否错误退化为广播？非零request_id广播是否仍拒绝？已有请求响应是否仍通过？源码是否保留编码失败不误关健康连接的行为？
 
@@ -2679,7 +2694,7 @@ message BattleEvent {
   uint32 killer_id = 7;
   uint32 damage = 8;
   uint32 target_hp = 9;
-  uint32 speed_mm_per_sec = 10;
+  uint32 speed_mm_per_tick = 10;
   string reason = 11;
   string result = 12;
   WorldPosition position = 13;
@@ -2739,7 +2754,7 @@ message FrameJoinResponse {
   string map_hash = 8;      // 发布BMAP SHA-256；不包含rules源码Hash。
   uint32 frame = 9;
   bytes checkpoint = 10;   // 创建或恢复时的Checkpoint V3。
-  uint32 tick_ms = 11;
+  uint32 tick_rate_hz = 11;
   uint32 future_window = 12;
   uint32 input_lead = 13;
   uint32 simulation_version = 14; // 服务端模拟版本；连接和回放元数据校验。
@@ -2773,7 +2788,7 @@ message FrameReplayResponse {
   FrameJoinResponse initial = 4;   // 首次提供初始状态；不包括Token。
 }
 message FrameReplay {
-  uint32 format_version = 1; // V1文件封装；Checkpoint内容为V2。
+  uint32 format_version = 1; // V1文件封装；Checkpoint内容为V3。
   FrameJoinResponse initial = 2;
   repeated FrameRecord records = 3;
 }
@@ -2793,21 +2808,22 @@ return
     unit_profiles   = require "config.unit_profiles",
     navigation_profiles = require "config.navigation_profiles",
     skills = {
-        { skill_id = 1, range_mm = 900, cooldown_ticks = 12, damage = 14, target_mask = 1, effect = 1 },
-        { skill_id = 2, range_mm = 9000, cooldown_ticks = 24, damage = 12, target_mask = 3, effect = 2 },
-        { skill_id = 3, range_mm = 9000, cooldown_ticks = 24, damage = 20, target_mask = 3, effect = 3 },
+        { skill_id = 1, range_mm = 900, cooldown_ticks = 36, damage = 14, target_mask = 1, effect = 1 }, -- 冷却600ms。
+        { skill_id = 2, range_mm = 9000, cooldown_ticks = 72, damage = 12, target_mask = 3, effect = 2 }, -- 冷却1200ms。
+        { skill_id = 3, range_mm = 9000, cooldown_ticks = 72, damage = 20, target_mask = 3, effect = 3 }, -- 冷却1200ms。
     },
     manifest_path   = "../shared/navigation/battle_1001/battle_1001.manifest.json",
     workers         = 4,    -- 长期Worker Service数，不等于OS线程数。
     max_battles     = 128,  -- 每Worker实例上限；须根据真实负载测量。
-    simulation_version = 1, -- 规则不兼容时递增；不维护源码Hash发布系统。
+    simulation_version = 2, -- 规则不兼容时递增；不维护源码Hash发布系统。
     seats           = 1,    -- 唯一玩家席位；敌人由确定性AI推进。
-    tick_cs         = 5,    -- Skynet时间单位10ms；5cs = 50ms。
-    input_lead      = 2,    -- 初始输入提前两帧；按网络实测调整。
-    future_window   = 8,    -- 每席位未来允许缓存最多8帧。
+    tick_rate_hz    = 60,   -- Core固定逻辑频率；不以Skynet Timer间隔定义模拟步长。
+    scheduler_poll_cs = 1, -- Skynet时间单位10ms；仅轮询截止，不代表逻辑Tick。
+    input_lead      = 6,    -- 初始输入提前6帧（100ms）；按网络实测调整。
+    future_window   = 24,    -- 每席位未来允许缓存最多24帧（400ms）。
     input_batch     = 8,    -- 单次输入消息最多8条。
     max_catchup     = 4,    -- 每次heartbeat最多补4帧，仍落后则OVERLOAD。
-    max_frames      = 3600, -- 与Native kMaxFrames一致。
+    max_frames      = 10800, -- 与Native kMaxFrames一致。
     replay_page     = 128,  -- 页面还须受65535字节编码大小约束。
     retention_cs    = 3000, -- 结束或无人在线后30秒释放。
     gateway_node    = "frame_gateway",
@@ -2832,7 +2848,7 @@ local native = require "lesson_frame_native"
 local M = {}
 
 local MAX_SEATS = 1
-local MAX_MISSING_HOLD = 2
+local MAX_MISSING_HOLD = 6 -- 100ms；连续缺输入后改为中立方向。
 
 ---@class FrameInput
 ---@field frame integer 目标权威帧号；由Server验证Deadline。
@@ -2953,7 +2969,7 @@ function M.accept(runtime, seat_id, input)
     return "OK"
 end
 
---- 提取一帧全部席位输入，缺输入方向最多保持两帧，技能立即清零。
+--- 提取一帧全部席位输入，缺输入方向最多保持六帧（100ms），技能立即清零。
 --- 此函数不修改runtime，避免Native执行失败时last_input和missing先变更。
 local function prepare_frame(runtime, frame)
     local slot = runtime.pending[frame] or {}
@@ -3136,7 +3152,7 @@ local function join_result(battle, seat_id, code, checkpoint)
         map_hash      = asset.map_hash,
         frame         = battle.core and battle.core.frame or 0,
         checkpoint    = checkpoint or "",
-        tick_ms       = 50,
+        tick_rate_hz       = 60,
         future_window = conf.future_window,
         input_lead    = conf.input_lead,
         simulation_version = conf.simulation_version,
@@ -3153,6 +3169,15 @@ local function add_seat(battle, seat_id, session, credential)
                     connection_id = session.connection_id },
         online = true,
     }
+end
+
+local function frame_offset_cs(frame_count)
+    -- Skynet时间精度为10ms；向上取整映射截止点，不改变Core的1/60秒逻辑步长。
+    return (frame_count * 100 + conf.tick_rate_hz - 1) // conf.tick_rate_hz
+end
+
+local function frame_deadline(battle, frame)
+    return battle.started_at + frame_offset_cs(conf.input_lead + frame - 1)
 end
 
 local function create(args)
@@ -3177,8 +3202,10 @@ local function create(args)
         status = "RUNNING",
         core = runtime,
         seats = {},
-        due = skynet.now() + conf.tick_cs * conf.input_lead,
+        started_at = skynet.now(),
+        due = 0,
     }
+    battle.due = frame_deadline(battle, 1)
     add_seat(battle, 1, args.session, credential)
     battles[battle.id] = battle
     order[#order + 1] = battle.id
@@ -3229,7 +3256,7 @@ end
 local function accept_input(battle, seat_id, input)
     local frame = input.frame
     if math.type(frame) == "integer" and frame > battle.core.frame then
-        local deadline = battle.due + (frame - battle.core.frame - 1) * conf.tick_cs
+        local deadline = frame_deadline(battle, frame)
         if skynet.now() >= deadline then return "LATE" end
     end
     return core.accept(battle.core, seat_id, input)
@@ -3339,7 +3366,7 @@ local function advance(battle, now)
             return
         end
         catchup = catchup + 1
-        battle.due = battle.due + conf.tick_cs
+        battle.due = frame_deadline(battle, battle.core.frame + 1)
         push_all(battle, { records = { record }, code = "OK" })
         if battle.core.winner ~= 0 then
             battle.status = "FINISHED"
@@ -3373,15 +3400,16 @@ local function heartbeat()
         end
     end
     order = surviving
-    skynet.timeout(conf.tick_cs, heartbeat)
+    skynet.timeout(conf.scheduler_poll_cs, heartbeat)
 end
 
 skynet.start(function()
     skynet.dispatch("lua", function(session, source, command, args)
         if command == "configure" then
+            assert(conf.tick_rate_hz == 60 and conf.scheduler_poll_cs == 1)
             assert(dispatcher == nil and args.dispatcher)
             dispatcher = args.dispatcher
-            skynet.timeout(conf.tick_cs, heartbeat)
+            skynet.timeout(conf.scheduler_poll_cs, heartbeat)
             skynet.retpack(true)
             return
         end
@@ -3761,7 +3789,7 @@ assert(native.preload("../shared/navigation/battle_1001/battle_1001.bmap",
                       require "config.unit_profiles",
                       require "config.navigation_profiles",
                        require "config.frame_sync".skills))
-local runtime = assert(core.create({ map_id = 1001, window = 8, max_frames = 3600,
+local runtime = assert(core.create({ map_id = 1001, window = 24, max_frames = 10800,
                                      seat_unit_instance_ids = { 1001 } }))
 local first = { frame = 1, x = 1, z = 0, skill = 0 }
 assert(core.accept(runtime, 1, first) == "OK")
@@ -4064,7 +4092,7 @@ namespace BattleNavigation.FrameSync
                 {
                     UnitId = row.Get<string, uint>("unit_id"),
                     MovementMode = mode == "ground" ? 1u : mode == "air" ? 2u : 0u,
-                    MoveStrideMmPerTick = movement.Get<string, uint>("speed_mm_per_tick"),
+                    MoveSpeedMmPerSec = movement.Get<string, uint>("speed_mm_per_sec"),
                     MaxHp = row.Get<string, int>("max_hp"),
                 };
                 if (result.MovementMode == 2)
@@ -4076,7 +4104,7 @@ namespace BattleNavigation.FrameSync
                     }
                 }
                 if (result.UnitId == 0 || result.MovementMode == 0 ||
-                    result.MoveStrideMmPerTick == 0 || result.MaxHp <= 0)
+                    result.MoveSpeedMmPerSec == 0 || result.MaxHp <= 0)
                     throw new InvalidDataException("UNIT_PROFILE");
                 return result;
             }
@@ -4189,7 +4217,7 @@ namespace BattleNavigation.FrameSync
     {
         public uint UnitId;
         public uint MovementMode;
-        public uint MoveStrideMmPerTick;
+        public uint MoveSpeedMmPerSec;
         public int MaxHp;
         public uint MinAirClearanceMm;
         public uint MaxAirAltitudeMm;
@@ -4309,7 +4337,7 @@ namespace BattleNavigation.FrameSync
             return handle;
         }
 
-        /// <summary>同步推进一个50ms逻辑帧；唯一玩家输入由Core验证，AI状态由Core决定。</summary>
+        /// <summary>同步推进一个1/60秒逻辑帧；唯一玩家输入由Core验证，AI状态由Core决定。</summary>
         public void StepFrame(uint frame, FsPlayerInput[] players)
         {
             if (players == null || players.Length != 1 ||
@@ -4812,10 +4840,10 @@ namespace BattleNavigation.FrameSync
         public uint JoinBattleId = 0;  // 0创建并立即开始单人Battle；非0请求连接已有Battle。
         public string ReplayPath = ""; // 非空时读取离线回放，不连接Server。
 
-        private const uint SimulationVersion = 1; // 与Server配置一致；不兼容玩法合同必须递增。
-        private const int MaxPredictionFrames = 8;
-        private const int LeadFrames = 2;
-        private const float TickSeconds = 0.05f;
+        private const uint SimulationVersion = 2; // 与Server配置一致；不兼容玩法合同必须递增。
+        private const int MaxPredictionFrames = 24;
+        private const int LeadFrames = 6;
+        private const double TickSeconds = 1.0 / 60.0;
 
         private FrameConnection connection;
         private FrameNative confirmed;
@@ -4837,7 +4865,7 @@ namespace BattleNavigation.FrameSync
         private uint winner;
         private int rollback_count;
         private int queued_skill;
-        private float clock_accumulator;
+        private double clock_accumulator;
         private float preview_until;
         private string status = "initializing";
         private bool ready;
@@ -4866,8 +4894,8 @@ namespace BattleNavigation.FrameSync
                     }
                     replay = FrameReplay.Parser.ParseFrom(File.ReadAllBytes(ReplayPath));
                     if (replay.FormatVersion != 1 || replay.Initial == null ||
-                        replay.Initial.SimulationVersion != SimulationVersion ||
-                        replay.Records.Count == 0 || replay.Records.Count > 3600)
+                        replay.Initial.SimulationVersion != SimulationVersion || replay.Initial.TickRateHz != 60 ||
+                        replay.Records.Count == 0 || replay.Records.Count > 10800)
                     {
                         throw new InvalidDataException("REPLAY_FORMAT");
                     }
@@ -4929,7 +4957,7 @@ namespace BattleNavigation.FrameSync
                 throw new IOException(response?.Code ?? "EMPTY_SESSION");
             }
             if (response.SeatId != 1 || response.SimulationVersion != SimulationVersion ||
-                response.FutureWindow != MaxPredictionFrames || response.TickMs != 50)
+                response.FutureWindow != MaxPredictionFrames || response.TickRateHz != 60)
             {
                 throw new InvalidDataException("FRAME_CONTRACT");
             }
@@ -4980,7 +5008,7 @@ namespace BattleNavigation.FrameSync
             ready = true;
             status = "running";
 
-            // 离线Replay必须严格从输入日志下一帧开始，不能多预测两帧。
+            // 离线Replay必须严格从输入日志下一帧开始，不应用在线输入提前量。
             if (replay == null && winner == 0)
             {
                 for (int i = 0; i < LeadFrames; ++i)
@@ -5297,7 +5325,7 @@ namespace BattleNavigation.FrameSync
                     file.Records.Add(page.Records);
                     offset += (uint)page.Records.Count;
                     total = page.Total;
-                    if (total > 3600 || (page.Records.Count == 0 && offset < total))
+                    if (total > 10800 || (page.Records.Count == 0 && offset < total))
                     {
                         throw new InvalidDataException("REPLAY_PAGE");
                     }
@@ -5620,7 +5648,8 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
                                      absolute(target.z - unit.z));
     const auto desired_y = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
     const auto vertical_intent =
-        absolute(desired_y - unit.y) >= profile.move_stride_mm_per_tick
+        absolute(desired_y - unit.y) >=
+            strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1)
             ? sign(desired_y - unit.y)
             : 0;
     const auto handle = flywow_navigation::NavigationAgentHandle{unit.instance_id};
@@ -5641,7 +5670,7 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
     const auto z = sign(next.z_mm - unit.z);
     const auto axes = static_cast<std::uint32_t>((x != 0) + (z != 0) +
                                                   (vertical_intent != 0));
-    const auto stride = strideForAxes(profile.move_stride_mm_per_tick, axes);
+    const auto stride = strideForAxes(profile.move_speed_mm_per_sec, axes, state_.frame - 1);
     const flywow_navigation::WorldPosition destination{
         unit.x + x * stride,
         unit.y + vertical_intent * stride,
@@ -5698,7 +5727,7 @@ test -f shared/protocol/navigation_query.proto
 
 ```bash
 
-# 按上文专节亲自修改FlyWow Gateway，并先跑旧行为负向测试，再跑新行为正向测试
+# Gateway改动已在本轮实施；可按5.7节复核源码与测试
 
 # Proto唯一源自动生成：Server descriptor 和 Gateway Registry
 ./server/protocol/build_server_descriptor.sh
@@ -5774,7 +5803,7 @@ ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failur
 
 将生成的`frame_core.dll`放入Unity工程适配的`Assets/Plugins/x86_64/`，确保`.meta`导入平台只包含Windows x64；不要复制FlyWow CPP到Unity重新编译。把同一个已发布候选目录下的 `map.bmap` 与 `map.airnav` 一起放入 `Assets/StreamingAssets/navigation/battle_1001/map-1001-v1-<packageHash>/`，并让 `client_airnav_asset` 指向其中的 `map.airnav`；将 server/config 中本课使用的 .lua 配置模块按原目录结构放入 Assets/StreamingAssets/config。BMAP-only 兼容运行时，空中资产路径保持空串。其余平台不在本课验证范围内。
 
-在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即开始50ms固定模拟。
+在团结引擎中加载现有`Battle_1001`场景，在一个GameObject上挂接完整的`FrameBattleController.cs`。运行实例A时`JoinBattleId=0`，它显示创建的Battle ID并等待实例B；运行另一个客户端实例B，将Inspector中的`JoinBattleId`设为A显示的ID。创建者在Join响应中收到初始Checkpoint后立即按60 Tick/s固定模拟。
 
 检查Player 1001执行WASD、J/K/L，AI会追击；本地移动无需等网络RTT；确认HP与逻辑弹丸由正式输入派生。模拟网络抖动后观察confirmed/predicted和回滚次数，服务器控制的敌方单位由同一模拟规则推进，并在正式帧到达后收敛。
 
@@ -5821,7 +5850,7 @@ ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failur
 - [ ] 断线重连/迟到/阻挡/重规划/路径Checkpoint/回放全部逐项检查。
 - [ ] Golden逐帧跨平台一致，性能报告记录环境和实测数据。
 
-**验证记录：** 本文在本轮完成了文档结构与关键合同静态检查。文档中的代码在本轮未实际编译，也未启动仓库Server或Unity；重写后的版本尚未运行验证，不能声称测试通过。遇到固定子模块源码与文档不匹配时必须报告具体接口差异，不猜测“已可运行”。
+**本次实施验证记录：** Linux Release Native/Binding 构建成功；Native CTest 4/4 通过；Lua Binding、Runtime 及 Lua 语法检查通过；Gateway 异步单测、Gateway 注册表测试通过；Server descriptor、Unity C#协议生成及配置准备脚本通过；真实双 Skynet 进程与单客户端 TCP 联调通过。Windows Unity 客户端文件和 xLua 已安装，Unity Editor 未安装在当前环境，因此没有完成 Editor 编译/Play；静态 AIRN 配对资产、长期容量压力和其它目标平台也未验证。逐项命令、范围和限制记录在 codex/LESSON_03_FRAME_SYNC_PROGRESS.md。
 
 
 ## 9. 相对旧版教程的修改点
@@ -5832,7 +5861,7 @@ ctest --test-dir ./server/build/frame_sync_windows -C Release --output-on-failur
 - 把场景收敛为一名玩家控制地面单位 `1001`，服务端控制地面敌人与飞行敌人；删除两名玩家共同对抗AI的组队玩法。玩家输入数组、Runtime席位、Unity预测输入、Native验证、测试和验收同步改为单席位。
 - FlyWow Navigation 从课程直接枚举并编译其内部 `.cpp`，改为链接公开目标 `FlyWow::Navigation`；真实静态库目标 `flywow_navigation_core` 及其源文件由 FlyWow 自己维护。
 - 将可选 AIRN 从概念性补充提升为帧同步导航的第 4 教学阶段和第 5.24 节实操，实际完成静态资产配对、空中 Profile、Battle-local 动态 AABB、固定高度寻路、变高移动和 Checkpoint 派生重建。
-- 移除自动改写 FlyWow Gateway 的 `自动 Gateway 修改脚本`。Gateway 定向主动推送仍是本课需要学习和审计的改动，由学习者按专节亲自修改，并通过旧行为负向测试和新行为正向测试验证。
+- 移除自动改写 FlyWow Gateway 的自动 Gateway 修改脚本。本次实施已按专节局部修改 Gateway 的定向主动消息校验，并通过旧行为负向测试和修复后正向测试；课程保留完整原因、代码边界和审计问题，供学习者审核。
 - 保留导航路径缓存、按条件重规划、Cursor随Checkpoint恢复的设计；不将每Tick重新A*描述为目标实现。
 - 增加整数simulation_version合同，创建战斗时匹配simulation_version，不匹配就拒绝；恢复和回放沿用已记录的版本信息；不加入规则源码Hash、规则发布平台或进行中战斗热替换系统。地图身份、协议合同、Checkpoint格式和逐帧诊断Hash仍按各自用途保留。
-- 新文档的代码和步骤没有在本轮实际运行。旧版或重改稿中的既有验证记录不代表本版通过；学习时按阶段执行并记录实际结果。
+- 本轮按当前文档完成了完整实施和适用验证；验证通过项及未验证边界以本版进度记录为准。学习者审核源码时仍应自行复现所需验证，不把未验证的 Editor Play、压力测试或目标平台写成已通过。

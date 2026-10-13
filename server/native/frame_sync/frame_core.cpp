@@ -24,19 +24,26 @@ namespace lesson_frame
 namespace
 {
 constexpr std::int64_t  kPositionLimit = 500000000;
-constexpr std::uint32_t kRepathDelay   = 10; // 每10帧最多做一次正常跟随重规划。
-constexpr std::uint32_t kBlockedRetry  = 4;  // 已阻挡路线最早4帧后再次规划。
+constexpr std::uint32_t kRepathDelay   = 30; // 500ms重规划间隔；60 Tick/s下为30帧。
+constexpr std::uint32_t kBlockedRetry  = 12; // 200ms阻挡重试间隔；60 Tick/s下为12帧。
 
-std::int64_t strideForAxes(std::uint32_t base_stride, std::int32_t axis_count)
+std::int64_t strideForAxes(std::uint32_t speed_mm_per_sec, std::int32_t axis_count,
+                           std::uint32_t zero_based_frame)
 {
     if (axis_count == 0)
         return 0;
-    if (axis_count == 1)
-        return base_stride;
-    // 707/577 是 1/sqrt(2) 与 1/sqrt(3) 的千分比近似，使等幅多轴移动的合成距离接近基础步长。
-    // 例如基础步长 1000 mm 时，两轴各约 707 mm，三轴各约 577 mm；+500 后按毫米四舍五入。
-    const std::uint32_t scale_permille = axis_count == 2 ? 707 : 577;
-    return (static_cast<std::uint64_t>(base_stride) * scale_permille + 500) / 1000;
+    // 对角方向用整数千分比近似单位向量，避免多轴合成速度变快。
+    const std::uint32_t scale_permille =
+        axis_count == 1 ? 1000 : axis_count == 2 ? 707 : 577;
+    const std::uint64_t denominator = kTickRateHz * 1000ULL;
+    const std::uint64_t scaled_speed =
+        static_cast<std::uint64_t>(speed_mm_per_sec) * scale_permille;
+    // 用累计距离之差分配每帧整数毫米，避免每帧独立取整造成长期速度漂移。
+    const std::uint64_t before =
+        static_cast<std::uint64_t>(zero_based_frame) * scaled_speed / denominator;
+    const std::uint64_t after =
+        (static_cast<std::uint64_t>(zero_based_frame) + 1) * scaled_speed / denominator;
+    return static_cast<std::int64_t>(after - before);
 }
 
 std::int32_t sign(std::int64_t n)
@@ -166,20 +173,42 @@ std::unique_ptr<flywow_navigation::NavigationContext>
 Engine::buildContext(const State &candidate) const
 {
     auto next_context = std::make_unique<flywow_navigation::NavigationContext>(map_);
-    // 单位按ID升序；恢复碰撞事实时不允许依赖unordered_map遍历顺序。
     for (const auto &unit : candidate.units)
     {
-        if (unit.movement_mode != 1 || unit.hp <= 0)
+        if (unit.hp <= 0)
             continue;
-        const auto &navigation_profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
-        const auto  grid    = map_->WorldToGrid(position(unit));
-        if (!grid.ok())
-            throw std::runtime_error("STATE_GRID");
-        // 动态占位按战斗实例ID索引；navigation_profile是该实例使用的静态导航规则。
-        if (next_context->occupancy().IsFootprintBlocked(navigation_profile, grid.value, {unit.instance_id}))
+
+        const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
+        if (unit.movement_mode == 2)
+        {
+            const auto center = position(unit);
+            const auto radius = static_cast<std::int64_t>(profile.air_body.radius_mm);
+            const auto half_height = static_cast<std::int64_t>(profile.air_body.half_height_mm);
+            const flywow_navigation::AirBox box{
+                {center.x_mm - radius, center.y_mm - half_height, center.z_mm - radius},
+                {center.x_mm + radius, center.y_mm + half_height, center.z_mm + radius},
+            };
+            const flywow_navigation::NavigationAgentHandle handle{unit.instance_id};
+            const auto placed = flywow_navigation::setAirObstacle(*next_context, handle, box);
+            if (!placed.ok())
+                throw std::runtime_error(flywow_navigation::NavErrorName(placed.error));
+            const auto spawn = flywow_navigation::sweepAir(
+                *next_context, center, center, profile.air_body, handle, {true, 0});
+            if (!spawn.ok() || spawn.value.kind != flywow_navigation::AirHitKind::kClear)
+                throw std::runtime_error("SPAWN_BLOCKED");
+            continue;
+        }
+        if (unit.movement_mode != 1)
+            throw std::runtime_error("STATE_MOVE_MODE");
+
+        const auto &navigation = profile.navigation;
+        const auto grid = map_->WorldToGrid(position(unit));
+        if (!grid.ok() || next_context->occupancy().IsFootprintBlocked(
+                navigation, grid.value, {unit.instance_id}))
             throw std::runtime_error("STATE_OCCUPANCY_CONFLICT");
-        const auto result = next_context->occupancy().Move({unit.instance_id}, navigation_profile, grid.value);
-        if (!result.ok() || !result.value)
+        const auto placed = next_context->occupancy().Move(
+            {unit.instance_id}, navigation, grid.value);
+        if (!placed.ok() || !placed.value)
             throw std::runtime_error("STATE_OCCUPANCY_COMMIT");
     }
     return next_context;
@@ -189,7 +218,7 @@ void Engine::reset()
 {
     State candidate;
     Unit  player;
-    player.instance_id      = 1001;
+    player.instance_id         = 1001;
     player.unit_profile_id = 1;
     player.camp       = 1;
     player.x          = -11000;
@@ -197,7 +226,7 @@ void Engine::reset()
     candidate.units.push_back(player);
 
     Unit flying_enemy;
-    flying_enemy.instance_id      = 2001;
+    flying_enemy.instance_id         = 2001;
     flying_enemy.unit_profile_id = 2;
     flying_enemy.camp       = 2;
     flying_enemy.x          = 11000;
@@ -206,7 +235,7 @@ void Engine::reset()
     candidate.units.push_back(flying_enemy);
 
     Unit ground_enemy;
-    ground_enemy.instance_id      = 2002;
+    ground_enemy.instance_id         = 2002;
     ground_enemy.unit_profile_id = 1;
     ground_enemy.camp       = 2;
     ground_enemy.x          = 11000;
@@ -247,7 +276,7 @@ std::size_t Engine::targetOf(const Unit &unit, std::uint32_t move_mask) const
             best    = index;
         }
     }
-    return best; // 单位按实例ID升序；距离相同时实例ID较小者获胜。
+    return best; // 严格升序遍历，距离相同时instance_id较小者获胜。
 }
 
 Route &Engine::routeFor(std::uint32_t unit_instance_id)
@@ -266,7 +295,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
     if (x == 0 && z == 0)
         return false;
     const auto  &unit_profile = profileFor(profiles_->units, unit.unit_profile_id);
-    const auto   stride = strideForAxes(unit_profile.move_stride_mm_per_tick, (x != 0) + (z != 0));
+    const auto   stride = strideForAxes(unit_profile.move_speed_mm_per_sec, (x != 0) + (z != 0), state_.frame - 1);
     const auto   target_x = unit.x + x * stride;
     const auto   target_z = unit.z + z * stride;
     std::int64_t target_y = unit.y;
@@ -288,7 +317,7 @@ void Engine::moveAir(Unit &unit, std::int32_t x, std::int32_t z, std::int32_t y)
 {
     const auto  &profile  = profileFor(profiles_->units, unit.unit_profile_id);
     const auto   axes     = (x != 0) + (z != 0) + (y != 0);
-    const auto   stride   = strideForAxes(profile.move_stride_mm_per_tick, axes);
+    const auto   stride   = strideForAxes(profile.move_speed_mm_per_sec, axes, state_.frame - 1);
     std::int64_t result_y = unit.y;
     const auto   new_y    = unit.y + y * stride;
     if (sampleAir(unit, unit.x + x * stride, unit.z + z * stride, new_y, result_y))
@@ -348,7 +377,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     const auto                              &navigation = profile.navigation;
     const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
     const auto result = flywow_navigation::GridPathfinder::AdvancePath(
-        *context_, agent, path, cursor, position(unit), profile.move_stride_mm_per_tick, policy());
+        *context_, agent, path, cursor, position(unit), strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1), policy());
     if (!result.ok())
         throw std::runtime_error("NAV_ADVANCE_FAILED");
     unit.x            = result.value.position.x_mm;
@@ -371,31 +400,57 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
 
 void Engine::chaseAir(Unit &unit, const Unit &target)
 {
-    // 读取该单位的静态配置；升降方向的判断使用其每 Tick 基础步长。
     const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
+    if (distance2(unit, target) <= 800 * 800)
+        return;
 
-    // 以 X/Z 两轴偏差的较大值作为水平追击间距，单位 mm；这不是欧氏直线距离。
-    const auto horizontal = std::max(absolute(target.x - unit.x), absolute(target.z - unit.z));
-
-    // 当前追击高度规则：目标上方基础抬升 400 mm，再增加水平间距的一半，额外高度最多 2400 mm。
-    // 例如 horizontal=1000 mm 时，desired_y=target.y+900 mm；整数除法向下截去不足 1 mm 的部分。
-    // 400 和 2400 是 Frame Core 当前写定的规则值，不从 UnitProfile 读取。
+    const auto horizontal = std::max(absolute(target.x - unit.x),
+                                     absolute(target.z - unit.z));
     const auto desired_y = target.y + 400 + std::min<std::int64_t>(2400, horizontal / 2);
+    const auto vertical_intent =
+        absolute(desired_y - unit.y) >=
+            strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1)
+            ? sign(desired_y - unit.y)
+            : 0;
+    const flywow_navigation::NavigationAgentHandle handle{unit.instance_id};
+    const auto route = flywow_navigation::findAirPath(
+        *context_, position(unit), position(target), unit.y, profile.air_body,
+        handle, {true, 0});
+    if (!route.ok())
+    {
+        if (route.error == flywow_navigation::NavError::kNoPath)
+            return;
+        throw std::runtime_error(flywow_navigation::NavErrorName(route.error));
+    }
+    if (route.value.count() <= 1)
+        return;
 
-    // x/z/y 都是每轴方向意图（-1、0、1），不是坐标或毫米位移。
-    const std::int32_t x = sign(target.x - unit.x);
-    const std::int32_t z = sign(target.z - unit.z);
+    const auto &next = route.value.WorldPoint(1);
+    const auto x = sign(next.x_mm - unit.x);
+    const auto z = sign(next.z_mm - unit.z);
+    const auto axes = static_cast<std::uint32_t>((x != 0) + (z != 0) +
+                                                  (vertical_intent != 0));
+    const auto stride = strideForAxes(profile.move_speed_mm_per_sec, axes, state_.frame - 1);
+    flywow_navigation::WorldPosition destination{
+        unit.x + x * stride,
+        unit.y + vertical_intent * stride,
+        unit.z + z * stride,
+    };
+    std::int64_t checked_y = destination.y_mm;
+    if (!sampleAir(unit, destination.x_mm, destination.z_mm, destination.y_mm, checked_y))
+        return;
+    destination.y_mm = checked_y;
 
-    // 仅当高度误差至少达到一个基础 Tick 步长时才输出升降意图；更小误差会被置为 0。
-    // moveAir 再按本 Tick 同时活动的轴数计算每轴实际位移。
-    const std::int32_t y = absolute(desired_y - unit.y) >= profile.move_stride_mm_per_tick
-                               ? sign(desired_y - unit.y)
-                               : 0;
-
-    // distance2 是三维距离平方，单位 mm²；超过 800 mm 的追击停止半径才继续靠近。
-    // 该半径是 AI 追击规则，不等同于技能自身的作用距离。
-    if (distance2(unit, target) > 800 * 800)
-        moveAir(unit, x, z, y);
+    const auto moved = flywow_navigation::moveAir(*context_, handle, destination, {true, 0});
+    if (!moved.ok())
+    {
+        if (moved.error == flywow_navigation::NavError::kBlocked)
+            return;
+        throw std::runtime_error(flywow_navigation::NavErrorName(moved.error));
+    }
+    unit.x = moved.value.x_mm;
+    unit.y = moved.value.y_mm;
+    unit.z = moved.value.z_mm;
 }
 
 void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &damage)
@@ -423,8 +478,8 @@ void Engine::cast(Unit &unit, std::int32_t skill_id, std::vector<std::int32_t> &
         damage[index] += skill.damage;
     if (state_.bolts.size() == kMaxBolts)
         return; // 纯表现弹丸满槽不撤销已结算伤害。
-    // 60 是当前 Core 的弹丸逻辑寿命；固定 50ms Tick 下最多存活 3 秒，超时不再命中。
-    state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 60,
+    // 弹丸逻辑寿命固定为3秒，即180个60Hz逻辑帧；超时不再命中。
+    state_.bolts.push_back({state_.next_bolt++, unit.instance_id, state_.units[index].instance_id, state_.frame + 180,
                             skill.effect == 2 ? 0 : skill.damage, unit.x, unit.y, unit.z});
 }
 
@@ -440,16 +495,17 @@ void Engine::moveBolts(std::vector<std::int32_t> &damage)
         if (it == state_.units.end() || bolt.expires <= state_.frame)
             continue;
         const auto dx = it->x - bolt.x, dy = it->y - bolt.y, dz = it->z - bolt.z;
-        // 每帧各轴按最大轴差等比例推进，最大单轴位移为 400 mm；到达判定也使用同一最大轴差。
+        // 弹丸速度为8000 mm/s；本帧位移使用与单位相同的整数帧号差分算法，到达判定按本帧位移检查。
         const auto span = std::max({absolute(dx), absolute(dy), absolute(dz)});
-        if (span <= 400)
+        const auto bolt_stride = strideForAxes(8000, 1, state_.frame - 1);
+        if (span <= bolt_stride)
         {
             damage[static_cast<std::size_t>(it - state_.units.begin())] += bolt.damage;
             continue;
         }
-        bolt.x += dx * 400 / span;
-        bolt.y += dy * 400 / span;
-        bolt.z += dz * 400 / span;
+        bolt.x += dx * bolt_stride / span;
+        bolt.y += dy * bolt_stride / span;
+        bolt.z += dz * bolt_stride / span;
         next.push_back(bolt);
     }
     state_.bolts.swap(next);
@@ -651,6 +707,9 @@ void Engine::restore(const std::string &bytes)
     if (units != 3 || candidate.frame > kMaxFrames || candidate.winner > 3 ||
         candidate.next_bolt == 0 || candidate.next_bolt > kMaxFrames * kMaxUnits + 1)
         throw std::runtime_error("STATE_HEADER");
+    const auto maximum_cooldown = std::max_element(
+        profiles_->skills.begin(), profiles_->skills.end(),
+        [](const Skill &left, const Skill &right) { return left.cooldown < right.cooldown; })->cooldown;
     for (std::uint64_t i = 0; i < units; ++i)
     {
         Unit unit;
@@ -672,7 +731,8 @@ void Engine::restore(const std::string &bytes)
             (!candidate.units.empty() && candidate.units.back().instance_id >= unit.instance_id))
             throw std::runtime_error("STATE_UNIT");
         for (const auto ready : unit.ready)
-            if (ready > candidate.frame + 24)
+            if (static_cast<std::uint64_t>(ready) >
+                static_cast<std::uint64_t>(candidate.frame) + maximum_cooldown)
                 throw std::runtime_error("STATE_READY");
         candidate.units.push_back(unit);
     }
@@ -712,7 +772,7 @@ void Engine::restore(const std::string &bytes)
         };
         if (!bolt.id || bolt.id >= candidate.next_bolt || !unitExists(bolt.caster_instance_id) ||
             !unitExists(bolt.target_instance_id) || (bolt.damage != 0 && bolt.damage != 20) ||
-            bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 60 ||
+            bolt.expires <= candidate.frame || bolt.expires > candidate.frame + 180 ||
             (!candidate.bolts.empty() && candidate.bolts.back().id >= bolt.id))
             throw std::runtime_error("STATE_BOLT");
         candidate.bolts.push_back(bolt);
@@ -771,13 +831,14 @@ void Engine::restore(const std::string &bytes)
 }
 } // namespace lesson_frame
 
-extern "C" LESSON_FRAME_API int fs_preload_map(const char *path)
+extern "C" LESSON_FRAME_API int fs_preload_map(const char *bmap_path, const char *airnav_path)
 {
     try
     {
-        if (!path || !*path)
+        if (!bmap_path || !*bmap_path)
             return 0;
-        const auto result = flywow_navigation::MapRegistry::Instance().Load(path);
+        const std::string air_path = airnav_path ? airnav_path : "";
+        const auto result = flywow_navigation::MapRegistry::Instance().Load(bmap_path, air_path);
         return result.ok() && static_cast<bool>(result.value) ? 1 : 0;
     }
     catch (...)
@@ -807,18 +868,23 @@ extern "C" LESSON_FRAME_API int fs_load_profiles(
             const auto &source = units[i];
             if (source.unit_id == 0 ||
                 (source.movement_mode != 1 && source.movement_mode != 2) ||
-                source.move_stride_mm_per_tick == 0 ||
-                source.move_stride_mm_per_tick > INT32_MAX || source.max_hp <= 0 ||
+                source.move_speed_mm_per_sec == 0 ||
+                source.move_speed_mm_per_sec > INT32_MAX || source.max_hp <= 0 ||
+                (source.movement_mode == 2 &&
+                 (source.air_radius_mm == 0 || source.air_half_height_mm == 0)) ||
+                (source.movement_mode == 1 &&
+                 (source.air_radius_mm != 0 || source.air_half_height_mm != 0)) ||
                 (i > 0 && units[i - 1].unit_id >= source.unit_id))
                 return 0;
 
             UnitProfile profile{};
             profile.unit_id = source.unit_id;
             profile.movement_mode = source.movement_mode;
-            profile.move_stride_mm_per_tick = source.move_stride_mm_per_tick;
+            profile.move_speed_mm_per_sec = source.move_speed_mm_per_sec;
             profile.max_hp = source.max_hp;
             profile.min_air_clearance_mm = source.min_air_clearance_mm;
             profile.max_air_altitude_mm = source.max_air_altitude_mm;
+            profile.air_body = {source.air_radius_mm, source.air_half_height_mm};
             if (source.movement_mode == 2 &&
                 (source.min_air_clearance_mm == 0 ||
                  source.max_air_altitude_mm < source.min_air_clearance_mm))
@@ -861,7 +927,8 @@ extern "C" LESSON_FRAME_API int fs_load_profiles(
         {
             const auto &source = skills[i];
             if (source.skill_id != i + 1 || source.range_mm > INT64_MAX ||
-                source.cooldown_ticks == 0 || source.damage <= 0 ||
+                source.cooldown_ticks == 0 || source.cooldown_ticks > lesson_frame::kMaxFrames ||
+                source.damage <= 0 ||
                 source.target_mask < 1 || source.target_mask > 3 ||
                 source.effect < 1 || source.effect > 3)
                 return 0;

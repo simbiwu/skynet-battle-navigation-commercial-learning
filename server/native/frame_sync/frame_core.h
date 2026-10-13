@@ -5,6 +5,7 @@
 // Registry 共享。
 #pragma once
 
+#include "air_navigation.h"
 #include "grid_pathfinder.h"
 #include "map_registry.h"
 #include "navigation_profile.h"
@@ -17,8 +18,8 @@
 
 namespace lesson_frame
 {
-constexpr std::uint32_t kTickMs    = 50;   // 固定模拟时间；不随真实调度时间改变。
-constexpr std::uint32_t kMaxFrames = 3600; // 180秒；限制每场Replay长度。
+constexpr std::uint32_t kTickRateHz = 60; // 固定逻辑频率；每帧推进1/60秒，不读取墙钟delta。
+constexpr std::uint32_t kMaxFrames = 10800; // 180秒；60 Tick/s下的单场Replay帧数。
 constexpr std::uint32_t kMaxUnits  = 16;   // 当前课例单位/AI数量上限。
 constexpr std::uint32_t kMaxBolts  = 128;  // 当前课例弹丸上限。
 constexpr std::uint32_t kMaxRoutes = 16;   // 最多为每个单位保持一条路径。
@@ -37,10 +38,11 @@ struct UnitProfile
 {
     std::uint32_t                        unit_id                 = 0;  ///< 静态配置键；不是Battle实例ID。
     std::uint32_t                        movement_mode           = 0;  ///< 移动模式：1地面，2空中；由Lua配置加载。
-    std::uint32_t                        move_stride_mm_per_tick = 0;  ///< 每Tick基础移动量，单位mm。
+    std::uint32_t                        move_speed_mm_per_sec = 0;  ///< 单轴速度，单位mm/s；每帧按固定频率累计换算。
     std::int32_t                         max_hp                  = 0;  ///< 静态最大HP；当前值存入Unit。
     std::uint32_t                        min_air_clearance_mm    = 0;  ///< 空中单位高于当前位置地表的最小间隙，单位mm。
     std::uint32_t                        max_air_altitude_mm     = 0;  ///< 空中单位高于当前位置地表的最大高度，单位mm。
+    flywow_navigation::AirBody             air_body;                    ///< 空中动态盒体；地面单位尺寸为0。
     flywow_navigation::NavigationProfile navigation;                   ///< 该单位使用的地面导航规则；空中单位不使用。
 };
 
@@ -188,10 +190,12 @@ struct FsUnitProfile
 {
     std::uint32_t unit_id;                  ///< 静态UnitProfile配置查询键。
     std::uint32_t movement_mode;            ///< 移动模式：1地面，2空中。
-    std::uint32_t move_stride_mm_per_tick;  ///< 每逻辑Tick基础位移，单位mm。
+    std::uint32_t move_speed_mm_per_sec;  ///< 单轴速度，单位mm/s。
     std::int32_t  max_hp;                   ///< 单位静态最大HP。
     std::uint32_t min_air_clearance_mm;     ///< 空中单位离当前地表的最小间隙，单位mm。
     std::uint32_t max_air_altitude_mm;      ///< 空中单位相对当前地表的最高高度，单位mm。
+    std::uint32_t air_radius_mm;            ///< 飞行单位 X/Z 盒半宽；0 只允许地面 Profile。
+    std::uint32_t air_half_height_mm;       ///< 飞行单位 Y 盒半高；0 只允许地面 Profile。
 };
 
 struct FsNavigationProfile
@@ -213,15 +217,16 @@ struct FsSkillProfile
     std::uint32_t target_mask;     ///< 目标类别位：1地面、2空中、3两类均可。
     std::uint32_t effect;          ///< 效果类型：1瞬发，2表现弹丸，3逻辑弹丸。
 };
-static_assert(sizeof(FsUnitProfile) == 24, "Unit profile ABI changed");
+static_assert(sizeof(FsUnitProfile) == 32, "Unit profile ABI changed");
 static_assert(sizeof(FsNavigationProfile) == 784, "Navigation profile ABI changed");
 static_assert(sizeof(FsSkillProfile) == 32, "Skill profile ABI changed");
 static_assert(sizeof(FsPlayerInput) == 20, "Frame ABI struct size must remain 20 bytes");
+// 仅改输入字段名；字段顺序和值不变，因此 C ABI 与 Checkpoint V3 字节布局不变。
 
 extern "C"
 {
     /// 加载验证过的BMAP并发布到进程MapRegistry；启动/部署阶段调用，有同步磁盘I/O。
-    LESSON_FRAME_API int   fs_preload_map(const char *path);
+    LESSON_FRAME_API int   fs_preload_map(const char *bmap_path, const char *airnav_path);
     /// 接收宿主从Lua读取的Unit、Navigation、Skill记录，校验后一次替换进程配置表。
     /// 失败返回0且旧表不变；已创建Engine继续持有旧表，新Engine固定完整新表。
     LESSON_FRAME_API int   fs_load_profiles(const FsUnitProfile *units, std::uint32_t unit_count,

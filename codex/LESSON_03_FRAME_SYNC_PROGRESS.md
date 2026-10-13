@@ -25,7 +25,7 @@
 ## 用户最新约束
 
 - 中途提问通常是任务中的讨论；简短答复后继续原任务，不自行结束工作。
-- **Gateway修改留给用户亲自在实操中完成并审计。当前主工作区Server/FlyWow不提前部署这些教程代码。** 作者只在隔离目录修复并验证。
+- 用户本轮明确授权完整实施，包含 Gateway；本次已在 FlyWow 子模块中完成定向主动消息校验修复并验证，最终由用户审核。Server 源码留在 WSL 主工作区，未部署到其它 Server 工作区。
 - 玩家控制地面单位；飞行单位是Server控制的敌人，玩家不控制飞行单位。
 - 飞行高度不能固定。当前Core保存可变Y，飞行AI派生水平和升降意图；出生2000mm不是固定飞行层。Client只在帧同步Core中复现确定性AI，不拥有正式敌人控制权。
 - 当前地图是2.5D地表Grid。空中单位忽略地面walkable/clearance，但校验XZ边界、地表穿透与最大高度；不宣称具有尚无资产支持的完整三维空域导航。
@@ -37,16 +37,16 @@
 
 WSL主编辑源：`/home/simbi/workspace/skynet-battle-navigation-commercial-learning`。本文与源码工作稿只写这里。
 Windows仅Unity编辑源；文档/Server非Unity文件通过Git工作流同步，不覆盖Windows已有未提交内容。
-未commit/push，未改主工作区Gateway，不修改独立FlyWow工作区。
+未commit/push；Gateway 子模块改动本轮按用户授权已实施；不修改独立FlyWow工作区。
 
 ## 已验证
 
 - Linux Release Core/Binding编译、Native CTest、Lua Binding/Runtime测试。
 - 固定protoc生成descriptor、C#与Lua Registry；Lua源码syntax检查。
 - Gateway新测试的真实红/绿：原拒绝条件失败，隔离修复通过；旧epoch、未ready、关闭/未知目标、广播边界。
-- 真实双Skynet进程：握手、两场定向push隔离、正式输入hash重演、错误凭据拒绝、断线恢复generation=2、Checkpoint和日志重演。
-- Windows Release Native编译/CTest，Windows/Linux Golden 238行一致。
-- C#使用真实Unity模块与现有SDK插件编译通过；Windows C#客户端连真实Linux Gateway，30帧使用Windows Native逐帧核对hash通过。
+- 真实双Skynet进程：握手、单客户端定向帧推送、正式输入hash重演、错误凭据拒绝、断线恢复generation=2、Checkpoint和日志重演。
+- 此前独立验证记录包含 Windows Release Native/CTest 与 Windows/Linux Golden 238 行一致；本轮 Unity 工程接入尚未能通过 Unity Editor 重新构建确认。
+- 较早的隔离验证记录曾通过 C# 客户端与真实 Linux Gateway 的 30 帧 hash 核对；该记录早于本轮 xLua/Frame 客户端接入，不代表当前 Windows Unity 改动已编译或联调。
 
 未验证：Unity Editor完整Play/场景表现、长期容量压测、全部网络故障、其它目标平台。文档提供实操验收，不将这些项目写成作者已通过。
 
@@ -69,3 +69,49 @@ Windows仅Unity编辑源；文档/Server非Unity文件通过Git工作流同步�
 
 2026-10-13 AIRN 帧同步应用扩展：按当前授权将 AIRN V1 空中寻路改成第三课主实操第 5.24 节和第 4 阶段，说明 Unity Authoring 配对导出、显式双路径加载、飞行 AirBody Profile、Frame-local 动态 AABB、固定高度寻路与变高 move/sweep、Checkpoint V3 派生重建。Server/FlyWow 用户运行源码未提前部署；`battle_1001` 当前无 AIRN 静态文件，静态端到端加载需作者之后在 Windows 场景导出再同步。新增隔离 API 组合测试验证动态障碍/寻路/推进/扫掠/移动，AIR Benchmark 重跑 7 个场景全部达到既有断言。
 2026-10-13 AIRN 文档核对：章节操作按 MapRoot 的实际 `exportAirNavigation`、`airObstacleLayers`、`exportDirectory` 与版本化候选发布器说明；没有虚构文件名 Inspector。当前 `write_practical.py` 与 `complete_author.py` 早于 UnitProfile 完整稿，运行会把正式实操降回旧草稿；再次生成前必须先同步生成源。
+2026-10-13 60 Tick/s 基线收口：第三课帧同步实操统一为固定1/60秒逻辑步长；Native/Core、Lua Worker、协议、Unity预测与回放校验同步使用60Hz。单位速度配置由mm/Tick改为mm/s，Core用整数帧号累计差分换算位移；冷却、弹丸寿命、地面AI重规划/阻挡重试、输入lead/future window/缺输入保持及180秒帧上限均按原实际时长换算。Skynet的10ms Timer只轮询截止，Worker按单调时钟起点和绝对帧号计算并向上量化截止，避免逐Tick累加漂移。帧同步模拟版本升为2以拒绝旧20Hz客户端和Replay；Checkpoint V3字节布局未变，仍保存帧号计量状态。未修改主工作区Server/Gateway、Unity源码、FlyWow或Windows文档副本；未执行Git操作。静态时间合同扫描通过；实操文档提取的完整 Frame Core 通过 C++17 语法检查；以文档原样提取的整数移动函数行为检查通过（60帧单位/弹丸位移总量、不同连续移动片段误差边界）；Skynet 10ms绝对截止映射数学检查通过（首帧lead 100ms、60帧无累计漂移）；固定 Lua 5.4.7 编译器通过 frame_sync.lua、Runtime、Worker 语法检查。未运行 Native CTest、Unity构建或双端联调，因此不宣称这些验证通过。
+
+
+## 2026-10-14 完整实施记录
+
+用户授权按第三课帧同步实操完成全部实现并审核源码，明确 Gateway 改动也由实施者完成。本次改动已落地于 WSL Server/FlyWow 子模块和 Windows Unity 工程；没有执行 commit、push、分支切换或跨工作区文档/Server同步。
+
+
+
+### 实际实施范围
+
+- Linux Frame Core、Lua Binding、60Hz Worker/Runtime、Proto、回放/Checkpoint V3、统一 UnitProfile、地图元数据准备和集成测试安装到 WSL 主工作区；FlyWow Navigation 通过 `FlyWow::Navigation` 公开目标链接。
+
+- 增加 AIRN 可选资产路径、统一 UnitProfile 中的飞行 AirBody、Battle-local 动态空中障碍重建、空中寻路/扫掠移动及失败原子性测试。当前发布地图没有静态 AIRN，因此只验证 BMAP-only 兼容和动态障碍，不宣称静态 AIRN 配对资产已端到端通过。
+
+- Gateway 在 `gateway/service/gateway/flywow_gateway.lua` 移除了对“指定有效连接且 request_id=0 主动消息”的拒绝条件，保留 connection_id/request_id 范围、epoch、ready、目标连接和编码等检查。扩展 `gateway/tests/gateway_async_test.lua` 覆盖目标连接定向发送、双连接隔离、广播隔离、关闭/未知目标丢弃和旧 epoch。已验证旧条件下负向断言失败，修复后输出 `GATEWAY_ASYNC_UNIT_OK`。
+
+- Windows Unity 工程加入 xLua Lua 5.4、FrameNative/FrameConnection/FrameLuaProfileLoader/FrameBattleController，并由同一 Lua UnitProfile 配置读取模拟参数；协议生成 C# 已按 WSL 唯一 Proto 源更新，校验值同步写入 `shared/protocol/generated/unity/NavigationQuery.cs.sha256`。
+
+- 保留 Windows 用户文件 `codex/work/lesson_03_frame_sync/write_practical.py`；保留 WSL 用户文件 `codex/work/lesson_03_frame_sync/阶段学习总结_状态同步实操参考.md`。
+
+
+
+### 本轮实际验证
+
+- Linux Release CMake configure/build 成功，CTest 4/4：Frame Native、FlyWow Grid Map、Navigation、Air Navigation。
+
+- Lua Binding 与 Runtime 测试通过；Frame Lua 文件语法检查通过。
+
+- Gateway Lua 异步单测通过；Gateway registry Python 测试 6/6 通过。
+
+- Proto server descriptor 生成、Gateway registry 生成、配置准备脚本、Python 语法检查通过。
+
+- 双 Skynet 进程真实端到端联调通过：`FRAME_ONE_CLIENT_OK battle_id=4 frames=12`；Battle 与 Gateway 已停止。
+
+- Windows Unity Editor 在当前环境不可用，未运行 Unity Editor 编译或 Play；不能把 Windows 新增 C# 工程内容表述为 Editor 已验证。当前没有静态 AIRN 资产，也未做长期容量压测、全部网络故障矩阵或其它目标平台验证。
+
+
+
+### 当前限制与工作区边界
+
+- Windows 与 WSL 分支/源文件状态不同；本轮只编辑 Windows Unity 所属文件以及 WSL 非 Unity 所属文件，没有擅自同步另一工作区或覆盖其未提交内容。
+
+- 临时安装脚本和官方 xLua 下载/克隆包已清理；保留实际运行依赖 `unity/BattleNavigation/Assets/XLua` 与对应 Windows DLL。
+
+- 无 Git 操作：未提交、未推送、未切换分支。
