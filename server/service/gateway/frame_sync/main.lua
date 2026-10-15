@@ -14,7 +14,7 @@ skynet.start(function()
         host = "127.0.0.1",
         port = conf.gateway_port,
         transport = "tcp",
-        protocol_version = 3,
+        protocol_version = 4,
     }))
     skynet.error("FRAME_GATEWAY_READY port=", conf.gateway_port)
     skynet.exit()

@@ -16,22 +16,9 @@ local dispatcher   = nil -- composition root注入；唯一可信的消息发送
 ---@field gateway_epoch string 网关实例身份；不含fd引用。
 ---@field connection_id integer 网关会话数字ID，断线后可以被重用。
 
-local function random_token()
-    local file = assert(io.open("/dev/urandom", "rb"))
-    local bytes = file:read(32)
-    file:close()
-    assert(bytes and #bytes == 32, "TOKEN_IO")
-    return bytes
-end
-
-local function equal_token(a, b)
-    if type(a) ~= "string" or type(b) ~= "string" or #a ~= 32 or #b ~= 32 then
-        return false
-    end
-    local diff = 0
-    for i = 1, 32 do diff = diff | (a:byte(i) ~ b:byte(i)) end
-    return diff == 0
-end
+local credentials = require "battle.session_credentials"
+local random_token = credentials.create
+local equal_token = credentials.equal
 
 local function same_session(a, b)
     return a and b and a.gateway_epoch == b.gateway_epoch and
@@ -44,7 +31,7 @@ local function active_seat(battle, seat_id, generation, session)
         same_session(seat.session, session)
 end
 
---- 发送到特定席位当前会话；request_id=0，与控制回包不同。
+--- 发送到特定席位当前会话；独立FramePush命令，无请求关联字段。
 local function push_to(battle, seat_id, data)
     local seat = battle.seats[seat_id]
     if not seat or not seat.online then return end

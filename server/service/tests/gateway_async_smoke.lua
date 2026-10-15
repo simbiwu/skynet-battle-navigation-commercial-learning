@@ -1,7 +1,7 @@
 --- 职责：真实TCP/WS中验证send_data、乱序响应、广播、编码失败和close。
 --- 边界：Integration Test Service；以协议已有map_id作为测试标记，不增加协议字段。
 --- 生命周期：runner独占启动回收；Gateway_disconnect仅作连接生命周期通知，无业务回复。
-local skynet = require "skynet"
+local skynet = require "skynet.manager"
 skynet.start(function()
     skynet.name(".gw_async_smoke", skynet.self())
     skynet.dispatch("lua", function(_session, source, command, message)
@@ -23,14 +23,14 @@ skynet.start(function()
         {
             gateway_epoch = message.gateway_epoch, connection_id = message.connection_id,
             command_id = message.command_id, data = response,
-            request_id = message.request_id,
+
         })
         if marker == 4 then
             skynet.send(source, "lua", "send_data",
             {
                 gateway_epoch = message.gateway_epoch, connection_id = 0,
                 command_id = message.command_id, data = { result = 1, map_id = 400 },
-                request_id = 0,
+
             })
         elseif marker == 601 then
             skynet.send(source, "lua", "close",

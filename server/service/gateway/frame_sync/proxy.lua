@@ -32,7 +32,7 @@ skynet.start(function()
             if source == gateway then
                 forward("send_data", payload)
             else
-                -- 当前FlyWow Gateway必须支持request_id=0定向push；跨实例会重验epoch/id。
+                -- FlyWow Gateway支持无请求关联的定向push；跨实例会重验epoch/id。
                 skynet.send(gateway, "lua", "send_data", payload)
             end
         elseif command == "gateway_disconnect" then

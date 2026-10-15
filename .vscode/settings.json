@@ -10,5 +10,6 @@
     "server/lualib/?/init.lua",
     "server/third_party/skynet-flywow/navigation/lualib/?.lua",
     "server/third_party/skynet-flywow/navigation/lualib/?/init.lua"
-  ]
+  ],
+  "cmake.sourceDirectory": "/home/simbi/workspace/skynet-battle-navigation-commercial-learning/server/native/frame_sync"
 }

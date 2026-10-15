@@ -1,7 +1,7 @@
 --- 职责：本机 benchmark 的有界响应夹具，回显请求 map_id 标记。
 --- 边界：测试 Service；不加载地图或执行 Battle，Gateway 保留真实编解码与握手。
 --- 生命周期：仅由 runner 启动并回收；统计每5秒采样，不记录逐请求日志。
-local skynet = require "skynet"
+local skynet = require "skynet.manager"
 local gateway
 skynet.start(function()
     skynet.name(".gw_benchmark", skynet.self())
@@ -32,7 +32,7 @@ skynet.start(function()
             gateway_epoch = message.gateway_epoch,
             connection_id = message.connection_id,
             command_id = message.command_id,
-            request_id = message.request_id,
+
             data = { result = 1, map_id = message.data.map_id },
         })
     end)

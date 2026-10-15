@@ -1,0 +1,24 @@
+--- 职责：State Battle OS进程启动配置；Server工作目录为所有相对路径的基准。
+--- 边界：仅入口、Skynet搜索路径、进程线程数和日志；不持有Battle动态状态。
+--- 不负责：Gateway监听、Unity资源读取、自动Git同步。
+thread = 4
+harbor = 0
+bootstrap = "snlua bootstrap"
+start = "battle/state_sync/main"
+logger = "./logs/state_battle"
+logservice = "flywow_logger"
+flywow_logger_level = "normal"
+
+luaservice = "./service/?.lua;./third_party/skynet/service/?.lua"
+lualoader = "./third_party/skynet/lualib/loader.lua"
+lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;"
+    .. "./third_party/skynet/lualib/?.lua;"
+    .. "./third_party/skynet/lualib/?/init.lua;"
+    .. "./third_party/skynet-flywow/navigation/lualib/?.lua;"
+    .. "./third_party/skynet-flywow/logger/lualib/?.lua"
+lua_cpath = ""
+    .. "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;"
+    .. "./third_party/skynet/luaclib/?.so;"
+    .. "./third_party/skynet-flywow/build/native/?.so"
+cpath = "./third_party/skynet/cservice/?.so;" .. "./third_party/skynet-flywow/build/native/?.so"
+preload = "./third_party/skynet-flywow/logger/lualib/flywow_logger_preload.lua"

@@ -5765,13 +5765,30 @@ cd server
 ./scripts/linux/run_server.sh build
 python3 scripts/lessons/prepare_frame_sync.py
 
-cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release -DLESSON_FRAME_LUA=ON
-cmake --build build/frame_sync --parallel
+./scripts/lessons/lesson3_build_frame_sync_native.sh
 ctest --test-dir build/frame_sync --output-on-failure
 
 ./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
 ./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
 ```
+
+新脚本会先配置再编译宿主 `frame_sync`。普通构建直接运行脚本即可，不必预先定义环境变量。需要覆盖默认值时，可在命令前写 `NAME=value command`（只对这次调用生效），或先用 `export NAME=value` 再运行；这些是环境变量，不是脚本位置参数。目录参数使用相对路径时，以 `server/` 为基准。可调参数与 CMake 参数的对应关系如下：
+
+| 环境变量 | 对应参数 | 默认值 | 含义 |
+|---|---|---|---|
+| `FRAME_SYNC_CMAKE` | CMake 命令本身 | `cmake` | 选择要运行的 CMake 可执行文件。 |
+| `FRAME_SYNC_SOURCE_DIR` | `-S` | `native/frame_sync` | Native CMake 源码目录。 |
+| `FRAME_SYNC_BUILD_DIR` | `-B` 和 `--build` | `build/frame_sync` | 配置及编译产物目录。 |
+| `FRAME_SYNC_BUILD_TYPE` | `-DCMAKE_BUILD_TYPE` | `Release` | 单配置生成器使用的构建类型。 |
+| `FRAME_SYNC_LUA` | `-DLESSON_FRAME_LUA` | `ON` | 是否构建供 Skynet 加载的 Lua Binding；本课 Server 流程应保持 `ON`。 |
+| `FRAME_SYNC_BUILD_JOBS` | `--parallel` | `4` | 并行编译任务数，必须为正整数。 |
+
+例如，要用 Debug、8 个并行任务构建，执行：
+```bash
+FRAME_SYNC_BUILD_TYPE=Debug FRAME_SYNC_BUILD_JOBS=8 ./scripts/lessons/lesson3_build_frame_sync_native.sh
+```
+
+脚本只配置和编译，不运行测试；因此后面的 `ctest` 仍单独执行。前面的 `./scripts/linux/run_server.sh build` 负责 Server 通用依赖和 FlyWow 构建，不会代替这个宿主 `frame_sync` 构建脚本。
 
 其中`frame_binding_test.lua`与`frame_runtime_test.lua`要求正确的Lua5.4.7加载路径（脚本内已明确追加`package.cpath`）；若系统缺Lua`lua` CLI，按当前固定Skynet构建输出路径核对，不静默换用系统Lua5.1/5.3。应看到`FRAME_BINDING_OK`、`FRAME_RUNTIME_OK`。
 

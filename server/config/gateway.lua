@@ -10,7 +10,7 @@ return {
     websocket_protocol = "ws",                              -- transport=websocket 时使用的协议标识；TLS 由外部终止。
     descriptor_path = "../shared/protocol/generated/server/navigation_query.pb", -- FileDescriptorSet 路径；相对 Server 工作目录。
     registry_module = "gateway.protocol.navigation_registry", -- Registry Lua 模块；由 FlyWow 脚本生成，不手工维护。
-    protocol_version = 3,                                    -- Envelope 协议版本；必须与客户端握手合同一致。
+    protocol_version = 4,                                    -- Envelope 协议版本；必须与客户端握手合同一致。
     max_frame_bytes = 0xffff,                                -- 单帧最大字节数；TCP uint16 framing 的上限。
     read_timeout_ticks = 3000,                               -- TCP 定长读取或 WS 握手最长等待 30 秒。
     idle_timeout_ticks = 30000,                              -- WebSocket 完整消息空闲最长等待 300 秒。

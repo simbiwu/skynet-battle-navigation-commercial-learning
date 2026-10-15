@@ -17,12 +17,21 @@ enum CommandId {
   FRAME_RECOVER = 1104;
   FRAME_LEAVE = 1105;
   FRAME_REPLAY = 1106;
+  STATE_JOIN = 1201;
+  STATE_INPUT = 1202;
+  STATE_CAST = 1203;
+  STATE_PUSH = 1204;
+  STATE_RECOVER = 1205;
+  STATE_RESYNC = 1206;
+  STATE_LEAVE = 1207;
+  STATE_REPLAY = 1208;
 }
 
 message Envelope {
   uint32 protocol_version = 1; // 已有协议兼容版本，课程不修改其编号。
   uint32 command = 2;          // CommandId的值；发送方向决定消息类型。
-  uint64 request_id = 3;       // 客户端请求/控制响应ID；0保留主动推送。
+  reserved 3; // 历史 request_id 编号不可复用；业务关联在 body 内定义。
+  reserved "request_id";
   bytes body = 4;
 }
 
@@ -70,7 +79,7 @@ message BattleEvent {
   uint32 killer_id = 7;
   uint32 damage = 8;
   uint32 target_hp = 9;
-  uint32 speed_mm_per_tick = 10;
+  uint32 speed_mm_per_sec = 10; // 与现有Server/Unity Replay的毫米每秒合同对齐；版本4拒绝旧端。
   string reason = 11;
   string result = 12;
   WorldPosition position = 13;
@@ -167,4 +176,129 @@ message FrameReplay {
   uint32 format_version = 1; // V1文件封装；Checkpoint内容为V2。
   FrameJoinResponse initial = 2;
   repeated FrameRecord records = 3;
+}
+
+// 状态同步：Gateway只识别command，身份/幂等/确认由Battle处理。
+message StateInput {
+  uint32 input_seq = 1;
+  sint32 x = 2;
+  sint32 z = 3;
+}
+message StateCooldown {
+  uint32 skill_id = 1;
+  uint32 ready_tick = 2;
+}
+message StateUnit {
+  uint32 instance_id = 1;
+  uint32 unit_profile_id = 2;
+  WorldPosition position = 3;
+  uint32 hp = 4;
+  uint32 max_hp = 5;
+  uint32 camp = 6;
+  repeated StateCooldown cooldowns = 7;
+}
+message StateBolt {
+  uint32 instance_id = 1;
+  uint32 caster_id = 2;
+  uint32 target_id = 3;
+  WorldPosition position = 4;
+  WorldPosition velocity_per_sec = 5;
+  uint32 expires_tick = 6;
+}
+message StateEvent {
+  uint32 event_seq = 1;
+  uint32 server_tick = 2;
+  string kind = 3;
+  uint32 actor_id = 4;
+  uint32 target_id = 5;
+  uint32 skill_id = 6;
+  uint32 cast_seq = 7;
+  uint32 damage = 8;
+  uint32 hp = 9;
+  string code = 10;
+  uint32 projectile_id = 11;
+  WorldPosition position = 12;
+}
+message StateSnapshot {
+  uint32 snapshot_seq = 1;
+  uint32 base_seq = 2; // 0为全量；增量只应用于该明确基线。
+  uint32 server_tick = 3;
+  uint32 consumed_input_seq = 4; // 实际消费水位，不能用网络接收水位替代。
+  uint32 event_watermark = 5;
+  uint32 winner = 6; // 0进行中、1玩家胜、2敌方胜、3平局。
+  repeated StateUnit units = 7;
+  repeated uint32 removed_units = 8;
+  repeated StateBolt bolts = 9;
+  repeated uint32 removed_bolts = 10;
+}
+message StateJoinRequest {
+  uint32 scenario_id = 1;
+  uint32 simulation_version = 2;
+}
+message StateJoinResponse {
+  string code = 1;
+  uint32 battle_id = 2;
+  uint32 generation = 3;
+  bytes resume_token = 4;
+  uint32 map_id = 5;
+  uint32 map_version = 6;
+  string map_hash = 7;
+  string config_hash = 8;
+  uint32 tick_rate_hz = 9;
+  uint32 snapshot_rate_hz = 10;
+  uint32 speed_mm_per_sec = 11;
+  StateSnapshot snapshot = 12;
+  uint32 simulation_version = 13;
+  uint32 input_window = 14;
+  uint32 navigation_profile_id = 15;
+  uint32 next_cast_seq = 16; // 恢复后从Server实际接收水位继续离散命令。
+}
+message StateInputRequest {
+  uint32 battle_id = 1;
+  uint32 generation = 2;
+  repeated StateInput inputs = 3;
+  uint32 ack_snapshot_seq = 4;
+  uint32 ack_event_seq = 5;
+}
+message StateInputResponse { string code = 1; uint32 consumed_input_seq = 2; }
+message StateCastRequest {
+  uint32 battle_id = 1;
+  uint32 generation = 2;
+  uint32 cast_seq = 3;
+  uint32 skill_id = 4;
+  uint32 target_id = 5;
+}
+message StateCastResponse {
+  string code = 1;
+  uint32 cast_seq = 2;
+  uint32 apply_tick = 3;
+}
+message StatePushResponse {
+  uint32 battle_id = 1;
+  uint32 generation = 2;
+  string code = 3;
+  StateSnapshot snapshot = 4;
+  repeated StateEvent events = 5;
+}
+message StateRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
+message StateRecoverResponse { StateJoinResponse state = 1; }
+message StateResyncRequest { uint32 battle_id = 1; uint32 generation = 2; }
+message StateResyncResponse { StateSnapshot snapshot = 1; string code = 2; }
+message StateLeaveRequest { uint32 battle_id = 1; uint32 generation = 2; }
+message StateLeaveResponse { string code = 1; }
+message StateReplayRequest {
+  uint32 battle_id = 1;
+  bytes resume_token = 2;
+  uint32 offset = 3;
+}
+message StateReplayResponse {
+  string code = 1;
+  uint32 total = 2;
+  StateJoinResponse initial = 3;
+  repeated StatePushResponse records = 4;
+}
+message StateReplay {
+  uint32 format_version = 1;
+  StateJoinResponse initial = 2;
+  repeated StatePushResponse records = 3;
 }

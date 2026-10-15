@@ -17,7 +17,7 @@ local in_flight = 0          -- 正在等待自动战斗结果的请求数，由
 local shutting_down = false  -- 已收到关闭请求；不再接受新的 Gateway 数据。
 local MAX_IN_FLIGHT = 4      -- 超限立即返回 BUSY，避免无限排队。
 local MAX_EVENTS = 100       -- 一次网络结果允许的最大 Event 数。
-local MAX_POINTS = 200      -- 所有 MOVE_PATH 点的总数上限。
+local MAX_POINTS = 256      -- 当前固定地图实际产生228点；仍有硬预算，Gateway最终限制65535字节。
 local MAX_TEXT_BYTES = 64   -- 单个事件文本的最大 UTF-8 byte 数。
 
 local RESULT = {
@@ -181,8 +181,6 @@ local function forward_data(payload)
     assert(math.type(payload.command_id) == "integer" and
         payload.command_id > 0,
         "command_id must be positive")
-    assert(math.type(payload.request_id) == "integer" and payload.request_id ~= 0,
-        "request_id must be non-zero for a client request")
 
     local call_ok, response = pcall(dispatch_gateway, payload)
     if not call_ok then
@@ -203,7 +201,6 @@ local function forward_data(payload)
             gateway_epoch = payload.gateway_epoch,
             connection_id = payload.connection_id,
             command_id = payload.command_id,
-            request_id = payload.request_id,
             data = response,
         }
     )

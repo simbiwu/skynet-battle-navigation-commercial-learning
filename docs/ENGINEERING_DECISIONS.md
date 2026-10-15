@@ -606,3 +606,24 @@ Lua 仅作为静态配置源和启动期读取器，不执行帧模拟规则。U
 复用 GridMap、MapRegistry、NavigationContext、Path 和现有 Lua 产物；不新增注册表、Service 或独立 AirGrid。显式可选加载路径，错误文件失败且不替换旧快照。动态 AABB 与有界稀疏查询状态归 Context 单 owner；不额外增加 O(map_cell_count) 空中数组。固定高度八邻接寻路不自动升降，连续 move/sweep 可由调用者控制 Y；Path 保留体积、高度和快照，移动必须重验。完整资源预算、部分推进、确定首命中及发布合同见 FlyWow Navigation CONTRACT。
 
 交付只含基础 API、Unity 包导出、独立示例、测试与 Benchmark；本次不接入 Frame Core、Battle、技能/弹丸，也不修改第三课实操教程。Benchmark 原压力条件与硬上限保持不变，未通过时优化算法/实现。地面原实现回归与同机 Benchmark 分开报告，不以静态审阅代替运行结果。
+
+
+## D045 - Gateway无请求关联的双向send_data与协议版本4
+
+Gateway只处理连接、握手、framing、command/body编解码、双向send_data、定向Push、广播和close。
+Envelope保留protocol_version=1、command=2、body=4，删除并保留历史request_id字段名/编号3，禁止复用。
+当前宿主兼容版本升至4；旧版本3明确拒绝，不混跑。Framework、宿主、Unity、descriptor、registry与测试共同迁移。
+Gateway不要求请求或主动Push包含关联编号，不缓存业务等待项。实例内connection_id为正值表示定向、0表示广播；gateway_epoch及ready/存活连接仍必验。
+宿主需要关联时在业务消息中定义真实字段：状态同步input_seq、cast_seq、snapshot_seq与event_seq分别承担各自合同。
+现有Unity长连接由Frame/State共用GatewayConnection；同command只允许一个控制请求在途，超时关闭连接，避免迟到回复匹配之后的控制请求。第二课短连接按command串行。
+D039中的request_id/旧响应命令说明由本决策替代；当前handler由宿主注册并显式注入本地服务名，发送通过Skynet解析该名称，宿主控制可信本地发送边界。
+本决策不改变Skynet、Lua、Unity、AI Navigation、Protobuf工具链固定版本。
+
+## D046 - 状态同步完整工程与60Hz TCP基线
+
+状态同步独立实现于宿主state_sync：纯Lua权威模拟、多Battle Worker、FlyWow Navigation及TCP接入。
+Server固定60Hz、状态复制20Hz、关键事件在Tick提交后发布；Unity渲染独立。本地只预测玩家移动和可撤销表现，正式AI/技能/命中/伤害由Server决定。
+Unity移动预测薄C ABI链接FlyWow::Navigation，复用地图及地面移动公开实现；不依赖Frame战斗Core。配置仍从现有LuaUnit/Navigation源读取，发布hash绑定实际资产与配置字节。
+Worker每次10ms轮询最多4次A*，轮转Battle；AI重规划可延后，模拟仍按固定Tick推进。压力不满足时优化或明确拒绝，不能把20Hz状态复制当作20Hz模拟。
+断线只恢复仍存活的同场Battle。Frame/State共享短期凭据生成/比较模块；凭据在Battle生命期稳定，恢复提高generation并清除旧会话pending，避免恢复回包丢失后丢失唯一凭据。
+本课由助手交付完整工程、测试及配套讲解，学习者直接阅读并运行；不再以逐文件复制实操为主要交付。FlyWow抽取及持久化进程崩溃恢复仍按已有独立边界处理。

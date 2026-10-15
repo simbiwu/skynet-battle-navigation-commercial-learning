@@ -7,8 +7,9 @@
 | 代码或可复制教程代码 | `.agents/skills/skynet-battle-navigation-coding-standard/SKILL.md`、受影响源码、直接调用方与测试 |
 | Lesson 1 地图/BMAP/Native Query | `codex/LESSON_01_SPEC.md`；格式读 `docs/BMAP_FORMAT.md`，Binding 读 `docs/NATIVE_NAV_API.md` / `docs/LUA_C_API_BINDING_GUIDE.md` |
 | Lesson 2 寻路/BattleWorker/双进程 | `codex/LESSON_02_SPEC.md`；按需读 `docs/NAVIGATION_ABSTRACTION.md`、`docs/SKYNET_CLUSTER_AND_HARBOR.md` |
-| Lesson 3 当前续写任务 | 先读 `codex/LESSON_03_FRAME_SYNC_PROGRESS.md`；帧同步完整实操正文已交付，状态同步保留蓝图；作者验证与未验证项见进度记录 |
+| Lesson 3 当前续写任务 | 先读 `codex/LESSON_03_FRAME_SYNC_PROGRESS.md`；帧同步见其进度记录；状态同步完整工程与配套讲解见`LESSON_03_STATE_SYNC_PROGRESS.md`，实际验证分别记录 |
 | Lesson 3 帧同步、状态同步 | `codex/LESSON_03_SPEC.md`；先读 `docs/Skynet_BattleNavigation第三课_帧同步版_实操.md`，再读 `docs/Skynet_BattleNavigation第三课_状态同步版_实操.md` |
+| 状态同步实操编写/辅导参考 | `codex/work/lesson_03_frame_sync/阶段学习总结_状态同步实操参考.md`（教学组织偏好和易错点；不可覆盖当前 Spec 与实现） |
 | Gateway/Battle 韧性与持久化专题 | `docs/Skynet_BattleNavigation专题_GatewayBattle链路韧性与战斗持久化_实操.md` 对应阶段；这是第三课后的独立专题 |
 | Lesson 4 optional Recast/Detour | `codex/LESSON_04_OPTIONAL_RECAST_SPEC.md`、`docs/POLYGON_NAV_ASSET_FORMAT.md`；旧 `docs/LESSON_03_PRACTICAL.md` 仅作历史参考 |
 | 教程编写或逐阶段辅导 | `docs/CODEX_TEACHING_GUIDE.md` 和当前 Lesson 的实操对应段落 |

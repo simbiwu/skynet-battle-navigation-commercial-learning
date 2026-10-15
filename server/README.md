@@ -44,7 +44,6 @@ cd server
 ./scripts/linux/run_server.sh start --rebuild
 ./scripts/linux/run_server.sh restart
 ./scripts/linux/run_server.sh foreground
-./scripts/linux/stop_server.sh
 ```
 
 约定：

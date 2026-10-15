@@ -85,7 +85,6 @@ local function message(connection)
     {
         gateway_epoch = "epoch", connection_id = connection_id,
         command_id = 1001, data = { map_id = 1001, map_version = 1 },
-        request_id = connection_id == 0 and 0 or 42,
     }
 end
 
@@ -106,7 +105,7 @@ local request = message()
 test.dispatch(0, 99, "send_data", request)
 assert(#test.remote_sends == 1 and #test.local_sends == 0)
 assert(test.remote_sends[1] == request and request.data.map_id == 1001)
-assert(request.route_token == nil and request.request_id == 42)
+assert(request.route_token == nil and request.request_id == nil)
 
 local response = message()
 response.data = { result = 1 }
@@ -131,7 +130,6 @@ for _, change in ipairs(
         { "gateway_epoch", "" }, { "gateway_epoch", string.rep("x", 129) },
         { "gateway_epoch", 1 }, { "connection_id", -1 }, { "connection_id", 1.5 },
         { "command_id", 0 }, { "command_id", 1.5 },
-        { "request_id", nil }, { "request_id", 0 }, { "request_id", 1.5 },
         { "data", "bad" },
     })
 do

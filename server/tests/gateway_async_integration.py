@@ -74,13 +74,13 @@ def fields(data):
 
 
 # 构造当前Envelope；map_id仅在测试夹具中作为标记，真实Query使用1001。
-def envelope(map_id=1001, command=1001, version=3, request_id=None):
+def envelope(map_id=1001, command=1001, version=4, request_id=None):
     if request_id is None:
         request_id = next(REQUEST_IDS)
     body = number(1, map_id)
     if command == 1001:
         body += number(2, 1) + blob(3, b"")
-    return number(1, version) + number(2, command) + number(3, request_id) + blob(4, body)
+    return number(1, version) + number(2, command) + blob(4, body)
 
 
 # 从当前 Socket 读满指定字节；EOF 是失败，不把短读当成完整帧。
@@ -167,7 +167,7 @@ class Client:
     # 握手已完成后解析业务Envelope，不把握手包误解释为Protobuf。
     def receive(self):
         result = fields(self.receive_bytes())
-        assert result[1] == 3
+        assert result[1] == 4
         return result
 
     # 释放调用方独占的测试连接。
@@ -194,19 +194,22 @@ class Processes:
         handle = log.open("w")
         config_path = ROOT / "config" / config
         if config in ("gateway_process.lua", "battle_process.lua",
-                      "skynet_gateway_async_smoke.lua", "skynet.lua"):
+                      "skynet_gateway_async_smoke.lua", "skynet_gateway_close_battle_smoke.lua", "skynet.lua"):
             # 测试配置使用独立日志目录；Smoke 复用 Gateway 参数，只替换业务入口。
             daily = self.logs / (name + "_daily_" + str(time.time_ns()))
             daily.mkdir()
             source = (ROOT / "config" / "gateway_process.lua"
-                      if config == "skynet_gateway_async_smoke.lua" else config_path)
+                      if config == "skynet_gateway_async_smoke.lua" else
+                      ROOT / "config/battle_process.lua" if config == "skynet_gateway_close_battle_smoke.lua" else config_path)
             text = source.read_text()
-            role = ("battle" if config == "battle_process.lua" else
+            role = ("battle" if config in ("battle_process.lua", "skynet_gateway_close_battle_smoke.lua") else
                     "server" if config == "skynet.lua" else "gateway")
             text = text.replace("./logs/" + role, str(daily))
             if config == "skynet_gateway_async_smoke.lua":
                 text = text.replace('start = "gateway/gateway_main"',
                                     'start = "tests/gateway_async_smoke"')
+            if config == "skynet_gateway_close_battle_smoke.lua":
+                text = text.replace('start = "battle/battle_main"', 'start = "tests/gateway_close_battle_smoke"')
             config_path = self.logs / (name + "_config.lua")
             config_path.write_text(text)
             self.active_logs.append(daily)
@@ -219,7 +222,7 @@ class Processes:
             self.assert_clean(wait=False)
             text = log.read_text()
             if config in ("gateway_process.lua", "battle_process.lua",
-                          "skynet_gateway_async_smoke.lua", "skynet.lua"):
+                          "skynet_gateway_async_smoke.lua", "skynet_gateway_close_battle_smoke.lua", "skynet.lua"):
                 text += "".join(path.read_text() for path in daily.glob("*.log"))
             if ready in text:
                 return
@@ -257,8 +260,7 @@ class Processes:
 def response(client, marker=None, result=1, request_id=None):
     value = client.receive()
     assert value[2] == 1001, value
-    if request_id is not None:
-        assert value.get(3, 0) == request_id, value
+    assert 3 not in value, "transport must not expose request_id"
     body = fields(value[4])
     assert body[1] == result, body
     if marker is not None:
@@ -271,31 +273,31 @@ def smoke(websocket):
     client = Client(port, websocket)
     try:
         payload = envelope(1)
-        first_id = fields(payload)[3]
+
         client.send(payload, fragment=True)
         payload = envelope(2)
-        second_id = fields(payload)[3]
+
         client.send(payload)
-        response(client, 2, request_id=second_id)
-        response(client, 1, request_id=first_id)
+        response(client, 2)
+        response(client, 1)
         payload = envelope(0xFFFFFFFF)
-        request_id = fields(payload)[3]
+
         client.send(payload)
-        response(client, 0xFFFFFFFF, request_id=request_id)
+        response(client, 0xFFFFFFFF)
         payload = envelope(5)
-        fifth_id = fields(payload)[3]
+
         client.send(payload)
         payload = envelope(6)
-        sixth_id = fields(payload)[3]
+
         client.send(payload)
-        response(client, 5, result=7, request_id=fifth_id)
-        response(client, 6, request_id=sixth_id)
+        response(client, 5, result=7)
+        response(client, 6)
         # 编码失败不会产生回包，也不能阻止下一条健康请求。
         client.send(envelope(3))
         payload = envelope(7)
-        request_id = fields(payload)[3]
+
         client.send(payload)
-        response(client, 7, request_id=request_id)
+        response(client, 7)
         client.sock.settimeout(.1)
         try:
             client.receive()
@@ -307,10 +309,10 @@ def smoke(websocket):
     first, second = Client(port, websocket), Client(port, websocket)
     try:
         payload = envelope(4)
-        request_id = fields(payload)[3]
+
         first.send(payload)
-        response(first, 4, request_id=request_id)
-        response(first, 400, request_id=0)
+        response(first, 4)
+        response(first, 400)
         response(second, 400)
     finally:
         first.close()
@@ -321,9 +323,9 @@ def smoke(websocket):
     client = Client(port, websocket)
     try:
         payload = envelope(2)
-        request_id = fields(payload)[3]
+
         client.send(payload)
-        response(client, 2, request_id=request_id)
+        response(client, 2)
         client.sock.settimeout(.65)
         try:
             client.receive()
@@ -347,9 +349,8 @@ def smoke(websocket):
                 raise AssertionError("business close must disconnect client")
         finally:
             client.close()
-    # 未知命令、协议版本和零 request_id 都必须在网络边界被拒绝。
-    for payload in (envelope(7, command=9999), envelope(7, version=99),
-                    envelope(7, request_id=0), b"\xff"):
+    # 未知命令、旧协议版本和损坏Envelope必须在网络边界被拒绝。
+    for payload in (envelope(7, command=9999), envelope(7, version=99), envelope(7, version=3), b"\xff"):
         client = Client(port, websocket)
         try:
             client.send(payload)
@@ -475,21 +476,18 @@ def course(port, battle):
     try:
         for _ in range(10):
             payload = envelope(1001)
-            request_id = fields(payload)[3]
+
             client.send(payload)
             value = client.receive()
-            assert value[2] == 1001 and value[3] == request_id
+            assert value[2] == 1001 and 3 not in value
             assert fields(value[4])[1] in (1, 4, 5), value
         if battle:
             battle_payload = envelope(1001, command=1002)
             query_payload = envelope(1001)
-            battle_id = fields(battle_payload)[3]
-            query_id = fields(query_payload)[3]
             client.send(battle_payload)
             client.send(query_payload)
             responses = [client.receive(), client.receive()]
             assert {value[2] for value in responses} == {1001, 1002}
-            assert {value[3] for value in responses} == {battle_id, query_id}
             result = next(value for value in responses if value[2] == 1002)
             assert fields(result[4])[1] == 1, result
     finally:
@@ -499,10 +497,10 @@ def course(port, battle):
         connection = Client(port)
         try:
             payload = envelope(2000+index)
-            request_id = fields(payload)[3]
+
             connection.send(payload)
             value = connection.receive()
-            assert value[2] == 1001 and value[3] == request_id and fields(value[4])[1] == 2, value
+            assert value[2] == 1001 and 3 not in value and fields(value[4])[1] == 2, value
         finally:
             connection.close()
     with ThreadPoolExecutor(max_workers=8) as pool:

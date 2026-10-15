@@ -26,7 +26,6 @@ local function reply(route, response)
         gateway_epoch = route.gateway_epoch,
         connection_id = route.connection_id,
         command_id    = route.command_id,
-        request_id    = route.request_id,
         data          = response,
     })
     if not ok then skynet.error("FRAME_REPLY_FAILED ", tostring(err)) end
@@ -65,8 +64,7 @@ end
 
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
-    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0 and
-        route.request_id ~= 0, "invalid gateway route")
+    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0, "invalid gateway route")
     if route.command_id == ids.FRAME_INPUT then
         local target = worker_for(route.data.battle_id)
         if target then
@@ -116,7 +114,6 @@ skynet.start(function()
                 gateway_epoch = payload.session.gateway_epoch,
                 connection_id = payload.session.connection_id,
                 command_id = ids.FRAME_PUSH,
-                request_id = 0, -- 无请求关联的Server主动FramePush。
             }, payload.data)
         else
             error("unknown frame dispatch command: " .. tostring(command))

@@ -19,9 +19,8 @@ local state =
 --- data 由 Gateway 或可信 Battle 生成；不执行 I/O、yield 或状态缓存。
 ---@class GatewayDataMessage
 ---@field gateway_epoch string 当前 Gateway 实例身份；Gateway 与可信 Battle 创建，跨进程传输。
----@field connection_id integer Gateway 逻辑连接；0 表示主动广播，否则必须配非零 request_id。
+---@field connection_id integer Gateway 逻辑连接；0 表示本 Gateway 实例广播。
 ---@field command_id integer 已登记 Protobuf CommandId；跨进程传输。
----@field request_id integer uint64 的 Lua 整数位模式；非零关联请求，0 表示主动消息。
 ---@field data table 已解码 Request 或 Response；不含 fd，由当前消息协程持有。
 ---@param data GatewayDataMessage Gateway 已解码请求或 Battle 响应；只读借用。
 ---@return nil 非法字段抛错；不 I/O、不 yield、不缓存状态。
@@ -36,10 +35,6 @@ local function validate_data(data)
     assert(math.type(data.command_id) == "integer" and
         data.command_id > 0,
         "command_id must be positive")
-    assert(math.type(data.request_id) == "integer" and
-        ((data.connection_id == 0 and data.request_id == 0) or
-         (data.connection_id > 0 and data.request_id ~= 0)),
-        "request_id must match connection_id")
     assert(type(data.data) == "table", "gateway data payload is required")
 end
 

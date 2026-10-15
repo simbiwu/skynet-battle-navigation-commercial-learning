@@ -8590,21 +8590,13 @@ main() {
 main "$@"
 ```
 
-新增：`server/scripts/linux/stop_server.sh`
-
-```bash
-#!/usr/bin/env bash
-# 安全停止入口：复用 run_server.sh 的 PID 身份校验、SIGTERM 等待和可选 --force 逻辑。
-set -euo pipefail
-SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
-exec "$SCRIPT_DIR/run_server.sh" stop "$@"
-```
+停止操作统一由 `server/scripts/linux/run_server.sh stop` 提供。此前单独的 `stop_server.sh` 只转发参数到这个命令，没有独立的停止逻辑，因此不再保留第二个入口。
 
 第一次使用：
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh scripts/linux/stop_server.sh
+chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh
 ./scripts/linux/check_lua_varargs.sh
 ./scripts/linux/run_server.sh doctor || true
 ./scripts/linux/run_server.sh start
@@ -8648,11 +8640,9 @@ chmod +x scripts/linux/check_lua_varargs.sh scripts/linux/run_server.sh scripts/
 
 ```bash
 ./scripts/linux/run_server.sh stop
-# 等价短入口
-./scripts/linux/stop_server.sh
 ```
 
-停止脚本先从 `run/server.pid` 读取 PID，再检查 `/proc/<pid>/exe` 是否确实指向**当前仓库**的 Skynet 可执行文件，同时检查 cmdline 是否使用当前 `config/skynet.lua`。身份不匹配就拒绝发送信号，避免 stale PID 误杀其他进程。
+`run_server.sh stop` 将停止请求交给 `run_lesson_02_processes.sh`。该控制器读取 `run/lesson2/` 中 Gateway/Battle 各自的 PID 文件，并核对 PID 对应的 Skynet 可执行文件及进程配置；身份不匹配就拒绝发送信号，避免 stale PID 误杀其它进程。
 
 默认只发送 `SIGTERM` 并等待 `STOP_TIMEOUT_SEC`，不会自动 `kill -9`。只有人工明确执行：
 
@@ -9593,7 +9583,7 @@ OUT_OF_BOUNDS
 #### 安全停止
 
 ```bash
-./scripts/linux/stop_server.sh
+./scripts/linux/run_server.sh stop
 ```
 
 或：

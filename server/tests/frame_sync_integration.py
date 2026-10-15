@@ -9,7 +9,7 @@ from gateway_handshake_client import perform
 
 HOST = "127.0.0.1"
 PORT = 19021
-PROTO_VERSION = 3
+PROTO_VERSION = 4
 JOIN, INPUT, PUSH = 1101, 1102, 1103
 
 
@@ -102,21 +102,20 @@ class Client:
     def send(self, command, body):
         self.request_id += 1
         envelope = number(1, PROTO_VERSION) + number(2, command) + \
-            number(3, self.request_id) + binary(4, body)
+            binary(4, body)
         self.write_frame(envelope)
         return self.request_id
 
     def recv_envelope(self):
         envelope = parse(self.read_frame())
         assert first(envelope, 1) == PROTO_VERSION
-        return first(envelope, 2), first(envelope, 3, 0), first(envelope, 4)
+        return first(envelope, 2), 0, first(envelope, 4)
 
     def request(self, command, body):
         request_id = self.send(command, body)
         while True:
             got_command, got_id, payload = self.recv_envelope()
-            if got_id == request_id:
-                assert got_command == command
+            if got_command == command:
                 return parse(payload)
             assert got_id == 0 and got_command == PUSH
             self.pushes.append(parse(payload))
