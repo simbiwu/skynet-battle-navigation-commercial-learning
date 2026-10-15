@@ -6,7 +6,7 @@
 using System;
 using System.Collections;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Lesson02.Navigation.V1;
 using UnityEngine;
 
 namespace BattleNavigation.Client

@@ -1,7 +1,7 @@
 // 本地移动预测只调用FlyWow Navigation薄C ABI；实例仅在Unity主线程使用。
 using System;
 using System.Runtime.InteropServices;
-using Battle.Navigation.V1;
+using Battle.Lesson03.StateSync.V1;
 using BattleNavigation.FrameSync;
 namespace BattleNavigation.StateSync
 {

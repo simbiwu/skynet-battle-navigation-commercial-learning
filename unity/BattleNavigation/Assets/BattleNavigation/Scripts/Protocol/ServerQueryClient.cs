@@ -4,7 +4,7 @@
 // 生命周期：实例拥有 GatewayEnvelopeClient，由 Dispose 关闭。
 // 不负责：不做连接池、自动重试、高频查询或战斗模拟。
 using System;
-using Battle.Navigation.V1;
+using Battle.Lesson01.Navigation.V1;
 
 namespace BattleNavigation.Client
 {

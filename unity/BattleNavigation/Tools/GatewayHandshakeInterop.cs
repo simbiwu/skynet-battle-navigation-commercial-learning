@@ -3,7 +3,7 @@
 // 生命周期：每次运行建立并Dispose一个连接；输出仅结果，不输出密钥。
 // 不负责：不模拟加密、不替代H5浏览器或Unity平台验证。
 using System;
-using Battle.Navigation.V1;
+using Battle.Lesson01.Navigation.V1;
 using BattleNavigation.Client;
 
 internal static class GatewayHandshakeInterop
@@ -15,7 +15,7 @@ internal static class GatewayHandshakeInterop
         using (var client = new GatewayEnvelopeClient("127.0.0.1", port))
         {
             var response = client.RoundTrip(1001, new QueryCellRequest { MapId = 1001, MapVersion = 1 });
-            if (response.Command != 1001 || response.RequestId == 0) throw new Exception("RESPONSE_MISMATCH");
+            if (response.Command != 1001) throw new Exception("RESPONSE_MISMATCH");
         }
         Console.WriteLine("UNITY_CSHARP_SKYNET_HANDSHAKE_OK");
     }

@@ -1,6 +1,6 @@
 // 状态基线、删除与事件水位是客户端合同；测试不启动网络或依赖Render结果。
 using System.IO;
-using Battle.Navigation.V1;
+using Battle.Lesson03.StateSync.V1;
 using BattleNavigation.StateSync;
 using NUnit.Framework;
 namespace BattleNavigation.Tests

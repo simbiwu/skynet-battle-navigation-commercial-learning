@@ -9,7 +9,7 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Lesson03.FrameSync.V1;
 using Google.Protobuf;
 using UnityEngine;
 

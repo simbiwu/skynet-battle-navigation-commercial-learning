@@ -4,7 +4,7 @@
 // 生命周期：实例独占短连接，调用方负责 Dispose。
 // 不负责：不上传 Snapshot、不计算战斗、不更新 Unity 场景。
 using System;
-using Battle.Navigation.V1;
+using Battle.Lesson02.Navigation.V1;
 
 namespace BattleNavigation.Client
 {

@@ -9,7 +9,7 @@ using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Transport.V1;
 using Google.Protobuf;
 using FlyWow.Gateway;
 
@@ -25,6 +25,7 @@ namespace BattleNavigation.Client
                     TaskCreationOptions.RunContinuationsAsynchronously);
         }
 
+        private readonly uint pushCommand;
         private readonly TcpClient socket = new TcpClient();
         private readonly BlockingCollection<byte[]> outgoing =
             new BlockingCollection<byte[]>(128);
@@ -44,9 +45,9 @@ namespace BattleNavigation.Client
         public int PushDepth => pushes.Count;
 
         /// <summary>网络连接和握手在后台执行；成功后调用方负责Dispose。</summary>
-        public static async Task<GatewayConnection> Connect(string host, int port)
+        public static async Task<GatewayConnection> Connect(string host, int port, uint pushCommand)
         {
-            var value = new GatewayConnection();
+            var value = new GatewayConnection(pushCommand);
             try
             {
                 await Task.Run(() => value.Open(host, port));
@@ -57,6 +58,11 @@ namespace BattleNavigation.Client
                 value.Dispose();
                 throw;
             }
+        }
+
+        private GatewayConnection(uint pushCommand)
+        {
+            this.pushCommand = pushCommand;
         }
 
         private void Open(string host, int port)
@@ -138,17 +144,17 @@ namespace BattleNavigation.Client
         }
 
         /// <summary>单向发送当前Seat未来输入；有界队列满时显式失败。</summary>
-        public void Send(CommandId command, IMessage body)
+        public void Send(uint command, IMessage body)
         {
             if (Volatile.Read(ref closed) != 0) throw new IOException(fault ?? "CLOSED");
-            EnqueueEnvelope((uint)command, body);
+            EnqueueEnvelope(command, body);
         }
 
         /// <summary>控制请求最多8个在途，超时3秒；网络线程不访问Unity对象。</summary>
-        public async Task<Envelope> Request(CommandId command, IMessage body)
+        public async Task<Envelope> Request(uint command, IMessage body)
         {
-            var item = new Waiting { Command = (uint)command };
-            ulong id = (uint)command; // 同一命令只允许一个控制请求在途。
+            var item = new Waiting { Command = command };
+            ulong id = command; // 同一命令只允许一个控制请求在途。
             lock (gate)
             {
                 if (closed != 0) throw new IOException(fault ?? "CLOSED");
@@ -159,7 +165,7 @@ namespace BattleNavigation.Client
 
             try
             {
-                EnqueueEnvelope((uint)command, body);
+                EnqueueEnvelope(command, body);
                 if (await Task.WhenAny(item.Result.Task, Task.Delay(3000)) != item.Result.Task)
                 {
                     Fail("CONTROL_TIMEOUT"); // 超时关闭会话，迟到回包不能匹配之后的同命令。
@@ -189,8 +195,7 @@ namespace BattleNavigation.Client
                     {
                         throw new InvalidDataException("PROTOCOL_VERSION");
                     }
-                    if (envelope.Command == (uint)CommandId.FramePush ||
-                        envelope.Command == (uint)CommandId.StatePush)
+                    if (envelope.Command == pushCommand)
                     {
                         if (!pushes.TryAdd(envelope))
                         {

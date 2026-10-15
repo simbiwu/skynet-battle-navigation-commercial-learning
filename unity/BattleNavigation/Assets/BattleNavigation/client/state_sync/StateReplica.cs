@@ -2,7 +2,7 @@
 using System;
 using System.Collections.Generic;
 using System.IO;
-using Battle.Navigation.V1;
+using Battle.Lesson03.StateSync.V1;
 namespace BattleNavigation.StateSync
 {
     internal sealed class StateReplica

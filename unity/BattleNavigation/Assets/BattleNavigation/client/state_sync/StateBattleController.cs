@@ -6,7 +6,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Transport.V1;
+using Battle.Lesson03.StateSync.V1;
 using BattleNavigation.Client;
 using BattleNavigation.FrameSync;
 using Google.Protobuf;
@@ -89,20 +90,20 @@ namespace BattleNavigation.StateSync
             try
             {
                 connection?.Dispose();
-                var next = await GatewayConnection.Connect(Host, Port);
+                var next = await GatewayConnection.Connect(Host, Port, (uint)CommandId.StatePush);
                 if (destroyed) { next.Dispose(); return; }
                 connection = next;
                 StateJoinResponse value;
                 if (recover)
                 {
                     if (session == null) throw new IOException("NO_SESSION");
-                    var envelope = await connection.Request(CommandId.StateRecover,
+                    var envelope = await connection.Request((uint)CommandId.StateRecover,
                         new StateRecoverRequest { BattleId = session.BattleId, ResumeToken = session.ResumeToken });
                     value = StateRecoverResponse.Parser.ParseFrom(envelope.Body).State;
                 }
                 else
                 {
-                    var envelope = await connection.Request(CommandId.StateJoin,
+                    var envelope = await connection.Request((uint)CommandId.StateJoin,
                         new StateJoinRequest { ScenarioId = 1001, SimulationVersion = 1 });
                     value = StateJoinResponse.Parser.ParseFrom(envelope.Body);
                 }
@@ -156,7 +157,7 @@ namespace BattleNavigation.StateSync
             resyncing = true;
             try
             {
-                var envelope = await connection.Request(CommandId.StateResync,
+                var envelope = await connection.Request((uint)CommandId.StateResync,
                     new StateResyncRequest { BattleId = session.BattleId, Generation = session.Generation });
                 var result = StateResyncResponse.Parser.ParseFrom(envelope.Body);
                 if (destroyed) return;
@@ -180,7 +181,7 @@ namespace BattleNavigation.StateSync
             status = "cast preview " + skill; // 可撤销本地反馈；不修改HP。
             try
             {
-                var envelope = await connection.Request(CommandId.StateCast, new StateCastRequest
+                var envelope = await connection.Request((uint)CommandId.StateCast, new StateCastRequest
                 {
                     BattleId = session.BattleId, Generation = session.Generation,
                     CastSeq = seq, SkillId = skill, TargetId = target.InstanceId,
@@ -247,7 +248,7 @@ namespace BattleNavigation.StateSync
                             AckSnapshotSeq = replica.Current.SnapshotSeq, AckEventSeq = replica.EventSequence,
                         };
                         req.Inputs.Add(input);
-                        connection.Send(CommandId.StateInput, req);
+                        connection.Send((uint)CommandId.StateInput, req);
                     }
                     if (steps >= 4 || pending.Count == 24) accumulator = Math.Min(accumulator, 1.0 / 60.0);
                 }
@@ -347,7 +348,7 @@ namespace BattleNavigation.StateSync
                 uint offset = 0;
                 while (true)
                 {
-                    var envelope = await connection.Request(CommandId.StateReplay, new StateReplayRequest
+                    var envelope = await connection.Request((uint)CommandId.StateReplay, new StateReplayRequest
                     { BattleId = session.BattleId, ResumeToken = session.ResumeToken, Offset = offset });
                     var page = StateReplayResponse.Parser.ParseFrom(envelope.Body);
                     if (page.Code != "OK") throw new IOException(page.Code);

@@ -7,7 +7,7 @@ using System;
 using System.IO;
 using System.Net.Sockets;
 using System.Threading;
-using Battle.Navigation.V1;
+using Battle.Transport.V1;
 using BattleNavigation.Protocol;
 using Google.Protobuf;
 using FlyWow.Gateway;
