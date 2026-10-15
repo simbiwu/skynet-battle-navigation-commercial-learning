@@ -7,7 +7,7 @@ local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local process = require "config.battle"
 local scenario = require "battle.scenario_1001"
-local protocol_registry = require "gateway.protocol.navigation_registry"
+local protocol_registry = require "gateway.protocol.protocol_registry_lesson_02"
 local command_ids = protocol_registry.command_ids
 local luapanda_debug = require "shared.debug.luapanda_debug"
 

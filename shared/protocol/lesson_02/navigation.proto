@@ -1,0 +1,79 @@
+// 职责：第二课导航查询和自动战斗项目的独立协议。
+// 边界：命令编号、消息和位置类型均属第二课，不依赖第一课 schema。
+syntax = "proto3";
+package battle.lesson_02.navigation.v1;
+enum CommandId {
+  COMMAND_UNSPECIFIED = 0;
+  QUERY_CELL = 1001;
+  RUN_AUTO_BATTLE = 1002;
+}
+message WorldPosition {
+  sint64 x_mm = 1;
+  sint64 y_mm = 2;
+  sint64 z_mm = 3;
+}
+
+message QueryCellRequest {
+  uint32 map_id = 1;
+  uint32 map_version = 2;
+  WorldPosition position = 3;
+}
+message QueryCellResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    MAP_NOT_FOUND = 2;
+    MAP_VERSION_MISMATCH = 3;
+    OUT_OF_BOUNDS = 4;
+    NOT_WALKABLE = 5;
+    BAD_REQUEST = 6;
+    INTERNAL_ERROR = 7;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 map_id = 3;
+  uint32 map_version = 4;
+  int32 grid_x = 5;
+  int32 grid_z = 6;
+  int32 cell_height_mm = 7;
+  uint32 area = 8;
+  uint32 clearance = 9;
+}
+
+message RunAutoBattleRequest { uint32 scenario_id = 1; }
+message BattleEvent {
+  uint32 seq = 1;
+  uint32 logic_ms = 2;
+  string type = 3;
+  uint32 unit_id = 4;
+  uint32 target_id = 5;
+  uint32 attacker_id = 6;
+  uint32 killer_id = 7;
+  uint32 damage = 8;
+  uint32 target_hp = 9;
+  uint32 speed_mm_per_sec = 10; // 与现有Server/Unity Replay的毫米每秒合同对齐；版本4拒绝旧端。
+  string reason = 11;
+  string result = 12;
+  WorldPosition position = 13;
+  repeated WorldPosition points = 14;
+}
+message RunAutoBattleResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    BAD_SCENARIO = 2;
+    BUSY = 3;
+    BATTLE_FAILED = 4;
+    RESULT_TOO_LARGE = 5;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 battle_id = 3;
+  uint32 battle_version = 4;
+  uint32 map_id = 5;
+  uint32 map_version = 6;
+  sint64 seed = 7;
+  string battle_result = 8;
+  uint32 end_logic_ms = 9;
+  repeated BattleEvent events = 10;
+}

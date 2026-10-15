@@ -6078,7 +6078,7 @@ LUA_PROTOBUF_BUILD_OK .../pb.so
 
 操作：新建 Server descriptor 生成脚本，并粘贴下面的完整内容。
 
-新建文件：`protocol/build_server_descriptor.sh`
+新建文件：`protocol/build_protocol_lesson_01.sh`
 
 ```bash
 #!/usr/bin/env bash
@@ -6203,7 +6203,7 @@ local path = assert(arg[1], "usage: check_descriptor.lua descriptor.pb")
 local data = assert(io.open(path, "rb")):read("*a")
 assert(pb.load(data))
 
-assert(pb.type(".battle.navigation.v1.Envelope"))
+assert(pb.type(".battle.transport.v1.Envelope"))
 assert(pb.type(".battle.navigation.v1.QueryCellRequest"))
 assert(pb.type(".battle.navigation.v1.QueryCellResponse"))
 print("PROTO_DESCRIPTOR_OK")
@@ -6213,7 +6213,7 @@ print("PROTO_DESCRIPTOR_OK")
 
 ```bash
 cd "$(git rev-parse --show-toplevel)/server"
-./protocol/build_server_descriptor.sh
+./protocol/build_protocol_lesson_01.sh
 ./scripts/linux/check_server_descriptor.sh
 ```
 
@@ -6661,7 +6661,7 @@ config/
   skynet.lua
 ```
 
-`gateway/service/gateway/flywow_gateway.lua` 和 `gateway/lualib/flywow/gateway/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway.lua`，文件所在目录直接表达它的运行身份。
+`gateway/service/gateway/flywow_gateway.lua` 和 `gateway/lualib/*` 属于独立的 `Skynet-FlyWow` 框架仓库。学习工程通过 `server/third_party/skynet-flywow` Git submodule 固定已经验证过的提交，不复制源码；开发调试时才使用 `FLYWOW_ROOT` 覆盖到 `~/workspace/skynet-battle-navigation-commercial-learning/server/third_party/skynet-flywow`。首次获取仓库必须执行 `git clone --recurse-submodules`，或在已有克隆中执行 `git submodule update --init --recursive`。`protocol/` 保存 `.proto` 源，`lualib/gateway/protocol/*_registry.lua` 是构建时生成物，不手工维护。Gateway 默认配置放在 `config/gateway_lesson_01.lua`，文件所在目录直接表达它的运行身份。
 
 ### 26.2 配置
 
@@ -6669,7 +6669,7 @@ FlyWow Gateway 的配置除了监听地址和协议版本，还需要明确 tran
 
 操作：新建 Gateway 默认配置。Gateway Service 启动时自动读取它；业务入口通常只传入 Query Service handle。
 
-新建文件：`config/gateway.lua`
+新建文件：`config/gateway_lesson_01.lua`
 
 ```lua
 -- 职责：声明 FlyWow Gateway 的宿主默认配置，集中管理监听、协议产物和资源上限。
@@ -6713,7 +6713,7 @@ return {
 local pb = require "pb"
 
 local M = {}
-M.ENVELOPE = ".battle.navigation.v1.Envelope"
+M.ENVELOPE = ".battle.transport.v1.Envelope"
 M.REQUEST = ".battle.navigation.v1.QueryCellRequest"
 M.RESPONSE = ".battle.navigation.v1.QueryCellResponse"
 
@@ -6910,7 +6910,7 @@ end)
 
 ### 27.0 当前 Gateway 接入入口：FlyWow Gateway
 
-第一课现在由 `main.lua` 创建 `flywow_gateway` Service，并显式注入 Query Service handle。descriptor、registry、transport 和资源上限由 `config/gateway.lua` 默认配置提供，必要时才通过 start 覆盖；业务 Query Service 不再注册 `query_cell` 协议，也不接触 TCP/WebSocket frame。
+第一课现在由 `main.lua` 创建 `flywow_gateway` Service，并显式注入 Query Service handle。descriptor、registry、transport 和资源上限由 `config/gateway_lesson_01.lua` 默认配置提供，必要时才通过 start 覆盖；业务 Query Service 不再注册 `query_cell` 协议，也不接触 TCP/WebSocket frame。
 
 #### 27.0.1 获取固定版本的 FlyWow submodule
 
@@ -6961,7 +6961,7 @@ Unity TCP / WebSocket
 
 run_server.sh 只负责调用独立的 Skynet-FlyWow 生成器；生成器实现不复制到学习工程。若框架仓库不在当前 workspace 的约定位置，设置 FLYWOW_ROOT=/path/to/skynet-flywow。
 
-需要替换协议 bundle 时，可以用 `GATEWAY_REGISTRY_OUTPUT` 改变 registry 生成路径，并同步让 `config/gateway.lua` 的 `registry_module` 指向相同的 Lua 模块；默认值是 `server/lualib/gateway/protocol/navigation_registry.lua`。
+需要替换协议 bundle 时，可以用 `GATEWAY_REGISTRY_OUTPUT` 改变 registry 生成路径，并同步让 `config/gateway_lesson_01.lua` 的 `registry_module` 指向相同的 Lua 模块；默认值是 `server/lualib/gateway/protocol/protocol_registry_lesson_01.lua`。
 
 运行时不解析 `.proto`，也不要求业务代码调用 `gateway.register_command`。业务 Service 只处理：
 
@@ -6978,7 +6978,7 @@ skynet.dispatch("lua", function(session, source, command, payload)
 end)
 ```
 
-Gateway transport 由 `server/config/gateway.lua` 的 `transport` 决定：
+Gateway transport 由 `server/config/gateway_lesson_01.lua` 的 `transport` 决定：
 
 ```lua
 transport = "tcp"        -- TCP uint16 length + Envelope
@@ -6987,7 +6987,7 @@ transport = "websocket"  -- Skynet 内置 http.websocket + binary Envelope
 
 WebSocket 不由课程自己重复实现协议解析；Skynet 固定版本的 `http.websocket` 负责 Upgrade、mask、fragment、ping/pong 和 close frame，FlyWow 负责 binary-only 策略、Envelope、业务路由、背压和错误合同。
 
-验证 WebSocket 时，把 `server/config/gateway.lua` 的 `transport` 临时改为 `"websocket"`，执行 `./scripts/linux/run_server.sh restart`，再用支持 WebSocket binary message 的客户端发送同一份 Envelope。日志应出现 `FLYWOW_GATEWAY_READY transport=websocket`，响应仍是同一套 `Envelope`；验证完成后恢复 `transport = "tcp"`。不要把文本 JSON 当作 WebSocket 业务协议，也不要在客户端再包一层自定义长度头。
+验证 WebSocket 时，把 `server/config/gateway_lesson_01.lua` 的 `transport` 临时改为 `"websocket"`，执行 `./scripts/linux/run_server.sh restart`，再用支持 WebSocket binary message 的客户端发送同一份 Envelope。日志应出现 `FLYWOW_GATEWAY_READY transport=websocket`，响应仍是同一套 `Envelope`；验证完成后恢复 `transport = "tcp"`。不要把文本 JSON 当作 WebSocket 业务协议，也不要在客户端再包一层自定义长度头。
 
 完整的 FlyWow 接入合同见独立仓库：
 
@@ -7927,7 +7927,7 @@ skynet.start(function()
     -- ready call 等待 Query 完成 BMAP 加载并注册 dispatch，随后 Gateway 才开始监听。
     assert(skynet.call(query_service, "lua", "ready"))
     local gateway_service = skynet.newservice("flywow_gateway")
-    -- Gateway 从 config.gateway 读取默认配置；composition root 只注入业务 handler handle。
+    -- Gateway 从 config.gateway_lesson_01 读取默认配置；composition root 只注入业务 handler handle。
     assert(skynet.call(gateway_service, "lua", "start", {
         handler_service = query_service,
     }))
@@ -8072,7 +8072,7 @@ SKYNET_CONFIG="$SERVER_ROOT/config/skynet.lua"
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 DESCRIPTOR_FILE="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
 PROTO_SOURCE="$SHARED_ROOT/protocol/navigation_query.proto"
-REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua}"
+REGISTRY_OUTPUT="${GATEWAY_REGISTRY_OUTPUT:-$SERVER_ROOT/lualib/gateway/protocol/protocol_registry_lesson_01.lua}"
 source "$SHARED_ROOT/protocol/VERSIONS.env"
 
 BUILD_TYPE="${BUILD_TYPE:-RelWithDebInfo}"
@@ -8120,7 +8120,7 @@ Environment:
   STARTUP_TIMEOUT_SEC=15
   STOP_TIMEOUT_SEC=20
   FLYWOW_ROOT=/path/to/skynet-flywow
-  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/gateway/protocol/navigation_registry.lua
+  GATEWAY_REGISTRY_OUTPUT=/path/to/server/lualib/gateway/protocol/protocol_registry_lesson_01.lua
 USAGE
 }
 
@@ -9476,7 +9476,7 @@ bootstrap_skynet.sh
 bootstrap_protocol_tools.sh
 build_skynet.sh
 build_lua_protobuf.sh
-build_server_descriptor.sh
+build_protocol_lesson_01.sh
 check_server_descriptor.sh
 scripts/linux/run_server.sh build
 run_server.sh doctor

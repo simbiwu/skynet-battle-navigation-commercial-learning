@@ -1,36 +1,41 @@
-# 共享协议合同
+# 协议源与生成物
 
-本目录是 Unity 与 Server 协议的唯一来源。navigation_query.proto 定义线协议，VERSIONS.env 固定生成器与 Runtime 依赖，generated/ 保存各运行端需要的可发布生成物。
+shared/protocol/ 是协议源和已验证生成物的边界。课程 1、课程 2、课程 3 帧同步、课程 3 状态同步分别按独立项目维护自己的 package、命令枚举和业务消息；只有传输头 wire_header.proto 中的 battle.transport.v1.Envelope 共用；所有课程客户端、descriptor 与 Registry 都同步使用当前版本，不保留历史字段兼容。
 
-## 命令解析规则
+## 源文件布局
 
-协议文件头必须保留下面这套规则，新增命令也必须遵守：
+- wire_header.proto：所有课程唯一共用的 battle.transport.v1.Envelope。它只包含 protocol_version=1、command=2 和 body=3。
+- lesson_01/navigation.proto：第一课导航查询的 CommandId、位置类型和消息。
+- lesson_02/navigation.proto：第二课导航查询与自动战斗的 CommandId、位置类型和消息。
+- lesson_03/frame_sync.proto：第三课帧同步自己的命令编号和消息。
+- lesson_03/state_sync.proto：第三课状态同步自己的命令编号、位置类型和消息。
+- VERSIONS.env：固定 protoc 与 protobuf Runtime 版本。
+- generated/server/：各课程独立的 FileDescriptorSet、二进制 SHA-256 和输入源 SHA-256。
+- generated/unity/：Windows Unity C# 生成文件的逐文件 SHA-256。
 
-1. 每个业务命令只在 enum CommandId 中定义一次。枚举名使用全大写下划线，枚举值是稳定的 Envelope.command 数值。
-2. 枚举名按 QUERY_CELL 转换为 QueryCell，生成器要求存在同名前缀的 QueryCellRequest。
-3. 如果存在 QueryCellResponse，该命令是请求-响应命令；如果没有 Response 消息，该命令就是单向请求。
-4. 单向命令只定义 XxxRequest，不定义 XxxResponse。Server 解码并投递请求，业务处理完成后不发送业务响应。
-5. 协议不使用 service、rpc、自定义 option 或 command_id 注释。Python 生成器只解析 CommandId 和消息名。
-6. Unity 使用 protoc 生成消息和 CommandId；Server 使用同一份 proto 生成 Lua registry。两端不得手写第二份命令映射。
+各课程使用独立 package，方便所有课程客户端类型同时存在于同一 Unity 程序集中。业务 schema 不 import 其它课程 schema；生成 Server descriptor 时将 wire_header.proto 和当前课程 schema 放进同一份 FileDescriptorSet。--include_imports 的职责是让当前课程 descriptor 自包含地携带需要的类型，不代表 Gateway 加载其它课程协议。
 
-Envelope 固定包含 `protocol_version`、`command`、`request_id` 和 `body`。`request_id` 是 uint64 关联编号：普通请求由客户端生成并由 Server 原样回显；`0` 保留给无请求关联的主动消息。`body` 使用字段号 4。Gateway 的连接身份与跨 Service 路由字段属于 Server 内部消息，不放入 Envelope。
+## 协议构建入口
 
-## 生成与调用
+每个入口只生成一个课程的 .pb、hash sidecar 和 protocol_registry_*.lua；入口内部带有路径推导、版本检查、输入验证、生成顺序和失败语义的中文注释。
 
-从仓库根目录执行：
+命令（每次只运行需要的那一课）：
 
-```bash
-python3 server/third_party/skynet-flywow/scripts/generate_gateway_registry.py   --proto shared/protocol/navigation_query.proto   --output server/lualib/gateway/protocol/navigation_registry.lua
-```
+    bash server/protocol/build_protocol_lesson_01.sh
+    bash server/protocol/build_protocol_lesson_02.sh
+    bash server/protocol/build_protocol_lesson_03_frame_sync.sh
+    bash server/protocol/build_protocol_lesson_03_state_sync.sh
 
-这个脚本只负责把 CommandId、XxxRequest 和可选的 XxxResponse 转成 Server Gateway 的运行时索引；它不会生成 protobuf 消息代码，也不会启动服务。Server 启动时由 flywow_gateway 加载生成的 registry，按 Envelope.command 查找请求类型并决定是否允许响应。
+例如修改帧同步协议只运行第三课帧同步入口，不会生成或覆盖导航、自动战斗或状态同步文件。Server 启动脚本只消费已经构建的 descriptor 与 Registry，不会在 run_server.sh 中发现或批量生成协议。
 
-Server descriptor 和 Unity C# 生成仍按以下顺序执行：
+descriptor 输出名分别为 lesson_01.pb、lesson_02.pb、lesson_03_frame_sync.pb、lesson_03_state_sync.pb。Registry 分别名为 protocol_registry_lesson_01.lua、protocol_registry_lesson_02.lua、protocol_registry_lesson_03_frame_sync.lua、protocol_registry_lesson_03_state_sync.lua。
 
-1. 修改 navigation_query.proto，并在不兼容变更时同步提升协议版本；
-2. 在 WSL 执行 server/protocol/build_server_descriptor.sh；
-3. 在 Windows PowerShell 执行 shared/protocol/build_unity_cs.ps1；
-4. 运行 Server descriptor 检查和 Unity 编译/测试；
-5. 将协议源、两端生成物和校验文件放在同一次提交中。
+## Unity C# 生成
 
-Server 部署端只需要拉取或安装这个已验证提交，不应在启动时自行生成另一份 descriptor。Unity 生成代码是客户端编译输入，也不能手工修改。
+在 Windows PowerShell 执行：
+
+    .\shared\protocol\build_unity_cs.ps1
+
+脚本中的 $protocolInputs 是唯一课程文件清单。输出分别放进 Scripts/Protocol/Shared/、Lesson01/、Lesson02/、Lesson03FrameSync/ 和 Lesson03StateSync/，不会因两个课程都有 Navigation.cs 而相互覆盖。Unity Editor 管理新文件的 .meta。
+
+协议修改后，应使用对应课程的 WSL Server 构建入口和 Windows Unity C# 入口分别生成、验证双方产物。不要从课程 1 协议构建流程生成课程 2/3 文件，也不要手工编辑 .pb、Registry 或生成的 C#。

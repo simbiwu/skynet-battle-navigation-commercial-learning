@@ -7,7 +7,6 @@ import argparse
 import base64
 from concurrent.futures import ThreadPoolExecutor
 import hashlib
-from itertools import count
 import os
 from pathlib import Path
 import socket
@@ -17,7 +16,6 @@ import time
 from gateway_handshake_client import perform, hello, respond
 
 ROOT = Path(__file__).resolve().parents[1]
-REQUEST_IDS = count(1)
 
 
 # 编码正整数 varint；测试只构造本协议中的有限编号，不依赖额外 Python protobuf 包。
@@ -74,13 +72,11 @@ def fields(data):
 
 
 # 构造当前Envelope；map_id仅在测试夹具中作为标记，真实Query使用1001。
-def envelope(map_id=1001, command=1001, version=4, request_id=None):
-    if request_id is None:
-        request_id = next(REQUEST_IDS)
+def envelope(map_id=1001, command=1001, version=4):
     body = number(1, map_id)
     if command == 1001:
         body += number(2, 1) + blob(3, b"")
-    return number(1, version) + number(2, command) + blob(4, body)
+    return number(1, version) + number(2, command) + blob(3, body)
 
 
 # 从当前 Socket 读满指定字节；EOF 是失败，不把短读当成完整帧。
@@ -257,11 +253,11 @@ class Processes:
 
 
 # 验证同连接异步乱序、广播、业务/编码失败、主动关闭与跨断线迟到回包。
-def response(client, marker=None, result=1, request_id=None):
+def response(client, marker=None, result=1):
     value = client.receive()
     assert value[2] == 1001, value
-    assert 3 not in value, "transport must not expose request_id"
-    body = fields(value[4])
+    assert 3 in value and 4 not in value, "Envelope body must use field 3 without request_id"
+    body = fields(value[3])
     assert body[1] == result, body
     if marker is not None:
         assert body[3] == marker, body
@@ -342,7 +338,7 @@ def smoke(websocket):
             for _ in range(2):
                 try:
                     value = client.receive()
-                    assert marker == 601 and fields(value[4])[3] == 601
+                    assert marker == 601 and fields(value[3])[3] == 601
                 except (EOFError, ConnectionResetError):
                     break
             else:
@@ -479,8 +475,8 @@ def course(port, battle):
 
             client.send(payload)
             value = client.receive()
-            assert value[2] == 1001 and 3 not in value
-            assert fields(value[4])[1] in (1, 4, 5), value
+            assert value[2] == 1001 and 3 in value and 4 not in value
+            assert fields(value[3])[1] in (1, 4, 5), value
         if battle:
             battle_payload = envelope(1001, command=1002)
             query_payload = envelope(1001)
@@ -489,7 +485,7 @@ def course(port, battle):
             responses = [client.receive(), client.receive()]
             assert {value[2] for value in responses} == {1001, 1002}
             result = next(value for value in responses if value[2] == 1002)
-            assert fields(result[4])[1] == 1, result
+            assert fields(result[3])[1] == 1, result
     finally:
         client.close()
     # 不同地图标记产生明确拒绝，检查多连接响应未串线。
@@ -500,7 +496,7 @@ def course(port, battle):
 
             connection.send(payload)
             value = connection.receive()
-            assert value[2] == 1001 and 3 not in value and fields(value[4])[1] == 2, value
+            assert value[2] == 1001 and 3 in value and 4 not in value and fields(value[3])[1] == 2, value
         finally:
             connection.close()
     with ThreadPoolExecutor(max_workers=8) as pool:

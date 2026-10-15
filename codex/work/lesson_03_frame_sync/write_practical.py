@@ -175,73 +175,34 @@ Unit.ready、Bolt.next_id/到期/位置/伤害、Unit.move_mode 和高度全部�
 for name in ['frame_core.h','frame_core.cpp','frame_binding.cpp','CMakeLists.txt','frame_test.cpp']:
     source('server/native/frame_sync/'+name)
 source('server/tests/frame_binding_test.lua')
-prose(r'''
-### 2.5 第一次跨 Lua/C++ 边界怎样审计
+prose(r'''## 3. Gateway：连接定向与业务命令分离
 
-`require "lesson_frame_native"` 查 `package.cpath`，加载 `server/build/frame_sync/lesson_frame_native.so`，Lua 自动调用 `luaopen_lesson_frame_native`。每个 Service 都有独立 Lua State/module cache；同一 OS 进程可以多次进入 open。每次 `native.open()` 创建独占 Engine userdata，不能把可变 Engine 当成共享全局对象。
+FlyWow Gateway 不使用 `request_id` 关联业务请求和响应。控制回复与主动推送通过各课程的 `command` 区分；帧同步使用本课独立的 `FramePush` command。客户端同一时间只保留一个相同 command 的控制请求，主动 Push 进入独立队列。
 
-Owner 存 Native handle：显式 close 把它设为 null；GC 只析构 userdata 里的 Owner 一次，所以不会重复释放旧 handle。Binding 读取参数失败使用返回值 `nil,error`，不依赖 Lua longjmp 穿过 C++ 局部析构。LuaTable/LuaBinding 的栈与 registry reference 机制由固定 FlyWow 的 `lua-binding/` 实现，调用方借用 userdata 至当前回调结束，不把其裸指针跨 yield 保留。
+Frame Proxy 将 `gateway_epoch`、`connection_id`、`command_id` 和业务值转发给 Gateway。正数 `connection_id` 只投递到当前实例中 epoch 匹配且已 ready 的连接；`connection_id=0` 仅在课程配置允许时广播。未知连接、旧 epoch、未 ready 连接和非法来源必须丢弃，不能退化成广播。
 
-先仅构建新 Core，不启动 Server：
+运行 `gateway_async_test.lua` 验证替身边界，再运行 `gateway_async_integration.py --scope all` 覆盖 TCP/WS、课程本地与 Cluster 流程。测试范围不替代握手密码学、Unity Play Mode 或容量验证。
+
+## 4. 每课独立协议，共用中性传输头
+
+所有课程唯一共用的协议类型是 `battle.transport.v1.Envelope`，字段为 `protocol_version=1`、`command=2`、`body=3`；不包含 `request_id`，不保留旧字段号。课程业务消息、`CommandId`、package、descriptor、Registry、Gateway 配置各自独立。课程源和 Server/Unity 生成物同步更新，不维护历史协议兼容。
+
+第三课帧同步唯一业务源为 `shared/protocol/lesson_03/frame_sync.proto`，package 为 `battle.lesson_03.frame_sync.v1`。修改它后只构建当前课程：
 
 ```bash
-cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
-cmake -S native/frame_sync -B build/frame_sync -DCMAKE_BUILD_TYPE=Release
-cmake --build build/frame_sync --parallel 4
-ctest --test-dir build/frame_sync --output-on-failure
-./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua
+bash server/protocol/build_protocol_lesson_03_frame_sync.sh
+bash server/scripts/linux/check_server_descriptor.sh lesson_03_frame_sync
 ```
 
-预期 CTest `frame_native` 通过，Lua 输出 `FRAME_BINDING_OK`。`frame_test` 对两独立实例、restore后重演、坏Checkpoint保持旧状态、非法输入原子失败、飞行敌人高度变化做断言。它输出每帧 `GOLDEN frame hash`，后面与 Windows 比较；这里只证明当前 Linux 实例，不提前宣称跨平台确定性。
+输出是 `lesson_03_frame_sync.pb` 与 `protocol_registry_lesson_03_frame_sync.lua`。其它课程使用自己的构建入口和 Gateway 配置；运行时不扫描或合并整个课程协议集合。
 
-失败排查：`MAP_LOAD` 看相对工作目录与BMAP；`SPAWN_BLOCKED` 核对资产版本/出生点；`module not found` 核对 `.so` 名称、cpath 和构建路径；`undefined symbol lua_*` 必须使用Skynet固定Lua，不能随便换系统 Lua 5.3；DLL/so 不是可以跨OS复制使用的同一二进制。
-
-## 3. 由你修复 Gateway 定向主动消息，并先审计
-
-### 3.1 当前拒绝的具体含义
-
-`connection_id>0` 指定一个已经建立的逻辑连接；`request_id=0` 表示主动消息，不属于某个客户端请求的响应。这两个字段并不矛盾。当前 `flywow_gateway.lua` 的 `deliver_data()` 把这个组合当成非法；因此业务虽然产生正式FramePush，却发不到特定玩家。
-
-只允许 `connection_id=0/request_id=0` 的广播不能作为替代：广播会把某场战斗输入发给所有连接。也不能伪造一个旧非零request_id，把主动帧塞到控制请求的等待表。
-
-### 3.2 局部修改 FlyWow Runtime
-
-**操作：局部修改。WSL 子模块文件：**
-
-`server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`
-
-只在 `deliver_data(message)` 的参数拒绝条件中，删除这一条：
-
-```lua
-        (message.connection_id > 0 and message.request_id == 0) or
-```
-
-保留相邻的广播关联检查：
-
-```lua
-        (message.connection_id == 0 and message.request_id ~= 0) or
-```
-
-不要删除其它类型、整数、epoch、阶段、命令、编码和长度检查。后面的目标连接分支已经按 id 找连接并检查 ready；不需要改成广播循环。修改后的合同：
-
-|connection_id|request_id|含义|
-|---:|---:|---|
-|>0|>0|该连接的关联响应|
-|>0|0|该连接的主动推送|
-|0|0|所有ready连接的主动广播|
-|0|>0|非法，拒绝|
-
-这是 FlyWow 接入合同的通用修复，代码仍不认识Battle。旧第二课 `server/service/gateway/gateway_proxy.lua` 自身还有“指定连接必须非零request_id”的验证；**本课使用独立 Frame Proxy**，其合同在第5节给出，所以不要求修改旧第二课Proxy，也不暗中依赖它突然支持主动帧。
-
-### 3.3 完整替换审计测试
-
-下面是完整测试文件，保留原关联响应、异步派发、旧epoch与广播用例，再新增两个连接的定向推送审计。握手替身 `ready` 由场景开关控制；它只验证 Gateway 对 ready 的处理，不冒充真实握手密码学测试。调试器替身避免单测引入宿主调试环境。
+Windows Unity 按协议生成脚本的课程清单输出独立 C# 目录：Shared、Lesson01、Lesson02、Lesson03FrameSync、Lesson03StateSync。Frame/State 共用的 `GatewayConnection` 只处理 Envelope 和 uint command，不导入任一课程的命令枚举或业务 DTO。
 ''')
 source('server/third_party/skynet-flywow/gateway/tests/gateway_async_test.lua','完整替换（先比较你已有测试修改）')
 prose(r'''
-### 3.4 先证明测试能抓住旧错误
+### 3.4 验证当前 Gateway 合同
 
-先放入测试，**暂不删除旧拒绝条件**，从Server工作目录执行：
+当前 Gateway 已支持无 request_id 的定向消息；从 Server 工作目录运行测试验证既有行为：
 
 ```bash
 ./third_party/skynet/3rd/lua/lua \
@@ -249,19 +210,19 @@ prose(r'''
   third_party/skynet-flywow
 ```
 
-预期在 `target push must not broadcast` 断言失败。再按3.2删除条件，重新执行，预期 `GATEWAY_ASYNC_UNIT_OK`。
+预期输出 `GATEWAY_ASYNC_UNIT_OK`。真实 TCP/WS 和课程调用由 `gateway_async_integration.py --scope all` 覆盖。
 
-审计时逐条回答：指定连接是否只写对应fd？出站request_id是否仍为0？旧epoch、未ready、已关闭、不存在的目标是否直接丢弃？未知目标是否错误退化为广播？非零request_id广播是否仍拒绝？已有请求响应是否仍通过？源码是否保留编码失败不误关健康连接的行为？
+审计时确认指定连接只写对应fd；旧epoch、未ready、已关闭和未知目标均丢弃；未知目标不退化为广播；编码失败不误关健康连接。Envelope 不携带 request_id。
 
-本测试没有新增回复来源身份认证。Gateway 当前信任宿主Service边界；新 Frame Proxy对断线来源与绑定Gateway handle做检查，Worker只接收其Dispatcher。Cluster应处于可信部署网络。这些来源边界与这次“允许指定连接request_id=0”修复是不同的审计项，不能看到消息可达就说所有身份校验通过。
+Gateway 仍信任宿主 Service 边界；Frame Proxy 检查断线来源和绑定的 Gateway handle，Worker 只接收 Dispatcher 消息。Cluster 部署网络必须处于可信边界。消息可达不代表来源认证或公网安全已验证。
 
 暂不因为教程要求而自动commit/push。你审计通过并决定发布时，按WORKSPACE_WORKFLOW：FlyWow子模块先形成已验证提交并推送，主仓库再更新submodule指针，随后Windows同步。提交标题与正文用中文。本文后续步骤在你的当前已修改WSL工作树中也能验证，不要求提前发布一个未审计版本。
 
-## 4. 兼容扩展唯一 Proto，不手写第二份命令表
+## 4. 每课独立协议，共用中性传输头
 
-现有 `QueryCell=1001`、`RunAutoBattle=1002` 与字段号不改变，Envelope仍protocol_version=3。新增命令的 `XxxRequest/XxxResponse` 由FlyWow生成器识别：FrameInput只有Request，FramePush只有Response；输入单向发送，FramePush使用request_id=0。
+课程间唯一共用协议类型是 `battle.transport.v1.Envelope`，字段为 `protocol_version=1`、`command=2`、`body=3`，不包含 `request_id`。每课独立维护 package、CommandId、业务消息、descriptor、Registry 和 Gateway 配置；协议源及 Server/Unity 生成物始终同步最新，不保留历史字段兼容。
 
-**操作：局部修改 `shared/protocol/navigation_query.proto` 的CommandId，添加：**
+第三课帧同步命令已定义在 `shared/protocol/lesson_03/frame_sync.proto` 中。新增或修改本课命令时只编辑该文件，不修改公共传输头或其他课程 schema：
 
 ```proto
   FRAME_JOIN = 1101;
@@ -272,7 +233,7 @@ prose(r'''
   FRAME_REPLAY = 1106;
 ```
 
-**操作：在同一个Proto文件末尾追加以下完整messages。** `.proto.inc`只是本文作者组织片段的名字，不是你要创建的第二份协议文件；不要新增运行时协议源。
+本课消息也只定义在 `frame_sync.proto`；下面的片段用于说明消息字段，实际协议源仍以该文件为准。
 ''')
 prose('```proto\n'+F['shared/protocol/frame_sync_messages.proto.inc']+'```')
 prose(r'''
@@ -287,11 +248,8 @@ Join只选择已发布scenario_id，不携带位置、HP或Native状态。Server
 WSL仓库根目录：
 
 ```bash
-./server/protocol/build_server_descriptor.sh
-python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
-  --proto shared/protocol/navigation_query.proto \
-  --output server/lualib/gateway/protocol/navigation_registry.lua
-rg -n 'FRAME_|FrameInput|FramePush' server/lualib/gateway/protocol/navigation_registry.lua
+./server/protocol/build_protocol_lesson_03_frame_sync.sh
+rg -n 'FRAME_|FrameInput|FramePush' server/lualib/gateway/protocol/protocol_registry_lesson_03_frame_sync.lua
 ```
 
 预期descriptor非空、输出 `SERVER_DESCRIPTOR_OK`；Registry的FrameInput为request_type且response_type=nil，FramePush为request_type=nil且response_type。不要手工编辑生成物来“补推送支持”。
@@ -302,7 +260,7 @@ rg -n 'FRAME_|FrameInput|FramePush' server/lualib/gateway/protocol/navigation_re
 ./shared/protocol/build_unity_cs.ps1
 ```
 
-该脚本将唯一Proto生成到现有 `Assets/BattleNavigation/Scripts/Protocol/NavigationQuery.cs`，保持已有Google.Protobuf引用。不要再把WSL生成的另一份同名C#放入Assets，否则相同类型重复定义。
+该脚本按共享传输头与课程清单分别生成 C# 文件到 Shared、Lesson01、Lesson02、Lesson03FrameSync、Lesson03StateSync 目录。Unity 消费端分别导入传输命名空间和本课业务命名空间。
 
 失败排查：命令没有Request/Response是命名前缀不匹配；descriptor旧是没有重新生成/重启；Server与Unity使用不同map_hash/rules_hash是发布身份不一致；协议枚举编号不能因为重新排列就改变。
 

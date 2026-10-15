@@ -101,6 +101,9 @@ PY
 
 validate_published_map
 
+# 第一课只生成第一课 descriptor 与 Registry；不触碰其它课程协议。
+bash "$SERVER_ROOT/protocol/build_protocol_lesson_01.sh"
+
 if ((REBUILD)); then
     "$RUN_CTL" rebuild
 else

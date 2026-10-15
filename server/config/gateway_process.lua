@@ -1,5 +1,5 @@
 -- 职责：Gateway Skynet 进程启动配置；由 run_server.sh 直接传给 Skynet。
--- 边界：只设置进程级路径、日志和入口；业务参数仍由 config.gateway 提供。
+-- 边界：只设置进程级路径、日志和入口；Lesson 2 业务参数由 gateway_main 显式注入。
 -- 相对路径：以下路径均以 Server 根目录为基准，因此启动前工作目录必须是 server/。
 thread = 4
 harbor = 0

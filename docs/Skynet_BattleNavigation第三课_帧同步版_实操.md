@@ -199,7 +199,7 @@ Checkpoint **逐字段**写入并校验小端字节，不允许 `memcpy(State)`�
 | 只读并沿用 | `server/config/navigation_profiles/profile1.lua` |
 | 整文件写入 | `server/native/frame_sync/frame_test.cpp` |
 | 整文件写入 | `server/scripts/lessons/prepare_frame_sync.py` |
-| 整文件写入 | `shared/protocol/navigation_query.proto` |
+| 协议改动 | `shared/protocol/wire_header.proto` 增加命令号；`shared/protocol/lesson_03/frame_sync.proto` 定义帧同步消息 |
 | 整文件写入 | `server/config/frame_sync.lua` |
 | 整文件写入 | `server/lualib/battle/frame_sync/runtime.lua` |
 | 整文件写入 | `server/service/battle/frame_sync/worker.lua` |
@@ -2218,589 +2218,37 @@ target.write_text(
 print("FRAME_ASSET_OK", digest)
 ```
 
-### 5.7 Gateway 定向主动消息：本次已实施，按合同审计
+### 5.7 Gateway 定向主动消息：使用当前 FlyWow 合同
 
-#### 5.7.1 当前拒绝的具体含义
+FlyWow Gateway 不使用 `request_id` 关联业务请求和响应。控制回复与主动推送都通过课程自己的 `command` 区分；帧同步的 `FramePush` 使用本课独立的 command 编号。客户端同一时间只保留一个相同 command 的控制请求，主动 Push 进入独立队列。
 
-`connection_id>0` 指定一个已经建立的逻辑连接；`request_id=0` 表示主动消息，不属于某个客户端请求的响应。这两个字段并不矛盾。实施前基线中的 `flywow_gateway.lua` 的 `deliver_data()` 把这个组合当成非法；因此业务虽然产生正式FramePush，却发不到特定玩家。
+Frame Proxy 将 `gateway_epoch`、`connection_id`、`command_id` 和业务值转发给 Gateway。`connection_id > 0` 只投递给当前实例中匹配 epoch 且已 ready 的连接；`connection_id = 0` 仅在课程配置允许时广播。未知连接、旧 epoch、未 ready 连接和非法来源必须被丢弃，不能退化为广播。
 
-只允许 `connection_id=0/request_id=0` 的广播不能作为替代：广播会把某场战斗输入发给所有连接。也不能伪造一个旧非零request_id，把主动帧塞到控制请求的等待表。
+这份合同由 FlyWow 当前实现和课程独立 Proxy 共同提供。接入代码不得给 Envelope 增加临时关联号，也不得把连接身份当作 `FrameInput` 序号；帧号、席位、会话 generation 和幂等边界仍由 Battle 业务协议负责。
 
-#### 5.7.2 本次局部修改 FlyWow Runtime
-
-**本次已实施。WSL 子模块文件：**
-
-`server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`
-
-只在 `deliver_data(message)` 的参数拒绝条件中，删除这一条：
-
-```text
-        (message.connection_id > 0 and message.request_id == 0) or
-```
-
-保留相邻的广播关联检查：
-
-```text
-        (message.connection_id == 0 and message.request_id ~= 0) or
-```
-
-不要删除其它类型、整数、epoch、阶段、命令、编码和长度检查。后面的目标连接分支已经按 id 找连接并检查 ready；不需要改成广播循环。修改后的合同：
-
-|connection_id|request_id|含义|
-|---:|---:|---|
-|>0|>0|该连接的关联响应|
-|>0|0|该连接的主动推送|
-|0|0|所有ready连接的主动广播|
-|0|>0|非法，拒绝|
-
-这是 FlyWow 接入合同的通用修复，代码仍不认识Battle。旧第二课 `server/service/gateway/gateway_proxy.lua` 自身还有“指定连接必须非零request_id”的验证；**本课使用独立 Frame Proxy**，其合同在第5节给出，所以不要求修改旧第二课Proxy，也不暗中依赖它突然支持主动帧。
-
-#### 5.7.3 完整替换审计测试
-
-下面是完整测试文件，保留原关联响应、异步派发、旧epoch与广播用例，再新增两个连接的定向推送审计。握手替身 `ready` 由场景开关控制；它只验证 Gateway 对 ready 的处理，不冒充真实握手密码学测试。调试器替身避免单测引入宿主调试环境。
-
-#### 文件：`server/third_party/skynet-flywow/gateway/tests/gateway_async_test.lua`
-
-**操作：完整替换（先比较你已有测试修改）。** 审计定向主动消息，同时保持原异步合同回归。
-
-学习导航：精读 完整替换测试夹具；所有断言只代表替身单测，不替代真实网络测试。 可以略读固定声明与语言样板。输入、输出和失败语义见文件头及 API 注释；本节验证命令在该阶段末尾。阅读后应能解释这些状态的 owner、修改时机和释放位置。
-
-```lua
--- 职责：以可控 Skynet/socket 替身验证 Gateway 异步合同与资源边界。
--- 边界：Test；加载真实 Gateway/endpoint 源码，替换 transport、registry 和 codec。
--- 输入/输出：FlyWow 根路径 -> 断言或 GATEWAY_ASYNC_UNIT_OK。
--- 生命周期：每场景重建 Lua State 模块状态；不启动网络，不冒充真实集成验证。
--- 不负责：不验证 Protobuf 字节或真实 Skynet 调度，它们由宿主集成测试覆盖。
-local root = assert(arg[1])
-package.preload["shared.debug.luapanda_debug"] = function()
-    return
-    {
-        start = function() end,
-    }
-end
-package.path = root .. "/gateway/lualib/?.lua;" .. package.path
-
--- 创建独立的可控场景；overrides 为配置覆盖，无 I/O；返回由测试拥有的控制对象。
-local function scenario(overrides)
-    local e =
-    {
-        now     = 0,
-        sends   = {},
-        forks   = {},
-        streams = {},
-        started = {},
-        writes  = {},
-        closed  = {},
-    }
-    local config =
-    {
-        host             = "127.0.0.1",
-        port             = 19021,
-        protocol_version = 3,
-        descriptor_path  = "stub",
-        registry_module  = "test.registry",
-    }
-    for k, v in pairs(overrides or {}) do config[k] = v end
-    local skynet = {}
-    -- 替身不允许数据平面出现同步 call；任何意外等待立即使测试失败。
-    function skynet.call()
-        error("Gateway must never call handler")
-    end
-    -- 固定签名记录本地异步消息；返回 session=0，符合 pinned Skynet send。
-    function skynet.send(address, protocol, command, message)
-        e.sends[#e.sends + 1] = { address, command, message }
-        return 0
-    end
-    -- 注册但不抢先执行任务；测试自行控制协程推进，无 OS 线程。
-    function skynet.fork(fn)
-        e.forks[#e.forks + 1] = coroutine.create(fn)
-    end
-    -- 在测试调度器等待下一次扫描。
-    function skynet.sleep()
-        coroutine.yield("sleep")
-    end
-    -- 返回测试时钟 tick。
-    function skynet.now()
-        return e.now
-    end
-    -- 固定 Service handle。
-    function skynet.self()
-        return 99
-    end
-    -- 每场景由外部隔离状态，固定高精度 tick 足够验证不同 epoch 的拒绝。
-    function skynet.hpc()
-        return 12345
-    end
-    -- 忽略诊断日志；结果通过状态断言检查。
-    function skynet.error()
-    end
-    -- 捕获管理调用返回 record。
-    function skynet.retpack(result)
-        e.result = result
-    end
-    -- 保存真实 Service 的分发回调。
-    function skynet.dispatch(protocol, fn)
-        e.dispatch = fn
-    end
-    -- 同步初始化入口，不执行真实调度。
-    function skynet.start(fn)
-        fn()
-    end
-    local socket = {}
-    -- 固定监听 fd 和地址；无 I/O。
-    function socket.listen(host, port)
-        return 1, host, port
-    end
-    -- 监听回调保存供测试注入连接；客户端 start 不执行 I/O。
-    function socket.start(fd, fn)
-        e.started[fd] = true
-        if fn then
-            e.accept = fn
-        end
-    end
-    -- 缓冲限制由真实集成验证；替身保持签名。
-    function socket.limit()
-    end
-    -- 警告回调无需触发，真实集成另测写队列。
-    function socket.warning(fd, callback)
-        e.warning = callback
-    end
-    -- 精确读取已有字节，不足时挂起；模仿 Socket read 的等待条件。
-    function socket.read(fd, size)
-        local data = e.streams[fd] or ""
-        if #data < size then
-            coroutine.yield("read")
-            return false, ""
-        end
-        e.streams[fd] = data:sub(size + 1)
-        return data:sub(1, size)
-    end
-    -- 记录完整 TCP frame；写入失败场景通过标志注入。
-    function socket.write(fd, bytes)
-        if e.fail_write then
-            return false
-        end
-        e.writes[#e.writes + 1] = { fd, bytes }
-        return true
-    end
-    -- 记录关闭，不复用 fd。
-    function socket.close(fd)
-        e.closed[fd] = true
-        e.started[fd] = nil
-    end
-    -- 接管前的 accepted fd 必须通过 close_fd 释放。
-    function socket.close_fd(fd)
-        assert(not e.started[fd], "close_fd is only valid before socket.start")
-        e.closed[fd] = true
-    end
-    -- 与 pinned socket_pool ownership 保持一致。
-    function socket.invalid(fd)
-        return not e.started[fd]
-    end
-    local websocket = {}
-    -- 接受握手后模拟收到一个 binary 消息，再挂起等待后续消息。
-    function websocket.accept(fd, handler)
-        e.ws = handler
-        handler.handshake(fd, {}, "/")
-        handler.message(fd, "1", "binary")
-        coroutine.yield("ws")
-        return true
-    end
-    -- 记录 WS 完整消息写入；不 yield。
-    function websocket.write(fd, bytes)
-        e.writes[#e.writes + 1] = { fd, bytes }
-    end
-    -- 记录 WS 关闭。
-    function websocket.close(fd)
-        e.closed[fd] = true
-    end
-    -- 返回握手前是否尚未建立 WS 对象。
-    function websocket.is_close(id)
-        return e.ws == nil or e.closed[id] == true
-    end
-    local registry = {}
-    -- 提供只读测试索引。
-    function registry.load() return
-    {
-        count = 1,
-    }
-    end
-    -- 只登记 command=1001。
-    function registry.find(index, command)
-        if command == 1001 then return
-        {
-            id            = 1001,
-            name          = "QueryCell",
-            response_type = ".demo.QueryCellResponse",
-        }
-        end
-    end
-    local codec = {}
-    -- payload 的数字只用于构造可重复的测试 request data。
-    function codec.decode_envelope(payload)
-        assert(payload ~= "bad", "malformed envelope")
-        return
-        {
-            protocol_version = 3,
-            command          = 1001,
-            request_id       = assert(tonumber(payload)),
-            body             = "",
-        }
-    end
-    -- 请求 body 替身，与业务无关。
-    function codec.decode_request()
-        return { test_id = 1, map_id = 1001 }
-    end
-    -- 响应结果编码为文本，fail 注入编码异常。
-    function codec.encode_response(definition, version, request_id, response)
-        assert(not response.fail, "encode failure")
-        return tostring(request_id)
-    end
-    package.loaded["skynet"] = skynet
-    package.loaded["skynet.socket"] = socket
-    package.loaded["http.websocket"] = websocket
-    package.loaded["config.gateway"] = config
-    package.loaded["test.registry"] = {}
-    package.loaded["flywow.gateway.registry"] = registry
-    package.loaded["flywow.gateway.codec"] =
-    {
-        new = function() return codec end,
-    }
-    package.loaded["flywow_gateway_crypto"] = {}
-    package.loaded["flywow.gateway.handshake"] =
-    {
-        new = function()
-            return
-            {
-                accept = function() return {} end,
-                close = function() end,
-                ready = function() return e.ready ~= false end,
-                expired = function() return false end,
-            }
-        end,
-    }
-    dofile(root .. "/gateway/service/gateway/flywow_gateway.lua")
-    e.dispatch(1, 8, "start",
-    {
-        handler_service = ".test_handler",
-    }
-    )
-    return e
-end
-
--- 推进一个替身协程到下一个等待点；异常以断言传播。
-local function resume(co)
-    local ok, err = coroutine.resume(co)
-    assert(ok, err)
-end
-
--- 将数字请求构造成真实 TCP 长度帧，返回调用方拥有的 string。
-local function frame(id)
-    local payload = tostring(id)
-    return string.pack(">I2", #payload) .. payload
-end
-
-local e = scenario()
-e.streams[10] = frame(1) .. frame(2)
-e.accept(10, "peer")
-resume(e.forks[2])
-
-assert(#e.sends == 2)
-assert(e.sends[1][1] == ".test_handler", "Gateway must send to the configured service name")
-assert(e.sends[1][2] == "send_data")
-assert(e.sends[1][3].connection_id == 1)
-assert(e.sends[2][3].connection_id == 1)
-assert(e.sends[1][3].request_id == 1 and e.sends[2][3].request_id == 2)
-assert(#e.writes == 0, "Gateway must not write before handler sends data")
-
-local message = e.sends[1][3]
-local current_epoch = message.gateway_epoch
-message.data = { result = 1 }
-e.dispatch(0, 7, "send_data", message)
-assert(e.writes[1][2] == frame(1))
-
-message.gateway_epoch = "old"
-e.dispatch(0, 7, "send_data", message)
-assert(#e.writes == 1, "old Gateway epoch must be dropped")
-
-message.gateway_epoch = current_epoch
-message.data = { fail = true }
-e.dispatch(0, 7, "send_data", message)
-assert(#e.writes == 1, "encoding failure must not close healthy connection")
-message.data = { result = 2 }
-e.dispatch(0, 999, "send_data", message)
-assert(#e.writes == 2, "Gateway does not validate the reply source identity")
-
-local push =
-{
-    gateway_epoch = current_epoch,
-    connection_id = 0,
-    command_id = 1001,
-    request_id = 0,
-    data = { result = 3 },
-}
-e.dispatch(0, 7, "send_data", push)
-assert(#e.writes == 3, "one active connection receives broadcast")
-
-e.dispatch(0, 999, "close",
-{
-    gateway_epoch = current_epoch,
-    connection_id = message.connection_id,
-})
-resume(e.forks[3])
-assert(e.closed[10])
-
-e = scenario()
-e.streams[10] = frame(1)
-e.accept(10, "peer")
-resume(e.forks[2])
-assert(e.sends[1][2] == "send_data")
-e.dispatch(0, 999, "close", e.sends[1][3])
-resume(e.forks[3])
-assert(e.closed[10])
-
-
--- 两连接定向push审计；与旧用例独立，不修改旧用例的fork下标。
-e = scenario()
-e.streams[10] = frame(1)
-e.streams[11] = frame(2)
-e.accept(10, "peer-a")
-resume(e.forks[2])
-e.accept(11, "peer-b")
-resume(e.forks[3])
-local targeted =
-{
-    gateway_epoch = e.sends[1][3].gateway_epoch,
-    connection_id = e.sends[1][3].connection_id,
-    command_id    = 1001,
-    request_id    = 0,
-    data          = { result = 7 },
-}
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 1 and e.writes[1][1] == 10, "target push must not broadcast")
-assert(e.writes[1][2] == frame(0), "push preserves request_id zero")
-local epoch = targeted.gateway_epoch
-targeted.gateway_epoch = "old"
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 1, "old epoch push must be dropped")
-targeted.gateway_epoch = epoch
-e.ready = false
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 1, "not-ready push must be dropped")
-e.ready = true
-targeted.connection_id = 0
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 3, "broadcast still reaches both ready connections")
-targeted.request_id = 1
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 3, "broadcast cannot pretend to be correlated response")
-targeted.connection_id = 1
-targeted.request_id = 0
-e.dispatch(0, 7, "close", targeted)
-resume(e.forks[4])
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 3, "closed target must not fall back to broadcast")
-targeted.connection_id = 9999
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 3, "unknown target must be dropped")
-print("GATEWAY_ASYNC_UNIT_OK")
-```
-
-#### 5.7.4 验证旧行为与修复行为
-
-实施时先以旧拒绝条件运行测试，确认定向主动消息断言失败；应用局部修改后再次执行，确认测试通过。复查时可运行以下命令：
+在 `server/` 目录验证 Gateway 替身测试与真实课程链路：
 
 ```bash
-./third_party/skynet/3rd/lua/lua \
+third_party/skynet/3rd/lua/lua \
   third_party/skynet-flywow/gateway/tests/gateway_async_test.lua \
   third_party/skynet-flywow
+python3 tests/frame_sync_integration.py
 ```
 
-修复后预期输出 `GATEWAY_ASYNC_UNIT_OK`。本次已完成旧行为负向验证和修复后正向验证；测试覆盖定向发送、广播隔离、epoch/ready/关闭/未知目标边界。
+真实帧同步集成需要先启动 `config/frame_battle_process.lua` 和 `config/frame_gateway_process.lua`。单元测试覆盖定向投递、广播隔离、epoch、ready 和失效连接；真实 TCP 测试覆盖客户端入场、输入、帧推送与离开。它们不代替密码学握手测试、Unity Play Mode 或网络容量测试。
 
-审计时逐条回答：指定连接是否只写对应fd？出站request_id是否仍为0？旧epoch、未ready、已关闭、不存在的目标是否直接丢弃？未知目标是否错误退化为广播？非零request_id广播是否仍拒绝？已有请求响应是否仍通过？源码是否保留编码失败不误关健康连接的行为？
+### 5.8 第三课帧同步的独立协议
 
-本测试没有新增回复来源身份认证。Gateway 当前信任宿主Service边界；新 Frame Proxy对断线来源与绑定Gateway handle做检查，Worker只接收其Dispatcher。Cluster应处于可信部署网络。这些来源边界与这次“允许指定连接request_id=0”修复是不同的审计项，不能看到消息可达就说所有身份校验通过。
+每门课按独立项目维护协议。所有课程唯一共用的是 wire_header.proto 中完整类型名固定的 Envelope；命令编号、业务消息、WorldPosition 和 protobuf package 都属于各自课程。第三课帧同步的唯一业务 schema 是 shared/protocol/lesson_03/frame_sync.proto，CommandId 也在这个文件中，不能写入公共头或其它课程 schema。
 
-暂不因为教程要求而自动commit/push。你审计通过并决定发布时，按WORKSPACE_WORKFLOW：FlyWow子模块先形成已验证提交并推送，主仓库再更新submodule指针，随后Windows同步。提交标题与正文用中文。本文后续步骤在你的当前已修改WSL工作树中也能验证，不要求提前发布一个未审计版本。
+帧同步 package 为 battle.lesson_03.frame_sync.v1。第一课、第二课、第三课状态同步各有不同 package 和独立 descriptor，所以同一个 Server/Gateway 不会加载整个课程集合。当前共享 Envelope 为 battle.transport.v1.Envelope，descriptor 生成时只把它与当前课程 schema 放在一起。
 
+修改帧同步 schema 后，在仓库根目录只运行第三课帧同步入口：
 
-### 5.8 `shared/protocol/navigation_query.proto`
+    bash server/protocol/build_protocol_lesson_03_frame_sync.sh
+    bash server/scripts/linux/check_server_descriptor.sh lesson_03_frame_sync
 
-**操作：新建或整文件覆盖。** 保留第二课全部编号和消息，在唯一源完整定义第三课单席位协议。
-
-```proto
-// 职责：Unity、FlyWow Gateway和宿主Battle共享的唯一网络消息/命令编号合同。
-// 边界：跨进程Proto；不把GridPos/Native指针/Skill内部状态带入长期协议。
-// 输入/输出：CommandId+XxxRequest/Response -> Envelope里的Protobuf业务消息。
-// 生命周期：同一源码自动生成Server descriptor/Registry及Unity C#；历史字段不可改号。
-// 不负责：网络传输加密、账号授权、帧调度、战斗逻辑。
-// 命名：XxxRequest和XxxResponse按枚举名字自动生成Registry；只含Response表示主动推送。
-syntax = "proto3";
-package battle.navigation.v1;
-
-enum CommandId {
-  COMMAND_UNSPECIFIED = 0;
-  QUERY_CELL = 1001;
-  RUN_AUTO_BATTLE = 1002;
-  FRAME_JOIN = 1101;
-  FRAME_INPUT = 1102;
-  FRAME_PUSH = 1103;
-  FRAME_RECOVER = 1104;
-  FRAME_LEAVE = 1105;
-  FRAME_REPLAY = 1106;
-}
-
-message Envelope {
-  uint32 protocol_version = 1; // 已有协议兼容版本，课程不修改其编号。
-  uint32 command = 2;          // CommandId的值；发送方向决定消息类型。
-  uint64 request_id = 3;       // 客户端请求/控制响应ID；0保留主动推送。
-  bytes body = 4;
-}
-
-message WorldPosition {
-  sint64 x_mm = 1; // 世界X/Y/Z均整数毫米；负数合法。
-  sint64 y_mm = 2;
-  sint64 z_mm = 3;
-}
-
-message QueryCellRequest {
-  uint32 map_id = 1;
-  uint32 map_version = 2;
-  WorldPosition position = 3;
-}
-message QueryCellResponse {
-  enum ResultCode {
-    RESULT_UNSPECIFIED = 0;
-    OK = 1;
-    MAP_NOT_FOUND = 2;
-    MAP_VERSION_MISMATCH = 3;
-    OUT_OF_BOUNDS = 4;
-    NOT_WALKABLE = 5;
-    BAD_REQUEST = 6;
-    INTERNAL_ERROR = 7;
-  }
-  ResultCode result = 1;
-  string message = 2;
-  uint32 map_id = 3;
-  uint32 map_version = 4;
-  int32 grid_x = 5;
-  int32 grid_z = 6;
-  int32 cell_height_mm = 7;
-  uint32 area = 8;
-  uint32 clearance = 9;
-}
-
-message RunAutoBattleRequest { uint32 scenario_id = 1; }
-message BattleEvent {
-  uint32 seq = 1;
-  uint32 logic_ms = 2;
-  string type = 3;
-  uint32 unit_id = 4;
-  uint32 target_id = 5;
-  uint32 attacker_id = 6;
-  uint32 killer_id = 7;
-  uint32 damage = 8;
-  uint32 target_hp = 9;
-  uint32 speed_mm_per_tick = 10;
-  string reason = 11;
-  string result = 12;
-  WorldPosition position = 13;
-  repeated WorldPosition points = 14;
-}
-message RunAutoBattleResponse {
-  enum ResultCode {
-    RESULT_UNSPECIFIED = 0;
-    OK = 1;
-    BAD_SCENARIO = 2;
-    BUSY = 3;
-    BATTLE_FAILED = 4;
-    RESULT_TOO_LARGE = 5;
-  }
-  ResultCode result = 1;
-  string message = 2;
-  uint32 battle_id = 3;
-  uint32 battle_version = 4;
-  uint32 map_id = 5;
-  uint32 map_version = 6;
-  sint64 seed = 7;
-  string battle_result = 8;
-  uint32 end_logic_ms = 9;
-  repeated BattleEvent events = 10;
-}
-
-// 第三课帧同步：正式帧统一携带玩家席位采用输入，不广播HP/权威位置。
-message FrameCommand {
-  uint32 frame = 1; // 请求生效帧，Service验证Deadline。
-  sint32 x = 2;     // -1/0/1。
-  sint32 z = 3;
-  uint32 skill = 4; // 0无技能，1近战，2视觉弹丸，3逻辑弹丸。
-}
-message FramePlayerRecord {
-  uint32 seat_id = 1;     // 服务端分配、正序稳定。
-  FrameCommand input = 2;// 实际被采用的本席位输入。
-  bool supplied = 3;     // false表示服务端缺输入填充。
-}
-message FrameRecord {
-  uint32 frame = 1;                  // 严格连续的权威帧。
-  repeated FramePlayerRecord players = 2; // 固定顺序；本课只有席位1。
-  fixed32 hash = 3;                  // 状态FNV32分歧诊断，不是安全Hash。
-}
-message FrameJoinRequest {
-  uint32 scenario_id = 1;
-  uint32 battle_id = 2; // 0创建并立即开始单人Battle；非0连接已有Battle会被拒绝。
-  uint32 simulation_version = 3; // 客户端正在运行的确定性模拟合同版本。
-}
-message FrameJoinResponse {
-  string code = 1;          // OK/FULL/NOT_FOUND等。
-  uint32 battle_id = 2;
-  uint32 seat_id = 3;       // 绑定到当前Gateway Session的Seat。
-  bytes resume_token = 4;  // 本席位独占32字节随机恢复凭据；不要进Replay/日志。
-  uint32 generation = 5;   // 恢复时递增，旧代数失效。
-  uint32 map_id = 6;
-  uint32 map_version = 7;
-  string map_hash = 8;      // 发布BMAP SHA-256；不包含rules源码Hash。
-  uint32 frame = 9;
-  bytes checkpoint = 10;   // 创建或恢复时的Checkpoint V3。
-  uint32 tick_rate_hz = 11;
-  uint32 future_window = 12;
-  uint32 input_lead = 13;
-  uint32 simulation_version = 14; // 服务端模拟版本；连接和回放元数据校验。
-}
-message FrameInputRequest {
-  uint32 battle_id = 1;
-  uint32 generation = 2;
-  repeated FrameCommand inputs = 3; // 网络发送不自行声明Seat身份。
-}
-message FramePushResponse {
-  uint32 battle_id = 1;
-  uint32 generation = 2; // 目标席位会话代数。
-  repeated FrameRecord records = 3;
-  string code = 4; // OK/LATE/INPUT_WINDOW/CONFLICT/OVERLOAD/INTERNAL。
-  uint32 winner = 5;
-  bytes checkpoint = 6; // 保留：服务端请求客户端安装完整Checkpoint时使用。
-}
-message FrameRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
-message FrameRecoverResponse { FrameJoinResponse state = 1; }
-message FrameLeaveRequest { uint32 battle_id = 1; uint32 generation = 2; }
-message FrameLeaveResponse { string code = 1; }
-message FrameReplayRequest {
-  uint32 battle_id = 1;
-  bytes resume_token = 2;
-  uint32 offset = 3;
-}
-message FrameReplayResponse {
-  string code = 1;
-  repeated FrameRecord records = 2; // 服务端按网络预算裁切分页。
-  uint32 total = 3;
-  FrameJoinResponse initial = 4;   // 首次提供初始状态；不包括Token。
-}
-message FrameReplay {
-  uint32 format_version = 1; // V1文件封装；Checkpoint内容为V3。
-  FrameJoinResponse initial = 2;
-  repeated FrameRecord records = 3;
-}
-```
+它会生成 shared/protocol/generated/server/lesson_03_frame_sync.pb 及 SHA-256 sidecar，并生成 server/lualib/gateway/protocol/protocol_registry_lesson_03_frame_sync.lua。运行时 run_server.sh 不生成协议文件。Unity C# 由 Windows 的 shared/protocol/build_unity_cs.ps1 从五项课程输入清单分别生成到独立目录。
 
 ### 5.9 `server/config/frame_sync.lua`
 
@@ -3123,7 +2571,7 @@ local function active_seat(battle, seat_id, generation, session)
         same_session(seat.session, session)
 end
 
---- 发送到特定席位当前会话；request_id=0，与控制回包不同。
+--- 发送到特定席位当前会话；客户端按独立FramePush command识别。
 local function push_to(battle, seat_id, data)
     local seat = battle.seats[seat_id]
     if not seat or not seat.online then return end
@@ -3447,7 +2895,7 @@ end)
 local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
 local conf    = require "config.frame_sync"
-local ids     = require("gateway.protocol.navigation_registry").command_ids
+local ids     = require("gateway.protocol.protocol_registry_lesson_03_frame_sync").command_ids
 
 local workers = {}  -- 固定数量的长期Service handles。
 local next_id = 0  -- 本Battle OS进程内单调BattleID；不重用。
@@ -3467,7 +2915,6 @@ local function reply(route, response)
         gateway_epoch = route.gateway_epoch,
         connection_id = route.connection_id,
         command_id    = route.command_id,
-        request_id    = route.request_id,
         data          = response,
     })
     if not ok then skynet.error("FRAME_REPLY_FAILED ", tostring(err)) end
@@ -3506,8 +2953,8 @@ end
 
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
-    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0 and
-        route.request_id ~= 0, "invalid gateway route")
+    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0,
+        "invalid gateway route")
     if route.command_id == ids.FRAME_INPUT then
         local target = worker_for(route.data.battle_id)
         if target then
@@ -3557,7 +3004,6 @@ skynet.start(function()
                 gateway_epoch = payload.session.gateway_epoch,
                 connection_id = payload.session.connection_id,
                 command_id = ids.FRAME_PUSH,
-                request_id = 0, -- 无请求关联的Server主动FramePush。
             }, payload.data)
         else
             error("unknown frame dispatch command: " .. tostring(command))
@@ -3633,7 +3079,7 @@ skynet.start(function()
             if source == gateway then
                 forward("send_data", payload)
             else
-                -- 当前FlyWow Gateway必须支持request_id=0定向push；跨实例会重验epoch/id。
+                -- Gateway按连接与epoch定向投递；跨实例会重验epoch/id。
                 skynet.send(gateway, "lua", "send_data", payload)
             end
         elseif command == "gateway_disconnect" then
@@ -3837,7 +3283,7 @@ from gateway_handshake_client import perform
 
 HOST = "127.0.0.1"
 PORT = 19021
-PROTO_VERSION = 3
+PROTO_VERSION = 4
 JOIN, INPUT, PUSH = 1101, 1102, 1103
 
 
@@ -3906,7 +3352,6 @@ class Client:
         self.socket = socket.create_connection((HOST, PORT), timeout=3)
         self.socket.settimeout(4)
         perform(self.write_frame, self.read_frame)
-        self.request_id = 0
         self.pushes = []
 
     def read_exact(self, size):
@@ -3928,32 +3373,29 @@ class Client:
         self.socket.sendall(struct.pack(">H", len(body)) + body)
 
     def send(self, command, body):
-        self.request_id += 1
-        envelope = number(1, PROTO_VERSION) + number(2, command) + \
-            number(3, self.request_id) + binary(4, body)
+        envelope = number(1, PROTO_VERSION) + number(2, command) + binary(3, body)
         self.write_frame(envelope)
-        return self.request_id
 
     def recv_envelope(self):
         envelope = parse(self.read_frame())
         assert first(envelope, 1) == PROTO_VERSION
-        return first(envelope, 2), first(envelope, 3, 0), first(envelope, 4)
+        assert 3 in envelope and 4 not in envelope
+        return first(envelope, 2), first(envelope, 3)
 
     def request(self, command, body):
-        request_id = self.send(command, body)
+        self.send(command, body)
         while True:
-            got_command, got_id, payload = self.recv_envelope()
-            if got_id == request_id:
-                assert got_command == command
+            got_command, payload = self.recv_envelope()
+            if got_command == command:
                 return parse(payload)
-            assert got_id == 0 and got_command == PUSH
+            assert got_command == PUSH
             self.pushes.append(parse(payload))
 
     def next_push(self):
         if self.pushes:
             return self.pushes.pop(0)
-        command, request_id, payload = self.recv_envelope()
-        assert command == PUSH and request_id == 0
+        command, payload = self.recv_envelope()
+        assert command == PUSH
         return parse(payload)
 
     def close(self):
@@ -4184,636 +3626,74 @@ namespace BattleNavigation.FrameSync
 
 Loader 在 Unity 主线程启动时运行；LuaTable 仅在读取期间存在。Native 接收值数组并再次检查上限、排序、取值范围以及地面单位和导航配置的对应关系。
 
-### 5.22 unity/BattleNavigation/Assets/BattleNavigation/client/FrameNative.cs`
+### 5.22 FrameConnection 业务适配器
 
-**操作：新建或整文件覆盖。** Windows PInvoke SafeHandle、完整输入数组与CheckpointV3解码。
-
-```csharp
-// 职责：调用宿主FrameCore并将规范化State转换为Unity只读渲染视图。
-// 边界：Unity Windows Native Adapter；不处理Socket、Skynet和客户端权威。
-// 输入/输出：FrameInputs、Checkpoint bytes -> Native新状态或明确异常。
-// ownership：一个FrameNative拥有一个SafeHandle；仅Unity主线程调用；Dispose显式释放。
-using System;
-using System.Collections.Generic;
-using System.IO;
-using System.Runtime.InteropServices;
-using Microsoft.Win32.SafeHandles;
-
-namespace BattleNavigation.FrameSync
-{
-    [StructLayout(LayoutKind.Sequential)]
-    public struct FsPlayerInput
-    {
-        public uint SeatId;
-        public uint UnitInstanceId;
-        public int X;
-        public int Z;
-        public int Skill;
-
-        public FsPlayerInput(uint seatId, uint unitInstanceId, int x, int z, int skill)
-        {
-            SeatId = seatId;
-            UnitInstanceId = unitInstanceId;
-            X = x;
-            Z = z;
-            Skill = skill;
-        }
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    internal struct FsUnitProfile
-    {
-        public uint UnitId;
-        public uint MovementMode;
-        public uint MoveSpeedMmPerSec;
-        public int MaxHp;
-        public uint MinAirClearanceMm;
-        public uint MaxAirAltitudeMm;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 4)]
-    internal struct FsNavigationProfile
-    {
-        public uint UnitId;
-        public int RadiusMm;
-        public int MaxStepMm;
-        public uint MaxSlopePermille;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-        public byte[] AreaAllowed;
-        [MarshalAs(UnmanagedType.ByValArray, SizeConst = 256)]
-        public ushort[] AreaCostPermille;
-    }
-
-    [StructLayout(LayoutKind.Sequential, Pack = 8)]
-    internal struct FsSkillProfile
-    {
-        public uint SkillId;
-        public ulong RangeMm;
-        public uint CooldownTicks;
-        public int Damage;
-        public uint TargetMask;
-        public uint Effect;
-    }
-
-    public sealed class FrameNative : IDisposable
-    {
-        private const int MaxCheckpointBytes = 65535; // 必须与Native和协议最终帧预算一致。
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_preload_map(
-            [MarshalAs(UnmanagedType.LPUTF8Str)] string path);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern IntPtr fs_open(uint mapId);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_load_profiles(
-            [In] FsUnitProfile[] units, uint unitCount,
-            [In] FsNavigationProfile[] navigation, uint navigationCount,
-            [In] FsSkillProfile[] skills, uint skillCount);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern void fs_close(IntPtr handle);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_step_frame(
-            FrameHandle handle, uint frame,
-            [In] FsPlayerInput[] inputs, uint count);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_save(FrameHandle handle, byte[] output, int capacity);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern int fs_restore(FrameHandle handle, byte[] bytes, int count);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern uint fs_map_id(FrameHandle handle);
-
-        [DllImport("frame_core", CallingConvention = CallingConvention.Cdecl)]
-        private static extern uint fs_map_version(FrameHandle handle);
-
-        private sealed class FrameHandle : SafeHandleZeroOrMinusOneIsInvalid
-        {
-            public FrameHandle(IntPtr value) : base(true)
-            {
-                SetHandle(value);
-            }
-
-            protected override bool ReleaseHandle()
-            {
-                fs_close(handle);
-                return true;
-            }
-        }
-
-        private FrameHandle handle; // 唯一Native owner，生命周期不跨Unity对象销毁。
-
-        public uint MapId => fs_map_id(RequireHandle());
-        public uint MapVersion => fs_map_version(RequireHandle());
-
-        /// <summary>启动时加载地图与Lua配置；Tick和Battle构造不读取文件。</summary>
-        public static void Preload(string path, FsUnitProfile[] units,
-                                   FsNavigationProfile[] navigation, FsSkillProfile[] skills)
-        {
-            if (units == null || units.Length == 0 || navigation == null || skills == null ||
-                skills.Length != 3 ||
-                fs_load_profiles(units, (uint)units.Length, navigation, (uint)navigation.Length,
-                                skills, (uint)skills.Length) != 1)
-                throw new InvalidDataException("UNIT_PROFILE_PRELOAD");
-            if (string.IsNullOrWhiteSpace(path) || fs_preload_map(path) != 1)
-                throw new InvalidDataException("MAP_PRELOAD");
-        }
-
-        /// <summary>获取当前MapRegistry已经加载的地图；本实例只拥有模拟状态。</summary>
-        public FrameNative(uint mapId)
-        {
-            handle = new FrameHandle(fs_open(mapId));
-            if (handle.IsInvalid)
-            {
-                handle.Dispose();
-                handle = null;
-                throw new InvalidDataException("NATIVE_OPEN");
-            }
-        }
-
-        private FrameHandle RequireHandle()
-        {
-            if (handle == null || handle.IsClosed || handle.IsInvalid)
-            {
-                throw new ObjectDisposedException(nameof(FrameNative));
-            }
-            return handle;
-        }
-
-        /// <summary>同步推进一个1/60秒逻辑帧；唯一玩家输入由Core验证，AI状态由Core决定。</summary>
-        public void StepFrame(uint frame, FsPlayerInput[] players)
-        {
-            if (players == null || players.Length != 1 ||
-                players[0].SeatId != 1)
-            {
-                throw new ArgumentException("FRAME_SEATS", nameof(players));
-            }
-            if (fs_step_frame(RequireHandle(), frame, players, (uint)players.Length) != 1)
-            {
-                throw new InvalidOperationException("NATIVE_STEP");
-            }
-        }
-
-        /// <summary>返回独立的规范化Checkpoint副本；容量不够即失败，不允许截断。</summary>
-        public byte[] Save()
-        {
-            var buffer = new byte[MaxCheckpointBytes];
-            int size = fs_save(RequireHandle(), buffer, buffer.Length);
-            if (size <= 0)
-            {
-                throw new InvalidOperationException("NATIVE_SAVE");
-            }
-            Array.Resize(ref buffer, size);
-            return buffer;
-        }
-
-        /// <summary>完整校验后原子恢复；失败不可部分修改State或Navigation。</summary>
-        public void Restore(byte[] bytes)
-        {
-            if (bytes == null || bytes.Length == 0 || bytes.Length > MaxCheckpointBytes ||
-                fs_restore(RequireHandle(), bytes, bytes.Length) != 1)
-            {
-                throw new InvalidDataException("NATIVE_RESTORE");
-            }
-        }
-
-        /// <summary>诊断FNV32，跨平台对规范化Checkpoint bytes计算。</summary>
-        public static uint Hash(byte[] bytes)
-        {
-            uint value = 2166136261;
-            foreach (byte valueByte in bytes)
-            {
-                value = unchecked((value ^ valueByte) * 16777619);
-            }
-            return value;
-        }
-
-        public void Dispose()
-        {
-            handle?.Dispose();
-            handle = null;
-        }
-    }
-
-    public sealed class FrameUnit
-    {
-        public uint InstanceId;
-        public uint UnitProfileId;
-        public uint Camp;
-        public uint MoveMode;
-        public uint Ready1;
-        public uint Ready2;
-        public uint Ready3;
-        public long X;
-        public long Y;
-        public long Z;
-        public int Hp;
-    }
-
-    public sealed class FrameBolt
-    {
-        public uint Id;
-        public long X;
-        public long Y;
-        public long Z;
-    }
-
-    public sealed class FrameState
-    {
-        public uint Frame;
-        public uint Winner;
-        public readonly List<FrameUnit> Units = new List<FrameUnit>();
-        public readonly List<FrameBolt> Bolts = new List<FrameBolt>();
-
-        /// <summary>读取V3完整字节布局；导航Route不用于渲染但必须验证边界。</summary>
-        public static FrameState Decode(byte[] bytes)
-        {
-            if (bytes == null || bytes.Length > 65535)
-            {
-                throw new InvalidDataException("STATE_SIZE");
-            }
-            using (var reader = new BinaryReader(new MemoryStream(bytes, false)))
-            {
-                if (reader.ReadUInt32() != 3)
-                {
-                    throw new InvalidDataException("STATE_VERSION");
-                }
-
-                var result = new FrameState
-                {
-                    Frame = reader.ReadUInt32(),
-                    Winner = reader.ReadUInt32(),
-                };
-                reader.ReadUInt32(); // next_bolt_id属于Core，渲染不使用。
-
-                uint unitCount = reader.ReadUInt32();
-                if (unitCount > 64)
-                {
-                    throw new InvalidDataException("UNIT_LIMIT");
-                }
-                uint previousInstanceId = 0;
-                for (uint i = 0; i < unitCount; i++)
-                {
-                    var unit = new FrameUnit
-                    {
-                        InstanceId = reader.ReadUInt32(),
-                        UnitProfileId = reader.ReadUInt32(),
-                        Camp = reader.ReadUInt32(),
-                        MoveMode = reader.ReadUInt32(),
-                        X = reader.ReadInt64(),
-                        Y = reader.ReadInt64(),
-                        Z = reader.ReadInt64(),
-                        Hp = reader.ReadInt32(),
-                        Ready1 = reader.ReadUInt32(),
-                        Ready2 = reader.ReadUInt32(),
-                        Ready3 = reader.ReadUInt32(),
-                    };
-                    if (unit.InstanceId <= previousInstanceId)
-                    {
-                        throw new InvalidDataException("STATE_UNIT_ORDER");
-                    }
-                    previousInstanceId = unit.InstanceId;
-                    result.Units.Add(unit);
-                }
-
-                uint boltCount = reader.ReadUInt32();
-                if (boltCount > 128)
-                {
-                    throw new InvalidDataException("BOLT_LIMIT");
-                }
-                uint previousBoltId = 0;
-                for (uint i = 0; i < boltCount; i++)
-                {
-                    var bolt = new FrameBolt();
-                    bolt.Id = reader.ReadUInt32();
-                    reader.ReadUInt32(); // caster
-                    reader.ReadUInt32(); // target
-                    reader.ReadUInt32(); // expires
-                    reader.ReadInt32();  // damage
-                    bolt.X = reader.ReadInt64();
-                    bolt.Y = reader.ReadInt64();
-                    bolt.Z = reader.ReadInt64();
-                    if (bolt.Id <= previousBoltId)
-                    {
-                        throw new InvalidDataException("STATE_BOLT_ORDER");
-                    }
-                    previousBoltId = bolt.Id;
-                    result.Bolts.Add(bolt);
-                }
-
-                uint routeCount = reader.ReadUInt32();
-                if (routeCount > unitCount)
-                {
-                    throw new InvalidDataException("ROUTE_LIMIT");
-                }
-                uint previousRouteUnit = 0;
-                for (uint i = 0; i < routeCount; i++)
-                {
-                    uint unitId = reader.ReadUInt32();
-                    reader.ReadUInt32(); // target_unit_instance_id
-                    reader.ReadInt64(); // planned_target_x
-                    reader.ReadInt64(); // planned_target_y
-                    reader.ReadInt64(); // planned_target_z
-                    reader.ReadUInt32(); // next_repath
-                    reader.ReadUInt32(); // blocked_frames
-                    uint valid = reader.ReadUInt32();
-                    uint pointCount = reader.ReadUInt32();
-                    uint nextIndex = reader.ReadUInt32();
-                    reader.ReadUInt64(); // segment_progress_mm
-                    reader.ReadUInt64(); // length_mm
-                    uint partial = reader.ReadUInt32();
-                    if (unitId <= previousRouteUnit || valid > 1 || partial > 1 ||
-                        pointCount > 1024 || nextIndex > pointCount)
-                    {
-                        throw new InvalidDataException("ROUTE_FORMAT");
-                    }
-                    previousRouteUnit = unitId;
-                    for (uint point = 0; point < pointCount; point++)
-                    {
-                        reader.ReadInt64(); // 真实X；Native Restore负责地图合法性。
-                        reader.ReadInt64(); // 真实Y。
-                        reader.ReadInt64(); // 真实Z。
-                    }
-                }
-
-                if (reader.BaseStream.Position != reader.BaseStream.Length)
-                {
-                    throw new InvalidDataException("STATE_TRAILING");
-                }
-                return result;
-            }
-        }
-    }
-}
-```
-
-### 5.22 `unity/BattleNavigation/Assets/BattleNavigation/client/FrameConnection.cs`
-
-**操作：新建或整文件覆盖。** 独立读写线程、Protobuf、主动推送、控制超时与有界队列。
+FrameConnection 是帧同步业务适配器；Socket、握手、Envelope 编解码、控制请求等待和有界队列由共享的 GatewayConnection 持有。Envelope 没有 request_id，FramePush 通过第三课自己的 command 编号识别；控制请求同一 command 同时最多一个。
 
 ```csharp
-// 职责：维持一个长期TCP+Protobuf连接，区分控制回包与Server主动FramePush。
-// 边界：Unity Client Transport；不执行Native模拟，不读取Transform。
-// ownership：单个FrameConnection拥有Socket、读线程、写线程、出站与Push有界队列。
-// 失败：任何网络/队列错误关闭Socket、解除等待，主线程自行重连。
+// 职责：把帧同步 command 与生成的业务消息适配到共享 GatewayConnection。
+// 边界：只处理第三课帧同步 Protobuf；不拥有 Socket、线程或传输队列。
+// ownership：FrameConnection 独占共享连接适配对象，并在 Dispose 时释放它。
+// 失败：保留 GatewayConnection 的连接错误；业务解析失败明确抛出。
 using System;
-using System.Collections.Concurrent;
-using System.Collections.Generic;
 using System.IO;
-using System.Net.Sockets;
-using System.Threading;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Transport.V1;
+using Battle.Lesson03.FrameSync.V1;
+using BattleNavigation.Client;
 using Google.Protobuf;
-using FlyWow.Gateway;
 
 namespace BattleNavigation.FrameSync
 {
     public sealed class FrameConnection : IDisposable
     {
-        private sealed class Waiting
+        private readonly GatewayConnection connection;
+
+        private FrameConnection(GatewayConnection value)
         {
-            public uint Command;
-            public readonly TaskCompletionSource<Envelope> Result =
-                new TaskCompletionSource<Envelope>(
-                    TaskCreationOptions.RunContinuationsAsynchronously);
+            connection = value;
         }
 
-        private readonly TcpClient socket = new TcpClient();
-        private readonly BlockingCollection<byte[]> outgoing =
-            new BlockingCollection<byte[]>(128);
-        private readonly BlockingCollection<FramePushResponse> pushes =
-            new BlockingCollection<FramePushResponse>(256);
-        private readonly Dictionary<ulong, Waiting> waiting =
-            new Dictionary<ulong, Waiting>();
-        private readonly object gate = new object();
+        public string Fault => connection.Fault;
+        public int PushDepth => connection.PushDepth;
 
-        private NetworkStream stream;
-        private Thread reader;
-        private Thread writer;
-        private long nextRequest;
-        private int closed;
-        private volatile string fault;
-
-        public string Fault => fault;
-        public int PushDepth => pushes.Count;
-
-        /// <summary>网络连接和握手在后台执行；成功后调用方负责Dispose。</summary>
         public static async Task<FrameConnection> Connect(string host, int port)
         {
-            var value = new FrameConnection();
-            try
-            {
-                await Task.Run(() => value.Open(host, port));
-                return value;
-            }
-            catch
-            {
-                value.Dispose();
-                throw;
-            }
+            var value = await GatewayConnection.Connect(
+                host, port, (uint)CommandId.FramePush);
+            return new FrameConnection(value);
         }
 
-        private void Open(string host, int port)
-        {
-            if (!socket.ConnectAsync(host, port).Wait(3000))
-            {
-                throw new TimeoutException("CONNECT_TIMEOUT");
-            }
-            socket.NoDelay = true; // 小输入不等待Nagle合并；TCP队头阻塞仍存在。
-            stream = socket.GetStream();
-            stream.ReadTimeout = 3000;
-            stream.WriteTimeout = 3000;
-
-            using (var handshake = new HandshakeClient())
-            {
-                WriteFrame(handshake.Begin());
-                WriteFrame(handshake.Respond(ReadFrame(99)));
-                handshake.Complete(ReadFrame(33));
-            }
-            stream.ReadTimeout = 10000;
-
-            reader = new Thread(ReadLoop) { IsBackground = true, Name = "FrameRead" };
-            writer = new Thread(WriteLoop) { IsBackground = true, Name = "FrameWrite" };
-            reader.Start();
-            writer.Start();
-        }
-
-        private byte[] Exact(int count)
-        {
-            var buffer = new byte[count];
-            int offset = 0;
-            while (offset < count)
-            {
-                int bytes = stream.Read(buffer, offset, count - offset);
-                if (bytes == 0) throw new EndOfStreamException("DISCONNECTED");
-                offset += bytes;
-            }
-            return buffer;
-        }
-
-        private byte[] ReadFrame(int expected = 0)
-        {
-            byte[] header = Exact(2);
-            int size = (header[0] << 8) | header[1];
-            if (size < 1 || (expected != 0 && size != expected))
-            {
-                throw new InvalidDataException("FRAME_LENGTH");
-            }
-            return Exact(size);
-        }
-
-        private void WriteFrame(byte[] bytes)
-        {
-            if (bytes == null || bytes.Length < 1 || bytes.Length > 65535)
-            {
-                throw new InvalidDataException("FRAME_SIZE");
-            }
-            var frame = new byte[bytes.Length + 2];
-            frame[0] = (byte)(bytes.Length >> 8);
-            frame[1] = (byte)bytes.Length;
-            Buffer.BlockCopy(bytes, 0, frame, 2, bytes.Length);
-            stream.Write(frame, 0, frame.Length);
-        }
-
-        private void EnqueueEnvelope(uint command, IMessage body, ulong id)
-        {
-            var payload = new Envelope
-            {
-                ProtocolVersion = 3,
-                Command = command,
-                RequestId = id,
-                Body = ByteString.CopyFrom(body.ToByteArray()),
-            }.ToByteArray();
-
-            if (!outgoing.TryAdd(payload))
-            {
-                Fail("OUTGOING_LIMIT");
-                throw new IOException("OUTGOING_LIMIT");
-            }
-        }
-
-        /// <summary>单向发送当前Seat未来输入；有界队列满时显式失败。</summary>
         public void SendInputs(FrameInputRequest body)
         {
-            if (Volatile.Read(ref closed) != 0) throw new IOException(fault ?? "CLOSED");
-            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
-            EnqueueEnvelope((uint)CommandId.FrameInput, body, id);
+            connection.Send((uint)CommandId.FrameInput, body);
         }
 
-        /// <summary>控制请求最多8个在途，超时3秒；网络线程不访问Unity对象。</summary>
-        public async Task<Envelope> Request(CommandId command, IMessage body)
+        public Task<Envelope> Request(CommandId command, IMessage body)
         {
-            var item = new Waiting { Command = (uint)command };
-            ulong id = checked((ulong)Interlocked.Increment(ref nextRequest));
-            lock (gate)
-            {
-                if (closed != 0) throw new IOException(fault ?? "CLOSED");
-                if (waiting.Count >= 8) throw new IOException("CONTROL_LIMIT");
-                waiting.Add(id, item);
-            }
-
-            try
-            {
-                EnqueueEnvelope((uint)command, body, id);
-                if (await Task.WhenAny(item.Result.Task, Task.Delay(3000)) != item.Result.Task)
-                {
-                    throw new TimeoutException("CONTROL_TIMEOUT");
-                }
-                return await item.Result.Task;
-            }
-            finally
-            {
-                lock (gate) waiting.Remove(id);
-            }
+            return connection.Request((uint)command, body);
         }
 
         public bool TryPush(out FramePushResponse message)
         {
-            return pushes.TryTake(out message);
-        }
+            Envelope envelope;
+            if (!connection.TryPush(out envelope))
+            {
+                message = null;
+                return false;
+            }
+            if (envelope.Command != (uint)CommandId.FramePush)
+            {
+                throw new InvalidDataException("FRAME_PUSH_COMMAND");
+            }
 
-        private void ReadLoop()
-        {
-            try
-            {
-                while (Volatile.Read(ref closed) == 0)
-                {
-                    var envelope = Envelope.Parser.ParseFrom(ReadFrame());
-                    if (envelope.ProtocolVersion != 3)
-                    {
-                        throw new InvalidDataException("PROTOCOL_VERSION");
-                    }
-                    if (envelope.RequestId == 0)
-                    {
-                        if (envelope.Command != (uint)CommandId.FramePush)
-                        {
-                            throw new InvalidDataException("PUSH_COMMAND");
-                        }
-                        if (!pushes.TryAdd(FramePushResponse.Parser.ParseFrom(envelope.Body)))
-                        {
-                            throw new IOException("PUSH_LIMIT");
-                        }
-                        continue;
-                    }
-
-                    Waiting target;
-                    lock (gate) waiting.TryGetValue(envelope.RequestId, out target);
-                    if (target == null) continue; // 超时旧回复不污染新的request_id。
-                    if (target.Command != envelope.Command)
-                    {
-                        throw new InvalidDataException("RESPONSE_COMMAND");
-                    }
-                    target.Result.TrySetResult(envelope);
-                }
-            }
-            catch (Exception error)
-            {
-                Fail(error.Message);
-            }
-        }
-
-        private void WriteLoop()
-        {
-            try
-            {
-                foreach (byte[] bytes in outgoing.GetConsumingEnumerable())
-                {
-                    WriteFrame(bytes);
-                }
-            }
-            catch (Exception error)
-            {
-                Fail(error.Message);
-            }
-        }
-
-        private void Fail(string code)
-        {
-            if (Interlocked.Exchange(ref closed, 1) != 0) return;
-            fault = code;
-            outgoing.CompleteAdding();
-            socket.Close(); // 中断阻塞的Read/Write；不使用Thread.Abort。
-            lock (gate)
-            {
-                foreach (Waiting item in waiting.Values)
-                {
-                    item.Result.TrySetException(new IOException(code));
-                }
-                waiting.Clear();
-            }
+            message = FramePushResponse.Parser.ParseFrom(envelope.Body);
+            return true;
         }
 
         public void Dispose()
         {
-            Fail("CLOSED");
-            if (reader != null && reader != Thread.CurrentThread) reader.Join(1000);
-            if (writer != null && writer != Thread.CurrentThread) writer.Join(1000);
+            connection.Dispose();
         }
     }
 }
@@ -4835,7 +3715,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Lesson03.FrameSync.V1;
+using Battle.Transport.V1;
 using Google.Protobuf;
 using UnityEngine;
 
@@ -5724,31 +4605,20 @@ git -C server/third_party/skynet-flywow status --short
 # 工具与正式地图已经是第二课验收的一部分
 test -f shared/navigation/battle_1001/battle_1001.bmap
 test -f shared/navigation/battle_1001/battle_1001.manifest.json
-test -f shared/protocol/navigation_query.proto
+test -f shared/protocol/wire_header.proto && test -f shared/protocol/lesson_03/frame_sync.proto
 ```
 
 若FlyWow子模块并非课程锁定版本，先根据当前gitlink核对导航API，不能自动拉最新`main`。上面的整文件以已核对的课程锁定版本为基线。
 
-### 6.2 安装新建文件并验证协议（WSL）
+### 6.2 验证本课协议（WSL）
 
-将第5节对应文件的**完整代码块**按路径保存。然后在主仓库根目录：
+协议源和构建脚本已经属于仓库。修改帧同步 schema 后，只运行本课入口；不要再手工调用 FlyWow Registry 生成器，也不要运行聚合协议脚本：
 
-```bash
+    bash server/protocol/build_protocol_lesson_03_frame_sync.sh
+    bash server/scripts/linux/check_server_descriptor.sh lesson_03_frame_sync
+    grep -nE 'FRAME_JOIN|FRAME_INPUT|FRAME_PUSH|FRAME_RECOVER|FRAME_LEAVE|FRAME_REPLAY' server/lualib/gateway/protocol/protocol_registry_lesson_03_frame_sync.lua
 
-# Gateway改动已在本轮实施；可按5.7节复核源码与测试
-
-# Proto唯一源自动生成：Server descriptor 和 Gateway Registry
-./server/protocol/build_server_descriptor.sh
-python3 server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py \
-  --proto shared/protocol/navigation_query.proto \
-  --output server/lualib/gateway/protocol/navigation_registry.lua
-
-# 检查第二课已有命令号保持不变，新Frame命令也已生成
-rg -n 'FRAME_JOIN|FRAME_INPUT|FRAME_PUSH|FRAME_RECOVER|FRAME_LEAVE|FRAME_REPLAY' \
-  server/lualib/gateway/protocol/navigation_registry.lua
-```
-
-不直接写或复制生成后的`navigation_registry.lua`。FlyWow的改动需遵循子模块先提交/推送、主仓库再更新gitlink的项目流程；本教程不会自动提交或推送。
+本课 descriptor 与 Registry 均由该入口生成。它们只包含共享 Envelope 和帧同步 schema；其它课的消息不会加载进本课 Gateway。
 
 ### 6.3 接入空中导航并验证 AIRN（WSL/Windows）
 

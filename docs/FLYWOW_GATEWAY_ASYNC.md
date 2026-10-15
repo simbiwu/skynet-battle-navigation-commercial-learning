@@ -1,6 +1,6 @@
 # FlyWow 异步 Gateway 阅读与接入
 
-本说明对应 D039 的异步投递机制；当前协议字段和响应合同以 D045 为准。Gateway 按连接顺序读取和投递，业务返回与主动 Push 通过独立消息返回；A 的业务处理时间不阻塞 Gateway 读取 B。当前宿主协议兼容版本为4，Envelope 不要求 request_id；历史字段编号3与名字保留且不复用。现有协议不增加 Cluster、路由或处理模式字段。
+本说明对应 D039 的异步投递机制；当前协议字段和响应合同以 D045 为准。Gateway 按连接顺序读取和投递，业务返回与主动 Push 通过独立消息返回；A 的业务处理时间不阻塞 Gateway 读取 B。当前宿主协议版本为4，Envelope 字段为 protocol_version=1、command=2、body=3，不传 request_id。现有协议不增加 Cluster、路由或处理模式字段。
 
 新增通用握手在业务链路前完成，不要求登录或宿主会话管理，详见 [握手合同与构建](FLYWOW_GATEWAY_HANDSHAKE.md)。握手状态机独立于 Gateway Service，可继续按本文阅读 ready 后的异步业务主线。
 
@@ -60,7 +60,7 @@ FlyWow 的 endpoint 提供薄的响应上下文，不接管既有 dispatch，不
 
 第一课 navigation_query.lua 的外部 Gateway 消息使用 endpoint 回复；它给 Battle Dispatch 提供的内部本地查询仍用 call/retpack。两种调用者通过 session=0/非零区分；不能把内部查询 call 理解成 Gateway 在等待业务。
 
-协议版本4的主动消息使用已登记的 Push command，例如 StatePush；它没有 request_id。Unity 长连接按 command 串行控制请求，并通过独立队列读取 Push。第二课短连接客户端一次只等待一个 command 响应。
+当前协议版本的主动消息使用已登记的 Push command，例如 StatePush；它没有 request_id。Unity 长连接按 command 串行控制请求，并通过独立队列读取 Push。第二课短连接客户端一次只等待一个 command 响应。
 
 ## 失败与资源
 

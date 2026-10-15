@@ -8,8 +8,8 @@
 server/service/gateway/gateway_main.lua
   -> server/service/gateway/gateway_proxy.lua
   -> server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua
-  -> server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/handshake.lua
-  -> server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/codec.lua
+  -> server/third_party/skynet-flywow/gateway/lualib/handshake.lua
+  -> server/third_party/skynet-flywow/gateway/lualib/codec.lua
   -> server/service/battle/battle_dispatch.lua
   -> server/service/battle/navigation_query.lua / battle_mgr.lua
 ```

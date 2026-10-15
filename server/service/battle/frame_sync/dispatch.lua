@@ -6,7 +6,7 @@
 local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
 local conf    = require "config.frame_sync"
-local ids     = require("gateway.protocol.navigation_registry").command_ids
+local ids     = require("gateway.protocol.protocol_registry_lesson_03_frame_sync").command_ids
 
 local workers = {}  -- 固定数量的长期Service handles。
 local next_id = 0  -- 本Battle OS进程内单调BattleID；不重用。

@@ -27,9 +27,7 @@ SHARED_ROOT="$REPO_ROOT/shared"
 FLYWOW_DIR="$SERVER_ROOT/third_party/skynet-flywow"
 FLYWOW_BUILD_DIR="$FLYWOW_DIR/build"
 SKYNET_BIN="$SERVER_ROOT/third_party/skynet/skynet"
-REGISTRY="$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua"
-PROTO="$SHARED_ROOT/protocol/navigation_query.proto"
-DESCRIPTOR="$SHARED_ROOT/protocol/generated/server/navigation_query.pb"
+# 每课协议由 server/protocol/build_protocol_<course>.sh 独立构建；运行入口不扫描或生成协议。
 MAP_FILE="$SHARED_ROOT/navigation/battle_1001/battle_1001.bmap"
 # printenv 从进程环境读取可选覆盖项；未设置时分别回退到 RelWithDebInfo 和本机回环地址。
 # BUILD_TYPE 会传给 FlyWow 构建脚本，LUA_PANDA_HOST 会在调试模式导出给 LuaPanda。
@@ -113,21 +111,14 @@ parse_args() {
         fail "--gdb 只能选择一个进程"
     fi
 }
-# start、debug、build 共用准备链：准备固定工具与协议、构建 FlyWow Native，最后核对运行资产。
+# start、debug、build 共用准备链：准备框架与 Native 依赖，检查地图运行资产；协议由课程构建脚本预先生成。
 prepare_runtime() {
     # 准备固定版本的 Skynet 源码及构建前置条件；该准备脚本可重复运行。
     "$SCRIPT_DIR/bootstrap_skynet.sh"
-    # 确保协议生成工具可用；稍后从共享 proto 生成 Gateway 路由索引。
-    "$SCRIPT_DIR/bootstrap_protocol_tools.sh"
     # 仅当 Skynet 可执行文件缺失或不可执行时才编译框架。
     if [[ ! -x "$SKYNET_BIN" ]]; then "$SCRIPT_DIR/build_skynet.sh"; fi
-    # Lua protobuf Native 模块缺失或为空时才构建，避免每次启动都重复编译。
+    # Lua protobuf Native 模块缺失或为空时才构建。
     if [[ ! -s "$SERVER_ROOT/third_party/lua-protobuf-runtime/pb.so" ]]; then "$SCRIPT_DIR/build_lua_protobuf.sh"; fi
-    # proto 是唯一源；生成 Gateway 启动时读取的路由索引，避免手写编号与协议定义漂移。
-    # 先创建生成文件的父目录；mkdir -p 在目录已存在时也不会失败。
-    mkdir -p "$(dirname "$REGISTRY")"
-    # 从协议源生成 Gateway 路由编号表；该文件是生成物，不应手工维护。
-    python3 "$FLYWOW_DIR/gateway/tools/generate_gateway_registry.py"         --proto "$PROTO"         --output "$REGISTRY"
     # 调用 FlyWow 的统一入口；省略模块参数表示构建全部模块。
     # 若要只构建 Navigation，可单独调用：bash third_party/skynet-flywow/scripts/build_flywow.sh third_party/skynet navigation。
     # 模块的 C++ 源文件清单由各模块 CMakeLists 维护，最终产物统一写入 submodule/build/native。
@@ -135,11 +126,8 @@ prepare_runtime() {
     BUILD_TYPE="$BUILD_TYPE" bash "$FLYWOW_DIR/scripts/build_flywow.sh" \
         "$SERVER_ROOT/third_party/skynet"
     # Lua/C 搜索路径已在 process config 明确列出，不生成或注入额外配置文件。
-    # 检查协议描述文件与 Server 配置/加载路径是否匹配。
-    "$SCRIPT_DIR/check_server_descriptor.sh"
-    # 收尾：确认所有启动所需产物存在。
-    [[ -s "$REGISTRY" && -s "$DESCRIPTOR" && -s "$MAP_FILE" ]] ||
-        fail "共享运行资产不完整"
+    # 帧同步进程还需要其正式地图；BMAP-only 配置由 Lesson 3 Spec 约束。
+    [[ -s "$MAP_FILE" ]] || fail "共享运行资产不完整"
     log "PREPARE_OK"
 }
 # build 完成依赖准备、Native 编译/模块测试和 Lua 可变参数检查，但不启动长期运行的 Skynet 进程。

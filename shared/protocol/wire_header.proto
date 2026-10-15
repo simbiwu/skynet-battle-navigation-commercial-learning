@@ -1,0 +1,10 @@
+// 职责：各课程项目唯一共用的传输信封。
+// 边界：只定义 Envelope；命令编号、业务消息和业务类型全部由课程独立维护。
+// 发布合同：四套课程均使用此传输头；协议源与各课程生成物必须同步更新。
+syntax = "proto3";
+package battle.transport.v1;
+message Envelope {
+  uint32 protocol_version = 1;
+  uint32 command = 2;
+  bytes body = 3;
+}

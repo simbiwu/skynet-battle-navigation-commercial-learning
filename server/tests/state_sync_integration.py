@@ -15,11 +15,11 @@ class Client(FrameClient):
         perform(self.write_frame, self.read_frame)
         self.pushes = []
     def send(self, command, body):
-        self.write_frame(number(1, 4) + number(2, command) + binary(4, body))
+        self.write_frame(number(1, 4) + number(2, command) + binary(3, body))
     def recv_envelope(self):
         value = parse(self.read_frame())
-        assert first(value, 1) == 4 and 3 not in value
-        return first(value, 2), parse(first(value, 4))
+        assert first(value, 1) == 4 and 3 in value and 4 not in value
+        return first(value, 2), parse(first(value, 3))
     def request(self, command, body):
         self.send(command, body)
         for _ in range(100):

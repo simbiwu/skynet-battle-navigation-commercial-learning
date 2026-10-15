@@ -53,11 +53,12 @@ PATHS = {
     "gateway_service":    "{server}/service/gateway/frame_sync",
     "frame_lualib":       "{server}/lualib/battle/frame_sync",
     "gateway_protocol":   "{server}/lualib/gateway/protocol",
+    "frame_registry":     "{gateway_protocol}/protocol_registry_lesson_03_frame_sync.lua",
     "credentials":        "{server}/lualib/battle/session_credentials.lua",
     "debug_switch":       "{server}/lualib/shared/debug/luapanda_debug.lua",
     "map":                "{shared}/navigation/battle_1001/battle_1001.bmap",
     "map_manifest":       "{shared}/navigation/battle_1001/battle_1001.manifest.json",
-    "proto":              "{shared}/protocol/navigation_query.proto",
+    "protocol_root":      "{shared}/protocol",
     "protocol_generated": "{shared}/protocol/generated/server",
     "frame_config":       "{config}/frame_sync.lua",
     "battle_process":     "{config}/frame_battle_process.lua",
@@ -65,14 +66,14 @@ PATHS = {
     "skynet_executable":  "{skynet}/skynet",
     "logs":               "{server}/logs",
     "integration_test":   "{server}/tests/frame_sync_integration.py",
-    "descriptor_builder": "{server}/protocol/build_server_descriptor.sh",
+    "protocol_builder":   "{server}/protocol/build_protocol_lesson_03_frame_sync.sh",
     "skynet_builder":     "{server}/scripts/linux/build_skynet.sh",
     "protobuf_builder":   "{server}/scripts/linux/build_lua_protobuf.sh",
     "flywow_builder":     "{flywow}/scripts/build_flywow.sh",
     "frame_builder":      "{server}/scripts/lessons/lesson3_build_frame_sync_native.sh",
     "descriptor_check":   "{server}/scripts/linux/check_server_descriptor.sh",
     "map_prepare":        "{server}/scripts/lessons/prepare_frame_sync.py",
-    "registry_builder":   "{flywow}/gateway/tools/generate_gateway_registry.py",
+
 }
 
 # 配置名也用于启动命令/README/验证，不在验证脚本另存一份。
@@ -114,7 +115,7 @@ RELEASE_FILES = (
     ("{battle_service}/**/*.lua", None),
     ("{gateway_service}/**/*.lua", None),
     ("{frame_lualib}/**/*.lua", None),
-    ("{gateway_protocol}/**/*.lua", None),
+    ("{frame_registry}", None),
     ("{credentials}", None),  # Worker 无条件加载的会话凭据模块。
     ("{debug_switch}", None),  # Gateway 无条件 require；不交付 LuaPanda 本体。
 
@@ -122,6 +123,7 @@ RELEASE_FILES = (
     ("{battle_process}", None),
     ("{gateway_process}", None),
     ("{frame_config}", None),
+    ("{config}/gateway_frame_sync.lua", None),
     ("{config}/frame_sync_asset.lua", None),
     ("{config}/gateway.lua", None),
     ("{config}/unit_profiles.lua", None),
@@ -153,9 +155,9 @@ RELEASE_FILES = (
     # 正式地图与完整统一协议；不使用无后缀过滤的目录复制。
     ("{map}", None),
     ("{map_manifest}", None),
-    ("{protocol_generated}/navigation_query.pb", None),
-    ("{protocol_generated}/navigation_query.pb.sha256", None),
-    ("{protocol_generated}/navigation_query.source.sha256", None),
+    ("{protocol_generated}/lesson_03_frame_sync.pb", None),
+    ("{protocol_generated}/lesson_03_frame_sync.pb.sha256", None),
+    ("{protocol_generated}/frame_sync.source.sha256", None),
 )
 
 # 只用于来源追踪，不会把这些源码放进包；实际发布文件另外逐个计算 hash。
@@ -269,14 +271,15 @@ def build_runtime():
     覆盖项传给 Native 构建入口，避免改了复制路径却仍从旧目录构建。
     其它构建入口内部仍遵循所属模块合同；移动真实模块时须同步其自身路径。
     """
-    run("bash", str(source_path("{descriptor_builder}")))
+    # 显式调用帧同步专属协议入口；它只生成帧同步 descriptor 与 Registry。
+    run("bash", str(source_path("{protocol_builder}")))
     generated = source_path("{protocol_generated}")
-    for path, checksum in (
-        (source_path("{proto}"), generated / "navigation_query.source.sha256"),
-        (generated / "navigation_query.pb", generated / "navigation_query.pb.sha256"),
-    ):
-        if digest(path) != checksum.read_text(encoding="utf-8").split()[0]:
-            raise RuntimeError("协议生成物 hash 不匹配：" + str(path))
+    descriptor = generated / "lesson_03_frame_sync.pb"
+    checksum = generated / "lesson_03_frame_sync.pb.sha256"
+    if not descriptor.is_file() or digest(descriptor) != checksum.read_text(
+        encoding="utf-8"
+    ).split()[0]:
+        raise RuntimeError("帧同步 descriptor hash 不匹配：" + str(descriptor))
 
     run("bash", str(source_path("{skynet_builder}")))
     run("bash", str(source_path("{protobuf_builder}")))
@@ -290,11 +293,11 @@ def build_runtime():
     })
     run("bash", str(source_path("{frame_builder}")), env=build_env)
     run("ctest", "--test-dir", str(source_path("{frame_build}")), "--output-on-failure")
-    run("bash", str(source_path("{descriptor_check}")))
+    run("bash", str(source_path("{descriptor_check}")), "lesson_03_frame_sync")
     run(sys.executable, str(source_path("{map_prepare}")))
-    run(sys.executable, str(source_path("{registry_builder}")),
-        "--proto", str(source_path("{proto}")),
-        "--output", str(source_path("{gateway_protocol}/navigation_registry.lua")))
+    # Registry 与 descriptor 已由同一个课程协议构建脚本生成；此处只验证输出存在。
+    if not source_path("{frame_registry}").is_file():
+        raise RuntimeError("帧同步 Registry 缺失：" + str(source_path("{frame_registry}")) )
 
 
 def stage_files(stage):
@@ -423,7 +426,7 @@ def write_manifest(stage, version, source_hashes):
                     and path.suffix in SOURCE_SUFFIXES):
                 source_hashes[relative.as_posix()] = digest(path)
     for path in (Path(__file__), Path(__file__).with_name("verify_frame_release.py"),
-                 source_path("{proto}")):
+                 *sorted(source_path("{protocol_root}").glob("*.proto"))):
         source_hashes[path.relative_to(ROOT).as_posix()] = digest(path)
     runtime = {
         "server": PATHS["server"],

@@ -101,7 +101,7 @@ find_flywow_root() {
 # 检查二进制、配置、框架和生成 registry；不启动进程。
 doctor() {
     [[ -x "$SKYNET_BIN" ]] || fail "Skynet binary missing; run run_server.sh build"
-    [[ -f $SERVER_ROOT/config/gateway.lua && -f $SERVER_ROOT/config/battle.lua && -f $SERVER_ROOT/config/gateway_process.lua && -f $SERVER_ROOT/config/battle_process.lua ]] || fail process-configs-missing
+    [[ -f $SERVER_ROOT/config/gateway_lesson_02.lua && -f $SERVER_ROOT/config/battle.lua && -f $SERVER_ROOT/config/gateway_process.lua && -f $SERVER_ROOT/config/battle_process.lua ]] || fail process-configs-missing
     [[ -f "$SERVER_ROOT/service/gateway/gateway_main.lua" && -f "$SERVER_ROOT/service/battle/battle_main.lua" && -f "$SERVER_ROOT/service/gateway/gateway_proxy.lua" ]] || fail "process services missing"
     # 双进程 READY 依赖真正的 Battle 分发入口与已实现的 Manager/Worker。
     [[ -f "$SERVER_ROOT/service/battle/battle_dispatch.lua" &&
@@ -114,10 +114,10 @@ doctor() {
         fail "battle dispatch or worker services missing"
     find_flywow_root || fail "FlyWow submodule missing; run git submodule update --init --recursive"
     [[ -f "$FLYWOW_DIR/gateway/service/gateway/flywow_gateway.lua" &&
-       -f "$FLYWOW_DIR/gateway/lualib/flywow/gateway/codec.lua" &&
-       -f "$FLYWOW_DIR/gateway/lualib/flywow/gateway/handshake.lua" ]] ||
+       -f "$FLYWOW_DIR/gateway/lualib/codec.lua" &&
+       -f "$FLYWOW_DIR/gateway/lualib/handshake.lua" ]] ||
         fail "FlyWow Gateway sources missing; run git submodule update --init --recursive"
-    [[ -s "$SERVER_ROOT/lualib/gateway/protocol/navigation_registry.lua" ]] || fail "registry missing; run run_server.sh build"
+    [[ -s "$SERVER_ROOT/lualib/gateway/protocol/protocol_registry_lesson_02.lua" ]] || fail "registry missing; run run_server.sh build"
     log "DOCTOR_OK flywow=third_party/skynet-flywow"
 }
 

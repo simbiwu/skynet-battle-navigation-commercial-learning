@@ -2,7 +2,7 @@
 local skynet = require("skynet")
 local cluster = require("skynet.cluster")
 local conf = require("config.state_sync")
-local ids = require("gateway.protocol.navigation_registry").command_ids
+local ids = require("gateway.protocol.protocol_registry_lesson_03_state_sync").command_ids
 local workers, next_id, controls = {}, 0, 0
 local actions = {}
 local function worker_for(id)

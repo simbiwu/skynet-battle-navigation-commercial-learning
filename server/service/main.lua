@@ -4,7 +4,8 @@
 --- 生命周期：保存显式 Service handles，随进程存活；查询 call 可能 yield。
 --- 不负责：不持有 fd、动态占位或业务等待表，不让 Query 依赖 Gateway。
 local skynet = require "skynet.manager"
-local registry = require "gateway.protocol.navigation_registry"
+local registry = require "gateway.protocol.protocol_registry_lesson_01"
+local gateway_config = require "config.gateway_lesson_01"
 local query_service = nil
 local gateway_service = nil
 
@@ -48,10 +49,12 @@ skynet.start(function()
         dispatch(source, command, payload)
     end)
     gateway_service = skynet.newservice("flywow_gateway")
-    assert(skynet.call(gateway_service, "lua", "start",
-    {
-        handler_service = ".nav_handler",
-    }))
+    local options = {}
+    for key, value in pairs(gateway_config) do
+        options[key] = value
+    end
+    options.handler_service = ".nav_handler"
+    assert(skynet.call(gateway_service, "lua", "start", options))
     skynet.error("NAV_SERVER_READY query=", skynet.address(query_service),
         " gateway=", skynet.address(gateway_service))
 end)

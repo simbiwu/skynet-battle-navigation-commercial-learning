@@ -73,24 +73,16 @@ def stage_files():
         elif not target.exists(): target.symlink_to(R/'server'/name,target_is_directory=True)
     target=S/'shared/navigation'
     if not target.exists(): target.symlink_to(R/'shared/navigation',target_is_directory=True)
-    proto=(R/'shared/protocol/navigation_query.proto').read_text()
-    enum=''.join(f'  FRAME_{name} = {1101+i};\n' for i,name in enumerate(['JOIN','INPUT','PUSH','RECOVER','LEAVE','REPLAY']))
-    proto=proto.replace('  RUN_AUTO_BATTLE = 1002;','  RUN_AUTO_BATTLE = 1002;\n'+enum)
-    proto+='\n'+F['shared/protocol/frame_sync_messages.proto.inc']
-    (S/'shared/protocol/navigation_query.proto').write_text(proto)
+    shutil.copy2(R/'shared/protocol/wire_header.proto',S/'shared/protocol/wire_header.proto')
+    shutil.copy2(R/'shared/protocol/lesson_03/frame_sync.proto',S/'shared/protocol/lesson_03/frame_sync.proto')
     out=S/'shared/protocol/generated/server'; out.mkdir(parents=True,exist_ok=True)
     cs=S/'shared/protocol/generated/unity'; cs.mkdir(parents=True,exist_ok=True)
     py=S/'test_python'; py.mkdir(exist_ok=True)
     subprocess.run([str(R/'server/third_party/protoc-36.2/bin/protoc'),'-I'+str(S/'shared/protocol'),
-        '--descriptor_set_out='+str(out/'navigation_query.pb'),'--include_imports',
-        '--csharp_out='+str(cs),'--python_out='+str(py),str(S/'shared/protocol/navigation_query.proto')],check=True)
+        '--descriptor_set_out='+str(out/'lesson_03_frame_sync.pb'),'--include_imports',
+        '--csharp_out='+str(cs),'--python_out='+str(py),str(S/'shared/protocol/wire_header.proto'),str(S/'shared/protocol/lesson_03/frame_sync.proto')],check=True)
     subprocess.run(['python3',str(R/'server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py'),
-        '--proto',str(S/'shared/protocol/navigation_query.proto'),'--output',str(S/'server/lualib/gateway/protocol/navigation_registry.lua')],check=True)
-    gateway=third/'skynet-flywow/gateway/service/gateway/flywow_gateway.lua'
-    code=(R/'server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua').read_text()
-    old='        (message.connection_id > 0 and message.request_id == 0) or\n'
-    assert old in code
-    gateway.write_text(code.replace(old,''))
+        '--proto',str(S/'shared/protocol/lesson_03/frame_sync.proto'),'--envelope-type','.battle.transport.v1.Envelope','--output',str(S/'server/lualib/gateway/protocol/protocol_registry_lesson_03_frame_sync.lua')],check=True)
     subprocess.run(['python3',str(S/'server/scripts/lessons/prepare_frame_sync.py')],check=True,cwd=S/'server')
     luac=R/'server/third_party/skynet/3rd/lua/luac'
     for path in F:
@@ -330,7 +322,7 @@ add_test(NAME frame_native COMMAND frame_test "${CMAKE_CURRENT_SOURCE_DIR}/../..
 ''')
 
 add('shared/protocol/frame_sync_messages.proto.inc','proto','在唯一协议源内增加帧同步消息；本节inc只表示待追加正文，不是第二份运行协议文件。','只有FramePushResponse的命令用于主动推送；FrameInputRequest是单向请求；checkpoint不是每帧状态广播。',r'''
-// 职责：以下message追加到navigation_query.proto；CommandId另按正文局部修改。
+// 职责：以下message追加到lesson_03/frame_sync.proto；CommandId另按正文局部修改。
 message FrameCommand {
   uint32 frame = 1;       // 请求生效帧；必须位于Server当前帧之后的窗口内。
   sint32 x = 2;          // -1/0/1，X方向按键。
@@ -577,7 +569,7 @@ local function snapshot(battle, initial)
         checkpoint   = initial and battle.core.initial or assert(battle.core.engine:save()),
     }
 end
---- 推送目标连接；request_id=0表示无请求关联；不等待客户端收到。
+--- 推送目标连接；由FramePush command识别；不等待客户端收到。
 local function push(battle, records, code)
     skynet.send(dispatcher, "lua", "frame_push",
     {
@@ -727,7 +719,7 @@ add('server/service/battle/frame_sync/dispatch.lua','lua','由Battle进程选择
 local skynet = require "skynet"
 local cluster = require "skynet.cluster"
 local config = require "config.frame_sync"
-local ids = require("gateway.protocol.navigation_registry").command_ids
+local ids = require("gateway.protocol.protocol_registry_lesson_03_frame_sync").command_ids
 local workers, next_id = {}, 0
 
 --- ID到Worker稳定映射；workers在进程存活期间固定，不允许在线重排。
@@ -736,7 +728,7 @@ local function worker(id)
     return workers[(id - 1) % #workers + 1]
 end
 --- 发回原传输会话；Gateway按epoch/id检查当前有效性，不保存fd。
----@param route table gateway_epoch/connection_id/command_id/request_id，由入站或Worker产生。
+---@param route table gateway_epoch/connection_id/command_id，由入站或Worker产生。
 ---@param response table 已验证响应body。
 local function reply(route, response)
     local ok, err = pcall(cluster.send, config.gateway_node, "@frame_proxy", "send_data",
@@ -744,7 +736,6 @@ local function reply(route, response)
         gateway_epoch = route.gateway_epoch,
         connection_id = route.connection_id,
         command_id    = route.command_id,
-        request_id    = route.request_id,
         data          = response,
     })
     if not ok then skynet.error("FRAME_REPLY_FAILED ", tostring(err)) end
@@ -775,7 +766,7 @@ end
 --- 由Gateway Proxy转来的数据；控制yield只持有值record，不借用连接对象。
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
-    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0 and route.request_id ~= 0)
+    assert(type(route.gateway_epoch) == "string" and route.connection_id > 0)
     if route.command_id == ids.FRAME_INPUT then
         local target = worker(route.data.battle_id)
         if target then
@@ -808,7 +799,7 @@ skynet.start(function()
             assert(trusted, "untrusted frame source")
             reply({ gateway_epoch = payload.session.gateway_epoch,
                     connection_id = payload.session.connection_id,
-                    command_id = ids.FRAME_PUSH, request_id = 0 }, payload.data)
+                    command_id = ids.FRAME_PUSH }, payload.data)
         else error("unknown Frame Dispatch command: " .. tostring(command)) end
     end)
 end)
@@ -843,7 +834,6 @@ local gateway = nil -- 组合根注入的本地Gateway handle。
 ---@field gateway_epoch string Gateway实例身份。
 ---@field connection_id integer 目标连接；0仅主动广播，帧同步使用具体连接。
 ---@field command_id integer 从唯一Proto生成的command。
----@field request_id integer 非0请求/响应，0主动消息。
 ---@field data table 已解码body；本Proxy不修改。
 
 --- 尽力异步转发；Cluster失败由客户端控制超时/恢复收敛，不建立无限重试。
@@ -1048,7 +1038,8 @@ using System.IO;
 using System.Net.Sockets;
 using System.Threading;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Lesson03.FrameSync.V1;
+using Battle.Transport.V1;
 using Google.Protobuf;
 using FlyWow.Gateway;
 namespace BattleNavigation.FrameSync
@@ -1123,38 +1114,36 @@ namespace BattleNavigation.FrameSync
             Buffer.BlockCopy(bytes,0,frame,2,bytes.Length);
             stream.Write(frame,0,frame.Length);
         }
-        private ulong Enqueue(uint command,IMessage body)
+        private void EnqueueEnvelope(uint command,IMessage body)
         {
-            if(Volatile.Read(ref closed)!=0) throw new IOException(fault??"CLOSED");
-            ulong id=checked((ulong)Interlocked.Increment(ref nextRequest));
-            EnqueueEnvelope(command,body,id);
-            return id;
-        }
-        private void EnqueueEnvelope(uint command,IMessage body,ulong id)
-        {
-            var bytes=new Envelope { ProtocolVersion=3,Command=command,RequestId=id,
+            var bytes=new Envelope { ProtocolVersion=4,Command=command,
                 Body=ByteString.CopyFrom(body.ToByteArray()) }.ToByteArray();
             if(!outgoing.TryAdd(bytes)) { Fail("OUTGOING_LIMIT"); throw new IOException("OUTGOING_LIMIT"); }
         }
-        public void SendInputs(FrameInputRequest body) { Enqueue((uint)CommandId.FrameInput,body); }
+        public void SendInputs(FrameInputRequest body)
+        {
+            if(Volatile.Read(ref closed)!=0) throw new IOException(fault??"CLOSED");
+            EnqueueEnvelope((uint)CommandId.FrameInput,body);
+        }
         public async Task<Envelope> Request(CommandId command,IMessage body)
         {
-            var item=new Waiting { Command=(uint)command };
-            ulong id=checked((ulong)Interlocked.Increment(ref nextRequest));
+            uint key=(uint)command;
+            var item=new Waiting { Command=key };
             lock(gate)
             {
                 if(closed!=0) throw new IOException(fault??"CLOSED");
                 if(waiting.Count>=8) throw new IOException("CONTROL_LIMIT");
-                waiting.Add(id,item);
+                if(waiting.ContainsKey(key)) throw new IOException("COMMAND_BUSY");
+                waiting.Add(key,item);
             }
             try
             {
-                EnqueueEnvelope((uint)command,body,id);
+                EnqueueEnvelope(key,body);
                 if(await Task.WhenAny(item.Result.Task,Task.Delay(3000))!=item.Result.Task)
                     throw new TimeoutException("CONTROL_TIMEOUT");
                 return await item.Result.Task;
             }
-            finally { lock(gate) waiting.Remove(id); }
+            finally { lock(gate) waiting.Remove(key); }
         }
         public bool TryPush(out FramePushResponse push) { return pushes.TryTake(out push); }
         private void ReadLoop()
@@ -1164,16 +1153,15 @@ namespace BattleNavigation.FrameSync
                 while(closed==0)
                 {
                     var envelope=Envelope.Parser.ParseFrom(ReadFrame());
-                    if(envelope.ProtocolVersion!=3) throw new InvalidDataException("PROTOCOL_VERSION");
-                    if(envelope.RequestId==0)
+                    if(envelope.ProtocolVersion!=4) throw new InvalidDataException("PROTOCOL_VERSION");
+                    if(envelope.Command==(uint)CommandId.FramePush)
                     {
-                        if(envelope.Command!=(uint)CommandId.FramePush) throw new InvalidDataException("PUSH_COMMAND");
                         if(!pushes.TryAdd(FramePushResponse.Parser.ParseFrom(envelope.Body))) throw new IOException("PUSH_LIMIT");
                         continue;
                     }
                     Waiting item;
-                    lock(gate) waiting.TryGetValue(envelope.RequestId,out item);
-                    if(item==null) continue; // 已超时结果丢弃，不污染新请求。
+                    lock(gate) waiting.TryGetValue(envelope.Command,out item);
+                    if(item==null) continue; // 没有同命令等待者时丢弃迟到响应。
                     if(item.Command!=envelope.Command) throw new InvalidDataException("RESPONSE_COMMAND");
                     item.Result.TrySetResult(envelope);
                 }
@@ -1217,7 +1205,8 @@ using System.IO;
 using System.Linq;
 using System.Security.Cryptography;
 using System.Threading.Tasks;
-using Battle.Navigation.V1;
+using Battle.Lesson03.FrameSync.V1;
+using Battle.Transport.V1;
 using Google.Protobuf;
 using UnityEngine;
 namespace BattleNavigation.FrameSync
@@ -1814,12 +1803,11 @@ local targeted =
     gateway_epoch = e.sends[1][3].gateway_epoch,
     connection_id = e.sends[1][3].connection_id,
     command_id    = 1001,
-    request_id    = 0,
     data          = { result = 7 },
 }
 e.dispatch(0, 7, "send_data", targeted)
 assert(#e.writes == 1 and e.writes[1][1] == 10, "target push must not broadcast")
-assert(e.writes[1][2] == frame(0), "push preserves request_id zero")
+assert(e.writes[1][2] == frame(0), "targeted push keeps its command")
 local epoch = targeted.gateway_epoch
 targeted.gateway_epoch = "old"
 e.dispatch(0, 7, "send_data", targeted)
@@ -1832,10 +1820,7 @@ e.ready = true
 targeted.connection_id = 0
 e.dispatch(0, 7, "send_data", targeted)
 assert(#e.writes == 3, "broadcast still reaches both ready connections")
-targeted.request_id = 1
-e.dispatch(0, 7, "send_data", targeted)
-assert(#e.writes == 3, "broadcast cannot pretend to be correlated response")
-targeted.connection_id = 1; targeted.request_id = 0
+targeted.connection_id = 1
 e.dispatch(0, 7, "close", targeted); resume(e.forks[4])
 e.dispatch(0, 7, "send_data", targeted)
 assert(#e.writes == 3, "closed target must not fall back to broadcast")
@@ -1994,22 +1979,20 @@ class Client:
     def send(self,data): self.sock.sendall(struct.pack('>H',len(data))+data)
     def receive(self): return self.exact(struct.unpack('>H',self.exact(2))[0])
     def send_request(self,command,body):
-        self.seq+=1
-        self.send(number(1,3)+number(2,command)+number(3,self.seq)+blob(4,body))
-        return self.seq
+        self.send(number(1,4)+number(2,command)+blob(3,body))
     def request(self,command,body):
-        request_id=self.send_request(command,body)
+        self.send_request(command,body)
         for _ in range(100):
-            env=fields(self.receive()); response=fields(one(env,4,b''))
-            if one(env,3)==0:
-                assert one(env,2)==1103; self.pushes.append(response); continue
-            assert one(env,3)==request_id and one(env,2)==command
+            env=fields(self.receive()); response=fields(one(env,3,b''))
+            if one(env,2)==1103:
+                self.pushes.append(response); continue
+            assert one(env,2)==command
             return response
         raise AssertionError('control starved')
     def push(self):
         if self.pushes: return self.pushes.pop(0)
-        env=fields(self.receive()); assert one(env,3)==0 and one(env,2)==1103
-        return fields(one(env,4,b''))
+        env=fields(self.receive()); assert one(env,2)==1103
+        return fields(one(env,3,b''))
     def close(self): self.sock.close()
 
 class Native:

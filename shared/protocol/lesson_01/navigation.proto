@@ -1,0 +1,40 @@
+// 职责：第一课导航查询项目的独立协议。
+// 边界：命令编号、消息和位置类型均属第一课；仅 Envelope 类型名与其它项目一致。
+syntax = "proto3";
+package battle.lesson_01.navigation.v1;
+enum CommandId {
+  COMMAND_UNSPECIFIED = 0;
+  QUERY_CELL = 1001;
+}
+message WorldPosition {
+  sint64 x_mm = 1;
+  sint64 y_mm = 2;
+  sint64 z_mm = 3;
+}
+
+message QueryCellRequest {
+  uint32 map_id = 1;
+  uint32 map_version = 2;
+  WorldPosition position = 3;
+}
+message QueryCellResponse {
+  enum ResultCode {
+    RESULT_UNSPECIFIED = 0;
+    OK = 1;
+    MAP_NOT_FOUND = 2;
+    MAP_VERSION_MISMATCH = 3;
+    OUT_OF_BOUNDS = 4;
+    NOT_WALKABLE = 5;
+    BAD_REQUEST = 6;
+    INTERNAL_ERROR = 7;
+  }
+  ResultCode result = 1;
+  string message = 2;
+  uint32 map_id = 3;
+  uint32 map_version = 4;
+  int32 grid_x = 5;
+  int32 grid_z = 6;
+  int32 cell_height_mm = 7;
+  uint32 area = 8;
+  uint32 clearance = 9;
+}

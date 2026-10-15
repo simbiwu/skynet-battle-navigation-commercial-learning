@@ -11,7 +11,7 @@ case "${1:-help}" in
     prepare)
         # 生成状态同步示例配置/资产，再检查 Server 所需协议描述文件。
         python3 scripts/lessons/prepare_state_sync.py
-        bash scripts/linux/check_server_descriptor.sh
+        bash scripts/linux/check_server_descriptor.sh lesson_03_state_sync
         ;;
     build)
         # 复用 Server 的通用依赖和 FlyWow 构建链，再构建状态同步 Native 预测库。

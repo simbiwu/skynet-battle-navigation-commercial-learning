@@ -2,6 +2,7 @@
 --- 边界：Integration Test Service；以协议已有map_id作为测试标记，不增加协议字段。
 --- 生命周期：runner独占启动回收；Gateway_disconnect仅作连接生命周期通知，无业务回复。
 local skynet = require "skynet.manager"
+local base_config = require "config.gateway_lesson_01"
 skynet.start(function()
     skynet.name(".gw_async_smoke", skynet.self())
     skynet.dispatch("lua", function(_session, source, command, message)
@@ -41,13 +42,22 @@ skynet.start(function()
     end)
     for index, transport in ipairs({ "tcp", "websocket" }) do
         local gateway = skynet.newservice("flywow_gateway")
-        skynet.call(gateway, "lua", "start",
-        {
-            handler_service = ".gw_async_smoke", transport = transport, port = 19020 + index,
-            read_timeout_ticks = 100, idle_timeout_ticks = 200,
-            max_clients = 8, write_warning_close_kb = 64,
-            max_pending_handshakes = 2, handshake_timeout_ticks = 100,
-        })
+        -- FlyWow Gateway 只使用宿主显式传入的完整配置；测试从第一课 profile 复制协议产物，
+        -- 再覆盖本测试的 handler、transport、端口和更小的资源上限，不维护第二份 descriptor/Registry。
+        local gateway_config = {}
+        for key, value in pairs(base_config) do
+            gateway_config[key] = value
+        end
+        gateway_config.handler_service = ".gw_async_smoke"
+        gateway_config.transport = transport
+        gateway_config.port = 19020 + index
+        gateway_config.read_timeout_ticks = 100
+        gateway_config.idle_timeout_ticks = 200
+        gateway_config.max_clients = 8
+        gateway_config.write_warning_close_kb = 64
+        gateway_config.max_pending_handshakes = 2
+        gateway_config.handshake_timeout_ticks = 100
+        skynet.call(gateway, "lua", "start", gateway_config)
     end
     skynet.error("GATEWAY_ASYNC_SMOKE_READY")
 end)

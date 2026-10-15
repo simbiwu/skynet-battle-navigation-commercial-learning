@@ -81,7 +81,7 @@ Unity 解析 RunAutoBattleResponse
 | 2 | `unity/BattleNavigation/Assets/BattleNavigation/client/BattleReplayRequester.cs` | `Start()`、`Task.Run`、返回后处理错误、`ConvertResult()`。它不产生 Snapshot，只把响应转换成播放器 DTO。 |
 | 3 | `unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/ServerBattleClient.cs` | 构造 `RunAutoBattleRequest`，使用命令号 `RUN_AUTO_BATTLE=1002`，解析强类型 Response。 |
 | 4 | `unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/GatewayEnvelopeClient.cs` | TCP 连接、握手、Envelope、request_id 校验、收发一次往返。 |
-| 5 | `shared/protocol/navigation_query.proto` | 命令编号、WorldPosition、BattleEvent 和 RunAutoBattleResponse 的业务字段合同。 |
+| 5 | `shared/protocol/wire_header.proto`、`navigation.proto` | 命令编号和第二课位置类型在 lesson_02/navigation.proto；BattleEvent 与 RunAutoBattleResponse 在 navigation.proto。 |
 
 客户端传入的业务数据很少：`scenario_id=1001`。它没有上传单位坐标、属性、随机种子、地图路径或路线。场景身份只是选择 Server 上哪个已登记方案，不代表客户端获准决定战斗状态。
 
@@ -110,8 +110,8 @@ Protobuf Envelope
 - `unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/LengthFrame.cs`：uint16 大端长度头的打包/校验。
 - `server/third_party/skynet-flywow/gateway/clients/unity/FlyWowHandshake.cs`：Unity 端 SDK 握手。
 - `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`：服务端接入、TCP/WS 帧读取、握手和业务派发。
-- `server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/codec.lua`：使用加载后的 descriptor 解码 Envelope/Request，并编码 Response。
-- `server/third_party/skynet-flywow/gateway/lualib/flywow/gateway/registry.lua` 与 `server/lualib/gateway/protocol/navigation_registry.lua`：命令号到请求/响应 Protobuf 类型的映射与校验。
+- `server/third_party/skynet-flywow/gateway/lualib/codec.lua`：使用加载后的 descriptor 解码 Envelope/Request，并编码 Response。
+- `server/third_party/skynet-flywow/gateway/lualib/registry.lua` 与 `server/lualib/gateway/protocol/protocol_registry_lesson_02.lua`：命令号到请求/响应 Protobuf 类型的映射与校验。
 
 注意：ProtoBuf 负责把有类型的字段编码成 bytes；它不负责 TCP 分帧、连接、重试、Battle 路由或播放。长度帧负责字节边界；Envelope 负责通用协议头；body 才是具体业务消息。
 
@@ -237,7 +237,7 @@ events[]:
   BATTLE_END 的 result
 ```
 
-字段定义在 `shared/protocol/navigation_query.proto` 的 `BattleEvent` 与 `RunAutoBattleResponse`。`battle_dispatch.lua` 将 Lua Core result 映射成响应 record；Gateway 按生成 registry 指定的响应类型 Protobuf 编码。当前结果受业务预算限制（Dispatch 最多 100 个 Event、总 Path 点最多 200 个、事件文本最多 64 bytes），超过预算返回错误，不承诺任意规模战斗可放进单帧。
+字段定义在 `shared/protocol/lesson_02/navigation.proto` 的 `BattleEvent` 与 `RunAutoBattleResponse`，公共 `WorldPosition` 定义在 `wire_header.proto`。`battle_dispatch.lua` 将 Lua Core result 映射成响应 record；Gateway 按生成 registry 指定的响应类型 Protobuf 编码。当前结果受业务预算限制（Dispatch 最多 100 个 Event、总 Path 点最多 200 个、事件文本最多 64 bytes），超过预算返回错误，不承诺任意规模战斗可放进单帧。
 
 ## 十一、返回原客户端连接
 
@@ -314,13 +314,13 @@ cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
 | --- | --- | --- |
 | 1 | `BattleReplaySceneSetup.cs`、`BattleReplayRequester.cs` | 谁在何时发请求？请求前端提交了哪些字段？ |
 | 2 | `ServerBattleClient.cs`、`GatewayEnvelopeClient.cs`、`LengthFrame.cs` | 握手、TCP 分帧、Envelope、Body 各负责什么？如何识别回应的是这次请求？ |
-| 3 | `navigation_query.proto`、生成的 Gateway registry、FlyWow codec | 如何从 command id 找到 Request 类型？Protobuf descriptor 从哪里来？ |
+| 3 | `wire_header.proto`、`navigation.proto`、生成的 Gateway registry、FlyWow codec | 如何从 command id 找到 Request 类型？Protobuf descriptor 从哪里来？ |
 | 4 | `flywow_gateway.lua`、`gateway_main.lua`、`gateway_proxy.lua` | 哪个 Service 拥有 fd？Gateway 为什么不等待 Battle？返回上下文在哪里？ |
 | 5 | `battle_main.lua`、`battle_dispatch.lua` | 请求如何跨 Cluster 到达 Battle？什么字段触发自动战斗？错误如何变成业务 ResultCode？ |
 | 6 | `scenario_1001.lua`、`battle_mgr.lua`、`battle_worker.lua` | Snapshot 谁创建？Manager 如何选 Worker？Native Context 谁拥有、何时释放？ |
 | 7 | `battle_core.lua` | 一个 fixed tick 做什么？何时 A*？何时推进 Path？Event 的 seq/logic_ms 如何产生？ |
 | 8 | `grid_pathfinder.cpp`、`navigation_binding.cpp` | A* 如何遵守地图/Profile/动态占位？Native 结果怎样变成 Lua Path？ |
-| 9 | `navigation_query.proto`、`battle_dispatch.lua` | 路径与伤害如何表示成有界、可序列化的 BattleEvent？ |
+| 9 | `navigation.proto`、`battle_dispatch.lua` | 路径与伤害如何表示成有界、可序列化的 BattleEvent？ |
 | 10 | `gateway_proxy.lua`、FlyWow Gateway 回包函数 | Response 如何回到原连接？断线/迟到响应为何不能送给任意连接？ |
 | 11 | `BattleReplayRequester.cs`、`BattleReplayPlayer.cs` | Unity 如何校验事件次序、按逻辑时间播放，并避免重新寻路/结算？ |
 

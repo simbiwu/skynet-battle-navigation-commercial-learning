@@ -356,7 +356,7 @@ async def run(args):
               cpu=Path("/proc/cpuinfo").read_text().split("model name")[1].split("\n")[0],
               main_commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT.parent,text=True).strip(),
               flywow_commit=subprocess.check_output(["git","rev-parse","HEAD"],cwd=ROOT/"third_party/skynet-flywow",text=True).strip(),
-              descriptor_sha256=hashlib.sha256((ROOT.parent/"shared/protocol/generated/server/navigation_query.pb").read_bytes()).hexdigest(),
+              descriptor_sha256=hashlib.sha256((ROOT.parent/"shared/protocol/generated/server/lesson_02.pb").read_bytes()).hexdigest(),
               max_clients=8192,max_total_requests_per_second=30000,worker_threads=4))
     for count in args.connections:
         await run_instance(args, count, output, emit)

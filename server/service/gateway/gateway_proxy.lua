@@ -5,7 +5,7 @@
 
 local cluster = require "skynet.cluster"
 local skynet = require "skynet.manager"
-local process = require "config.gateway"
+local process = nil
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
 local state =
@@ -68,8 +68,11 @@ end
 
 --- 建立 Cluster 监听并等待 Battle ready；只初始化传输路径。
 --- 返回远程节点信息；可能 yield，不创建业务请求表。
-local function start()
-    assert(not state.started, "gateway proxy can only start once")
+local function start(config)
+    assert(not state.started and process == nil, "gateway proxy can only start once")
+    assert(type(config) == "table" and type(config.cluster) == "table",
+        "gateway proxy requires the selected course cluster config")
+    process = config
 
     cluster.reload(
         {
@@ -150,7 +153,7 @@ skynet.start(function()
 
     skynet.dispatch("lua", function(_session, source, command, data)
         if command == "start" then
-            skynet.retpack(start())
+            skynet.retpack(start(data))
             return
         elseif command == "bind_gateway" then
             skynet.retpack(bind_gateway(data))

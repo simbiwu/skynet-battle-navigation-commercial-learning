@@ -76,7 +76,7 @@ Core 依次消费一个移动采样、校验和执行玩家技能、更新 AI、
 
 ## 4. Proto 与 Gateway 无 request_id 合同
 
-唯一 Proto 源是 shared/protocol/navigation_query.proto。Envelope 使用 protocol_version=1、command=2、body=4；字段编号 3 和名字 request_id 保留，不在线传输。协议兼容版本为 4，旧版本 3 被拒绝。Gateway 负责连接、版本、command/body 编解码和透明转发，不解释 Battle。
+协议按职责拆分：`wire_header.proto` 定义共用的 `battle.transport.v1.Envelope`，`lesson_03/state_sync.proto` 定义状态同步消息；各课导航和帧同步分别位于各自课程目录。Envelope 使用 protocol_version=1、command=2、body=3，不定义 request_id。协议版本为 4；各课程 descriptor 和客户端生成物按当前源同步更新。Gateway 负责连接、版本、command/body 编解码和透明转发，不解释 Battle。
 
 Gateway 不要求客户端请求带关联号，也不要求 Server 主动 Push 带关联号。Server 主动 STATE_PUSH 就没有 request_id。定向发送仍核对 gateway_epoch、正数 connection_id、handler 来源和连接存活；connection_id=0 表示配置允许的广播。这些身份信息解决发给哪个连接，不承担 Battle 命令序号。
 
@@ -166,7 +166,7 @@ CPU Benchmark 环境为 i5-10400F 2.90 GHz、12 逻辑线程、GCC 15.2、RelWit
 ## 10. 阅读顺序
 
 1. 读 D045、D046 和 Lesson 03 Spec，确认协议版本、60 Hz、TCP 与交付边界。
-2. 沿 navigation_query.proto、prepare_state_sync.py、Gateway codec/Proxy、State Dispatcher/Worker 追 Join，再追一次无 request_id 的主动 StatePush。
+2. 沿 wire_header.proto、lesson_03/state_sync.proto、prepare_state_sync.py、Gateway codec/Proxy、State Dispatcher/Worker 追 Join，再追一次无 request_id 的主动 StatePush。
 3. 读 runtime.lua 的配置校验、accept_inputs、accept_cast、移动、AI、弹丸、step 和 snapshot；对照坏输入、重复、冲突、Context 关闭用例。
 4. 读 replication.lua 与 Unity StateReplica.cs，手算一个基线、修改和删除 Delta；删除本地基线应触发 Resync。
 5. 读 StateMovement.cs、StateBattleController.cs，追踪预测输入如何由 consumed_input_seq 清理并重放，再检查远端插值和 Recover。

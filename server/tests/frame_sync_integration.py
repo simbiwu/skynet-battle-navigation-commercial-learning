@@ -102,14 +102,14 @@ class Client:
     def send(self, command, body):
         self.request_id += 1
         envelope = number(1, PROTO_VERSION) + number(2, command) + \
-            binary(4, body)
+            binary(3, body)
         self.write_frame(envelope)
         return self.request_id
 
     def recv_envelope(self):
         envelope = parse(self.read_frame())
         assert first(envelope, 1) == PROTO_VERSION
-        return first(envelope, 2), 0, first(envelope, 4)
+        return first(envelope, 2), 0, first(envelope, 3)
 
     def request(self, command, body):
         request_id = self.send(command, body)

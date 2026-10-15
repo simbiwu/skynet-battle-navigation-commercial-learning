@@ -483,7 +483,7 @@ service/battle/battle_main.lua             Battle 进程 composition root
 service/battle/navigation_query.lua        Battle 进程中的地图 Query Service
 service/battle/battle_dispatch.lua         Battle 对外 Cluster 分发入口
 third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua                 FlyWow Gateway Service（来自框架仓库）
-lualib/gateway/protocol/navigation_registry.lua  Gateway 构建阶段生成的 command registry
+lualib/gateway/protocol/protocol_registry_<course>.lua  每个课程协议构建入口单独生成的 command registry
 lualib/battle/navigation/query_logic.lua   Query 内部业务模块
 ```
 
@@ -573,7 +573,7 @@ FlyWow 的 `gateway.endpoint` 是可选薄接入模块：构造响应上下文�
 
 FlyWow Gateway 与客户端 SDK 在连接进入 ready 前完成 P-256 ECDH、32 字节随机挑战、HKDF-SHA256 和完整 HMAC-SHA256 双向证明。每连接重新生成临时密钥和挑战，成功后释放秘密；不要求账号、宿主会话表或 Watchdog。合法协议客户端指完成握手的客户端，不附带账号授权语义。
 
-状态机独立放在 `flywow.gateway.handshake`，Native 绑定仅链接 OpenSSL 3 的 libcrypto EVP，不链接 libssl、不启用 SSL/TLS；Gateway Service 只执行接入、发送及关闭。Unity SDK 使用固定 Bouncy Castle 2.6.2，H5 使用 Web Crypto。业务 `.proto`、Envelope 版本3及 D039 异步合同保持现状；不增加包头加密、CRC 或逐包 HMAC。
+状态机独立放在 `gateway/lualib/handshake.lua`，Native 绑定仅链接 OpenSSL 3 的 libcrypto EVP，不链接 libssl、不启用 SSL/TLS；Gateway Service 只执行接入、发送及关闭。Unity SDK 使用固定 Bouncy Castle 2.6.2，H5 使用 Web Crypto。业务 `.proto`、Envelope 版本3及 D039 异步合同保持现状；不增加包头加密、CRC 或逐包 HMAC。
 
 握手消息与 ready 后业务消息由连接状态区分，TCP 复用两字节长度帧，WS 使用 binary message。未 ready 不缓存或投递业务。并发握手数和总期限有界，复用既有扫描协程。连接协议不兼容旧客户端，必须双端升级，不自动降级。完整字节合同、构建、验收与未验证项见 `docs/FLYWOW_GATEWAY_HANDSHAKE.md`。
 
@@ -611,8 +611,8 @@ Lua 仅作为静态配置源和启动期读取器，不执行帧模拟规则。U
 ## D045 - Gateway无请求关联的双向send_data与协议版本4
 
 Gateway只处理连接、握手、framing、command/body编解码、双向send_data、定向Push、广播和close。
-Envelope保留protocol_version=1、command=2、body=4，删除并保留历史request_id字段名/编号3，禁止复用。
-当前宿主兼容版本升至4；旧版本3明确拒绝，不混跑。Framework、宿主、Unity、descriptor、registry与测试共同迁移。
+共用 Envelope 为 battle.transport.v1.Envelope，只定义 protocol_version=1、command=2、body=3，不定义 request_id。
+当前课程协议版本为4；协议源、Server descriptor/Registry 与 Unity 生成物均同步到最新，不保留历史字段兼容。
 Gateway不要求请求或主动Push包含关联编号，不缓存业务等待项。实例内connection_id为正值表示定向、0表示广播；gateway_epoch及ready/存活连接仍必验。
 宿主需要关联时在业务消息中定义真实字段：状态同步input_seq、cast_seq、snapshot_seq与event_seq分别承担各自合同。
 现有Unity长连接由Frame/State共用GatewayConnection；同command只允许一个控制请求在途，超时关闭连接，避免迟到回复匹配之后的控制请求。第二课短连接按command串行。

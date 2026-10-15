@@ -1,0 +1,84 @@
+// 职责：第三课帧同步项目的独立命令编号和消息。
+// 边界：不导入其它课程协议；只共享 wire_header.proto 中的传输 Envelope。
+syntax = "proto3";
+package battle.lesson_03.frame_sync.v1;
+enum CommandId {
+  COMMAND_UNSPECIFIED = 0;
+  FRAME_JOIN = 1101;
+  FRAME_INPUT = 1102;
+  FRAME_PUSH = 1103;
+  FRAME_RECOVER = 1104;
+  FRAME_LEAVE = 1105;
+  FRAME_REPLAY = 1106;
+}
+// 第三课帧同步：正式帧统一携带玩家席位采用输入，不广播HP/权威位置。
+message FrameCommand {
+  uint32 frame = 1; // 请求生效帧，Service验证Deadline。
+  sint32 x = 2;     // -1/0/1。
+  sint32 z = 3;
+  uint32 skill = 4; // 0无技能，1近战，2视觉弹丸，3逻辑弹丸。
+}
+message FramePlayerRecord {
+  uint32 seat_id = 1;     // 服务端分配、正序稳定。
+  FrameCommand input = 2;// 实际被采用的本席位输入。
+  bool supplied = 3;     // false表示服务端缺输入填充。
+}
+message FrameRecord {
+  uint32 frame = 1;                  // 严格连续的权威帧。
+  repeated FramePlayerRecord players = 2; // 固定顺序；本课只有席位1。
+  fixed32 hash = 3;                  // 状态FNV32分歧诊断，不是安全Hash。
+}
+message FrameJoinRequest {
+  uint32 scenario_id = 1;
+  uint32 battle_id = 2; // 0创建并立即开始单人Battle；非0连接已有Battle会被拒绝。
+  uint32 simulation_version = 3; // 客户端正在运行的确定性模拟合同版本。
+}
+message FrameJoinResponse {
+  string code = 1;          // OK/FULL/NOT_FOUND等。
+  uint32 battle_id = 2;
+  uint32 seat_id = 3;       // 绑定到当前Gateway Session的Seat。
+  bytes resume_token = 4;  // 本席位独占32字节随机恢复凭据；不要进Replay/日志。
+  uint32 generation = 5;   // 恢复时递增，旧代数失效。
+  uint32 map_id = 6;
+  uint32 map_version = 7;
+  string map_hash = 8;      // 发布BMAP SHA-256；不包含rules源码Hash。
+  uint32 frame = 9;
+  bytes checkpoint = 10;   // 创建或恢复时的Checkpoint V3。
+  uint32 tick_rate_hz = 11;
+  uint32 future_window = 12;
+  uint32 input_lead = 13;
+  uint32 simulation_version = 14; // 服务端模拟版本；连接和回放元数据校验。
+}
+message FrameInputRequest {
+  uint32 battle_id = 1;
+  uint32 generation = 2;
+  repeated FrameCommand inputs = 3; // 网络发送不自行声明Seat身份。
+}
+message FramePushResponse {
+  uint32 battle_id = 1;
+  uint32 generation = 2; // 目标席位会话代数。
+  repeated FrameRecord records = 3;
+  string code = 4; // OK/LATE/INPUT_WINDOW/CONFLICT/OVERLOAD/INTERNAL。
+  uint32 winner = 5;
+  bytes checkpoint = 6; // 保留：服务端请求客户端安装完整Checkpoint时使用。
+}
+message FrameRecoverRequest { uint32 battle_id = 1; bytes resume_token = 2; }
+message FrameRecoverResponse { FrameJoinResponse state = 1; }
+message FrameLeaveRequest { uint32 battle_id = 1; uint32 generation = 2; }
+message FrameLeaveResponse { string code = 1; }
+message FrameReplayRequest {
+  uint32 battle_id = 1;
+  bytes resume_token = 2;
+  uint32 offset = 3;
+}
+message FrameReplayResponse {
+  string code = 1;
+  repeated FrameRecord records = 2; // 服务端按网络预算裁切分页。
+  uint32 total = 3;
+  FrameJoinResponse initial = 4;   // 首次提供初始状态；不包括Token。
+}
+message FrameReplay {
+  uint32 format_version = 1; // V1文件封装；Checkpoint内容为V2。
+  FrameJoinResponse initial = 2;
+  repeated FrameRecord records = 3;
+}

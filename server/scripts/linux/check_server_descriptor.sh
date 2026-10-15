@@ -1,28 +1,34 @@
 #!/usr/bin/env bash
-# 职责：使用项目自带 Lua 和固定 pb.so 验证 Server descriptor。
-# 边界：Protocol Build Check；不依赖系统 lua 命令，不启动 Skynet。
-# 输入/输出：navigation_query.pb -> PROTO_DESCRIPTOR_OK 或非零退出码。
-# 生命周期：协议生成后或 Server 启动前执行；只读验证，不修改 descriptor。
-# 不负责：不编译 protoc、不加载地图、不启动 Skynet Service。
+# 职责：用仓库自带 Lua protobuf Runtime 检查一个课程的独立 descriptor。
+# 边界：只读离线检查；不编译协议、不生成 Registry、不启动 Skynet。
+# 输入：lesson_01、lesson_02、lesson_03_frame_sync 或 lesson_03_state_sync。
+# 输出：目标 descriptor 的公共 Envelope、本课程消息存在且其它课程类型缺席的结果。
+# 调用：bash server/scripts/linux/check_server_descriptor.sh lesson_03_frame_sync
+# 生命周期：对应 build_protocol_<课程>.sh 生成 descriptor 后执行。
+# 修改指引：新增课程时同步更新下方 PROFILE 白名单和 server/protocol/check_descriptor.lua 合同表。
+# -e/-u/pipefail：缺文件、变量拼错或 Lua 断言失败时非零退出。
 set -euo pipefail
-# -e：任意未处理的失败立即退出，避免错误结果继续传给下一阶段。
-# -u：读取未定义变量时立即失败，尽早发现环境变量或变量名错误。
-# pipefail：管道中任一命令失败都会让整条管道失败，避免只检查到最后一条命令。
 
-# ROOT 是 server 根目录；REPO_ROOT 用来访问跨端共享协议发布物。
-ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
-REPO_ROOT="$(cd "$ROOT/.." && pwd)"
-LUA="$ROOT/third_party/skynet/3rd/lua/lua"
-RUNTIME="$ROOT/third_party/lua-protobuf-runtime"
-DESCRIPTOR="$REPO_ROOT/shared/protocol/generated/server/navigation_query.pb"
+# 从脚本位置求 Server 与仓库根目录，因此调用者当前目录不影响路径解析。
+SERVER_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd)"
+REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
+LUA="$SERVER_ROOT/third_party/skynet/3rd/lua/lua"
+PROTOBUF_RUNTIME="$SERVER_ROOT/third_party/lua-protobuf-runtime"
+PROFILE="${1:-lesson_02}"
 
-# 固定使用 Skynet 自带 Lua 和本项目编译的 pb.so，避免系统 Lua ABI 偶然通过。
+# 白名单同时限制输出路径与 Lua 检查使用的 profile 名，拒绝任意文件参数。
+case "$PROFILE" in
+    lesson_01|lesson_02|lesson_03_frame_sync|lesson_03_state_sync) ;;
+    *) echo "未知协议目标：$PROFILE" >&2; exit 2 ;;
+esac
+DESCRIPTOR="$REPO_ROOT/shared/protocol/generated/server/$PROFILE.pb"
+
+# 固定使用 Skynet 配套 Lua ABI 和项目 pb.so，不让系统 Lua 偶然通过检查。
 test -x "$LUA"
-test -s "$RUNTIME/pb.so"
+test -s "$PROTOBUF_RUNTIME/pb.so"
 test -s "$DESCRIPTOR"
 
-# LUA_PATH/C。本次只临时覆盖子进程环境，不污染调用 Shell。
-# 在受控 Lua 搜索路径中运行检查器，确保验证的是仓库锁定的 protobuf runtime。
-LUA_PATH="$RUNTIME/?.lua;;" \
-LUA_CPATH="$RUNTIME/?.so;;" \
-    "$LUA" "$ROOT/protocol/check_descriptor.lua" "$DESCRIPTOR"
+# 将当前仓库 Runtime 加入 Lua 搜索路径；检查 Lua 进程不启动任何 Skynet Service。
+LUA_PATH="$PROTOBUF_RUNTIME/?.lua;;" \
+LUA_CPATH="$PROTOBUF_RUNTIME/?.so;;" \
+    "$LUA" "$SERVER_ROOT/protocol/check_descriptor.lua" "$DESCRIPTOR" "$PROFILE"

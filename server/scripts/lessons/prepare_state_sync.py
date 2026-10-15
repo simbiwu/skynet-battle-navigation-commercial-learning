@@ -26,21 +26,27 @@ if manifest["content_sha256"] != map_hash:
     '--- 构建验证的资产与配置身份；禁止手工修改。\nreturn\n{\n'
     f'    map_id = {manifest["map_id"]},\n    map_version = {manifest["map_version"]},\n'
     f'    map_hash = "{map_hash}",\n    config_hash = "{digest.hexdigest()}",\n}}\n')
-proto = root / "shared/protocol/navigation_query.proto"
+protocol_root = root / "shared/protocol"
+# 状态同步 Unity 源码只从公共 Envelope 和第三课状态同步 schema 生成。
+proto_files = [
+    protocol_root / "wire_header.proto",
+    protocol_root / "lesson_03/state_sync.proto",
+]
 protoc = root / "server/third_party/protoc-36.2/bin/protoc"
 if subprocess.check_output([str(protoc), "--version"], text=True).strip() != "libprotoc 36.2":
     raise SystemExit("PROTOC_VERSION")
-subprocess.run([str(protoc), "-I" + str(proto.parent), "--include_imports",
-    "--descriptor_set_out=" + str(proto.parent / "generated/server/navigation_query.pb"), str(proto)], check=True)
-subprocess.run(["python3", str(root / "server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py"),
-    "--proto", str(proto), "--output", str(root / "server/lualib/gateway/protocol/navigation_registry.lua")], check=True)
+# 协议构建入口一次只写状态同步 descriptor 与 Registry。
+subprocess.run([str(root / "server/protocol/build_protocol_lesson_03_state_sync.sh")], check=True)
+subprocess.run([str(root / "server/scripts/linux/check_server_descriptor.sh"),
+    "lesson_03_state_sync"], check=True)
 if args.unity_output:
     assets = args.unity_output.resolve()
     if assets.name != "Assets" or assets.parent.name != "BattleNavigation":
         raise SystemExit("UNITY_OUTPUT_MUST_BE_PROJECT_ASSETS")
     target = assets / "BattleNavigation/Scripts/Protocol"
     target.mkdir(parents=True, exist_ok=True)
-    subprocess.run([str(protoc), "-I" + str(proto.parent), "--csharp_out=" + str(target), str(proto)], check=True)
+    subprocess.run([str(protoc), "-I" + str(protocol_root), "--csharp_out=" + str(target),
+        *map(str, proto_files)], check=True)
     streaming = assets / "StreamingAssets"
     for path in paths:
         if path.name == "state_sync.lua":
@@ -53,9 +59,17 @@ if args.unity_output:
     destination.parent.mkdir(parents=True, exist_ok=True)
     if not destination.exists() or hashlib.sha256(destination.read_bytes()).hexdigest() != map_hash:
         raise SystemExit("UNITY_MAP_REQUIRES_EXISTING_MATCHING_PUBLISHED_ASSET")
-    checksum = hashlib.sha256((target / "NavigationQuery.cs").read_bytes()).hexdigest()
-    out = assets.parents[2] / "shared/protocol/generated/unity/NavigationQuery.cs.sha256"
-    # Windows Unity生成物校验属于Windows编辑源；不写Windows协议源码。
-    out.parent.mkdir(parents=True, exist_ok=True)
-    out.write_text(checksum + "\n")
+    checksum_dir = assets.parents[2] / "shared/protocol/generated/unity"
+    checksum_dir.mkdir(parents=True, exist_ok=True)
+    for proto_file in proto_files:
+        name = "".join(part[:1].upper() + part[1:] for part in proto_file.stem.split("_")) + ".cs"
+        generated = target / name
+        checksum = hashlib.sha256(generated.read_bytes()).hexdigest()
+        (checksum_dir / (name + ".sha256")).write_text(f"{checksum}  {name}\n")
+    legacy = target / "NavigationQuery.cs"
+    if legacy.exists():
+        legacy.unlink()
+    old_checksum = checksum_dir / "NavigationQuery.cs.sha256"
+    if old_checksum.exists():
+        old_checksum.unlink()
 print("STATE_PREPARE_OK", map_hash, digest.hexdigest())

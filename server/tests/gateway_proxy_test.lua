@@ -64,7 +64,6 @@ local function scenario()
     package.loaded["skynet"] = skynet
     package.loaded["skynet.manager"] = skynet
     package.loaded["skynet.cluster"] = cluster
-    package.loaded["config.gateway"] = config
     package.loaded["shared.debug.luapanda_debug"] = { start = function() end }
     dofile(root .. "/service/gateway/gateway_proxy.lua")
     return test
@@ -92,7 +91,7 @@ local test = scenario()
 rejects(test, 99, "send_data", message(), "not ready")
 rejects(test, 8, "close", message(), "not ready")
 rejects(test, 9, "bind_gateway", { gateway_service = 99 }, "binding is invalid")
-test.dispatch(1, 9, "start")
+test.dispatch(1, 9, "start", config)
 assert(test.returns[1].remote_node == "battle")
 assert(test.returns[1].remote_address == "127.0.0.1:2528")
 rejects(test, 9, "start", nil, "only start once")
