@@ -470,6 +470,14 @@ endif()
 
 在本课宿主的 CMake 中，通过 `add_subdirectory("${FLYWOW}/navigation/native" ...)` 引入这个模块，再用 `target_link_libraries(frame_core PUBLIC FlyWow::Navigation)` 接入。这样课程只依赖稳定目标名，不需要列举 FlyWow 内部 CPP 文件。
 
+#### Gateway 握手 Native：CMake 构建的是一个 .so
+
+Gateway Lua Service 在 Skynet 宿主进程中执行 `require "flywow_gateway_crypto"`。Lua 根据 `gateway_process.lua` 的 `lua_cpath` 查找 `third_party/skynet-flywow/build/native/flywow_gateway_crypto.so`，再加载其中导出的 `luaopen_flywow_gateway_crypto`。因此 CMake 目标只负责这个 C++ Native 动态模块，不编译 Gateway Lua Service、客户端 SDK 或协议工具。
+
+文件：server/third_party/skynet-flywow/gateway/native/CMakeLists.txt。它声明 OpenSSL 3 Crypto，链接 FlyWow 的 flywow_lua_binding 静态目标，编译握手实现与 Skynet allocator，并把完整 .so 原子发布到统一 Native 目录。CMake 缓存位于 server/third_party/skynet-flywow/build/cmake/gateway/。完整文件和逐段注释见 [gateway/native/CMakeLists.txt](../server/third_party/skynet-flywow/gateway/native/CMakeLists.txt)。
+
+FlyWow 的 scripts/build_flywow.sh 仍是模块统一入口；本课脚本通过它构建 Gateway，再配置帧同步宿主。一条 Lesson 3 构建命令会准备 Gateway Lua 加载所需的 Native 文件，但不会构建 Gateway Service 本身。
+
 #### 宿主 `server/native/frame_sync/CMakeLists.txt`
 
 ```cmake
@@ -5772,23 +5780,24 @@ ctest --test-dir build/frame_sync --output-on-failure
 ./third_party/skynet/3rd/lua/lua tests/frame_runtime_test.lua
 ```
 
-新脚本会先配置再编译宿主 `frame_sync`。普通构建直接运行脚本即可，不必预先定义环境变量。需要覆盖默认值时，可在命令前写 `NAME=value command`（只对这次调用生效），或先用 `export NAME=value` 再运行；这些是环境变量，不是脚本位置参数。目录参数使用相对路径时，以 `server/` 为基准。可调参数与 CMake 参数的对应关系如下：
+脚本先通过 FlyWow 统一构建入口配置并构建 Gateway 握手 Native，再配置、编译宿主 `frame_sync`。默认 FRAME_SYNC_LUA=ON 时需要 Skynet 自带 Lua 头文件和 OpenSSL 3 Crypto 开发文件；设为 OFF 时跳过 Gateway 与 Lua Binding，适用于只构建 Windows Unity Core。普通 Linux Server 构建直接运行脚本即可，不必预先定义环境变量。需要覆盖默认值时，可在命令前写 `NAME=value command`（只对这次调用生效），或先用 `export NAME=value` 再运行；这些是环境变量，不是脚本位置参数。目录参数使用相对路径时，以 `server/` 为基准。可调参数与 CMake 参数的对应关系如下：
 
 | 环境变量 | 对应参数 | 默认值 | 含义 |
 |---|---|---|---|
 | `FRAME_SYNC_CMAKE` | CMake 命令本身 | `cmake` | 选择要运行的 CMake 可执行文件。 |
 | `FRAME_SYNC_SOURCE_DIR` | `-S` | `native/frame_sync` | Native CMake 源码目录。 |
 | `FRAME_SYNC_BUILD_DIR` | `-B` 和 `--build` | `build/frame_sync` | 配置及编译产物目录。 |
-| `FRAME_SYNC_BUILD_TYPE` | `-DCMAKE_BUILD_TYPE` | `Release` | 单配置生成器使用的构建类型。 |
-| `FRAME_SYNC_LUA` | `-DLESSON_FRAME_LUA` | `ON` | 是否构建供 Skynet 加载的 Lua Binding；本课 Server 流程应保持 `ON`。 |
+| `FRAME_SYNC_BUILD_TYPE` | `-DCMAKE_BUILD_TYPE`；传给 FlyWow 的 `BUILD_TYPE` | `Release` | 同时选择宿主和 Gateway Native 的单配置构建类型。 |
+| `FRAME_SYNC_LUA` | `-DLESSON_FRAME_LUA`，以及构建脚本的 Gateway 分支 | `ON` | 是否构建 Skynet Lua Binding 与 Gateway 握手 Native；Linux Server 流程应保持 `ON`。设 `OFF` 会跳过两项。 |
 | `FRAME_SYNC_BUILD_JOBS` | `--parallel` | `4` | 并行编译任务数，必须为正整数。 |
+| `CXX` | FlyWow Gateway CMake 的 `-DCMAKE_CXX_COMPILER` | `c++` | 选择 Gateway C++ 编译器；由环境传给 FlyWow 构建入口，CMake 首次配置后会缓存。更换编译器时需清理 Gateway 的 CMake 构建目录后重新配置。 |
 
 例如，要用 Debug、8 个并行任务构建，执行：
 ```bash
 FRAME_SYNC_BUILD_TYPE=Debug FRAME_SYNC_BUILD_JOBS=8 ./scripts/lessons/lesson3_build_frame_sync_native.sh
 ```
 
-脚本只配置和编译，不运行测试；因此后面的 `ctest` 仍单独执行。前面的 `./scripts/linux/run_server.sh build` 负责 Server 通用依赖和 FlyWow 构建，不会代替这个宿主 `frame_sync` 构建脚本。
+脚本会构建 Gateway 握手 .so 和宿主 Native，但不运行测试；因此后面的 `ctest` 仍单独执行。前面的 `./scripts/linux/run_server.sh build` 负责 Server 通用依赖与 FlyWow 全模块构建；本脚本仍显式调用 FlyWow 的 `gateway` 模块入口，确保单独运行本课脚本时也准备好宿主 `lua_cpath` 所需的 .so。重复执行时 CMake 使用已有缓存并按需增量构建。
 
 其中`frame_binding_test.lua`与`frame_runtime_test.lua`要求正确的Lua5.4.7加载路径（脚本内已明确追加`package.cpath`）；若系统缺Lua`lua` CLI，按当前固定Skynet构建输出路径核对，不静默换用系统Lua5.1/5.3。应看到`FRAME_BINDING_OK`、`FRAME_RUNTIME_OK`。
 
