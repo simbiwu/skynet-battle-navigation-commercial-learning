@@ -4,6 +4,8 @@
 # 不负责：重复枚举FlyWow内部CPP、生成规则源码Hash、修改Skynet源码。
 cmake_minimum_required(VERSION 3.16)
 project(lesson_frame LANGUAGES CXX)
+# 发布时 Core 与 Binding 同目录；禁止构建树绝对路径进入 ELF RUNPATH。
+set(CMAKE_BUILD_RPATH_USE_ORIGIN ON)
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)

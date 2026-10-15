@@ -106,13 +106,15 @@ Server 校验施法者、目标存活/阵营、距离、序号与冷却。Unity 
 
 AI 样例选择最近存活对手，平距按实例 ID 稳定排序；远距离时用 FlyWow find_path_to_unit_range 求路、advance_path 推进。地面移动和动态占位仍走现有 Navigation Context。空中 AABB 查询仅用于单位间弹丸扫掠；当前 BMAP 不含楼体空中遮挡体，不能声称弹丸会被任意建筑阻挡。
 
+Server Battle 通过 require "flywow_navigation" 调用 FlyWow Navigation 的公开 Lua API，这些 API 由 FlyWow Native Lua Binding 注册。直接注册的 C++ 回调标识符与 Lua 可见名称逐字符一致，例如 `find_path_to_unit_range`。Unity 本地预测另走 P/Invoke C ABI；两条跨语言边界遵守各自的名称合同。
+
 ## 6. Snapshot、Event 与快速反馈
 
 Snapshot 表示某个 Server Tick 的正式状态，包含单位、HP、冷却、逻辑弹丸、输入消费水位、事件水位和胜负。Delta 明确指向客户端已确认基线，包含变更和显式删除；没有基线则服务端发全量，客户端找不到基线则 Resync，不猜测合并。历史最多保存 64 份。
 
 Event 表示 CAST、伤害或 BOLT_END 等正式语义结果。重复序号不会重复触发效果；缺号请求恢复。Server 保留 512 个 Event，每条 Push 最多 64 个；确认水位落后到窗口外时，发送 EVENT_GAP 和全量快照覆盖状态。状态每 3 Tick 更新；有新事件时可立即推送。Push 不依赖一个等待中的请求。
 
-Unity 每 1/60 秒采样键盘，调用 StateMovement 的 FlyWow Navigation 薄 C ABI，先预测本机角色，再异步发输入。权威 Snapshot 到达后，客户端移除已消费序号之前的预测输入，从权威位置重置，再重放尚未消费输入。校正误差小于 1 m 时平滑，达到 1 m 时直接收敛。
+Unity 每 1/60 秒采样键盘，通过 StateMovement 的 DllImport 调用 FlyWow Navigation 薄 C ABI（ss_open、ss_reset、ss_step、ss_close）；这些符号是 Unity P/Invoke 合同，不是注册给 Lua 的 C++ Binding 回调，名称须与客户端导入声明保持一致。客户端先预测本机角色，再异步发送输入。权威 Snapshot 到达后，客户端移除已消费序号之前的预测输入，从权威位置重置，再重放尚未消费输入。校正误差小于 1 m 时平滑，达到 1 m 时直接收敛。
 
 远端单位按快照历史插值，时间线落后约 6 Tick（100 ms）以吸收更新间隔和抖动；数据不足时最多外推 3 Tick（50 ms）。500 ms 未收状态就暂停输入并显示 Recover。用户可请求恢复；基线或事件缺口触发 Resync。客户端立即响应，Server 始终决定最终结果。
 

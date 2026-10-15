@@ -283,6 +283,8 @@ SceneView
 
 函数按阅读成本和真实边界拆分，不按固定行数机械拆分。注释使用中文说明必要的业务语义、WHY、ownership、生命周期、失败和并发合同；避免逐行翻译、重复显而易见的代码或填充式文件头。命名和目录遵循本仓库现有合同；FlyWow 的格式规范不意味着照搬其专属模块结构、路径或 Runtime 配置。
 
+讲解 Lua Native Binding 时，应把 Lua 调用点、C++ 注册语句和被注册的 C++ 回调定义放在相邻上下文中。Binding 回调名与 Lua 可见名称一致；直接展示这一对应关系，让学习者能从 Lua API 名称直接搜索到 C++ 入口，不要求学习者再通过别名映射猜测。
+
 ## 11. Lua Gateway 的可读性合同
 
 Gateway、Proxy、Battle Dispatch 和其他跨 Service Lua 代码统一使用 LuaDoc。教程展示源码时，应保留同一 LuaDoc 块中的职责、参数、返回、ownership、yield、失败和 WHY 说明。

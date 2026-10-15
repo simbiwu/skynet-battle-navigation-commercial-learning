@@ -7,6 +7,7 @@ start = "gateway/frame_sync/main"
 logger = "./logs/frame_gateway"
 logservice = "flywow_logger"
 flywow_logger_level = "normal"
+flywow_logger_console = true -- 同一日志同时写入按天文件与 stdout，终端逐条刷新。
 
 luaservice = "./service/?.lua;./third_party/skynet/service/?.lua;" ..
              "./third_party/skynet-flywow/gateway/service/?.lua;" ..

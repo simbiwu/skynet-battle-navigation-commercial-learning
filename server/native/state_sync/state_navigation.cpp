@@ -1,4 +1,5 @@
 // 职责：给Unity本地移动预测提供FlyWow导航薄C ABI；不运行Battle/AI/Skill。
+// ss_* 是Unity DllImport直接导入的稳定C ABI，不是Lua Binding回调；保持与客户端导入符号一致。
 // 单个句柄拥有私有Context和只读Profile，主线程顺序使用；任何异常不穿越C ABI。
 #include "grid_pathfinder.h"
 #include "map_registry.h"
