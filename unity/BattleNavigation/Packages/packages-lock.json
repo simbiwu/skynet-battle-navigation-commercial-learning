@@ -1,5 +1,13 @@
 {
   "dependencies": {
+    "com.flywow.navigation": {
+      "version": "file:NavigationArtifacts/flywow-navigation-120dee722f41dbb6569c477e2844d8581c9f305e4c54ff18f0786e50082a35cd.tgz",
+      "depth": 0,
+      "source": "local-tarball",
+      "dependencies": {
+        "com.unity.ai.navigation": "1.1.7"
+      }
+    },
     "com.unity.ai.navigation": {
       "version": "1.1.7",
       "depth": 0,

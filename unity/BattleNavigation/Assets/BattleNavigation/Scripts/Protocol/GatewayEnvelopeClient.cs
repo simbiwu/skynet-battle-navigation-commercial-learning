@@ -1,6 +1,6 @@
 // 职责：为 QueryCell 和自动战斗共用 TCP 长度帧与 Envelope 往返。
 // 边界：Unity Client Runtime Transport；不解析地图或战斗业务字段。
-// 输入/输出：command + Protobuf 请求 -> 同 request_id 的响应 Envelope。
+// 输入/输出：command + Protobuf 请求 -> 同 command 的响应 Envelope；短连接只允许串行请求。
 // 生命周期：一个实例独占 TcpClient/NetworkStream，调用方负责 Dispose。
 // 不负责：不重试、不连接池化、不在 Update 执行同步 I/O。
 using System;
@@ -17,8 +17,7 @@ namespace BattleNavigation.Client
     /// <summary>一个调用线程独占的短连接 Gateway 客户端。</summary>
     public sealed class GatewayEnvelopeClient : IDisposable
     {
-        private const uint ProtocolVersion = 3; // 与 Gateway 及 sint64 WorldPosition 合同一致。
-        private static long nextRequestId;       // 当前进程内单调递增。
+        private const uint ProtocolVersion = 4; // 与 Gateway 及 sint64 WorldPosition 合同一致。
         private readonly TcpClient client;       // 当前实例独占 Socket。
         private readonly NetworkStream stream;   // 对应的同步读写流。
 
@@ -77,19 +76,17 @@ namespace BattleNavigation.Client
         public Envelope RoundTrip(uint command, IMessage request)
         {
             if (request == null) throw new ArgumentNullException(nameof(request));
-            var requestId = checked((ulong)Interlocked.Increment(ref nextRequestId));
             var envelope = new Envelope
             {
                 ProtocolVersion = ProtocolVersion,
                 Command = command,
-                RequestId = requestId,
                 Body = ByteString.CopyFrom(request.ToByteArray()),
             };
             var frame = LengthFrame.Pack(envelope.ToByteArray());
             stream.Write(frame, 0, frame.Length);
             var response = Envelope.Parser.ParseFrom(ReadFrame());
             if (response.ProtocolVersion != ProtocolVersion ||
-                response.Command != command || response.RequestId != requestId)
+                response.Command != command)
                 throw new InvalidDataException("Gateway response identity mismatch");
             return response;
         }

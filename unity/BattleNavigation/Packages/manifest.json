@@ -34,7 +34,7 @@
     "com.unity.modules.vr": "1.0.0",
     "com.unity.modules.wind": "1.0.0",
     "com.unity.modules.xr": "1.0.0",
-    "com.flywow.navigation": "file:../../../.tmp/navigation-packages/flywow-navigation-d96ee762c7f5556425d9fde4658682a9f4c0404dc961ef7dab7a0938a1d4008b.tgz"
+    "com.flywow.navigation": "file:NavigationArtifacts/flywow-navigation-120dee722f41dbb6569c477e2844d8581c9f305e4c54ff18f0786e50082a35cd.tgz"
   },
   "testables": [
     "com.flywow.navigation"

@@ -1,0 +1,7 @@
+{
+  "name": "BattleNavigation.XLuaExamples",
+  "references": ["Xlua.Core"],
+  "autoReferenced": false,
+  "defineConstraints": ["BATTLE_NAVIGATION_XLUA_EXAMPLES"],
+  "noEngineReferences": false
+}

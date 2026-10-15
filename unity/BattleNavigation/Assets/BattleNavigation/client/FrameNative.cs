@@ -124,7 +124,7 @@ namespace BattleNavigation.FrameSync
         public uint MapVersion => fs_map_version(RequireHandle());
 
         /// <summary>启动时加载地图与Lua配置；Tick和Battle构造不读取文件。</summary>
-        public static void Preload(string bmapPath, string airnavPath, FsUnitProfile[] units,
+        internal static void Preload(string bmapPath, string airnavPath, FsUnitProfile[] units,
                                    FsNavigationProfile[] navigation, FsSkillProfile[] skills)
         {
             if (units == null || units.Length == 0 || navigation == null || skills == null ||

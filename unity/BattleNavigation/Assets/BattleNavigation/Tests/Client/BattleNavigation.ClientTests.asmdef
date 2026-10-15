@@ -2,7 +2,8 @@
   "name": "BattleNavigation.ClientTests",
   "rootNamespace": "BattleNavigation.Tests",
   "references": [
-    "BattleNavigation.Client"
+    "BattleNavigation.Client",
+    "BattleNavigation.Replay"
   ],
   "includePlatforms": [
     "Editor"
@@ -10,8 +11,11 @@
   "excludePlatforms": [],
   "allowUnsafeCode": false,
   "autoReferenced": false,
-  "overrideReferences": false,
-  "precompiledReferences": [],
+  "overrideReferences": true,
+  "precompiledReferences": [
+    "Google.Protobuf.dll",
+    "nunit.framework.dll"
+  ],
   "optionalUnityReferences": [
     "TestAssemblies"
   ],

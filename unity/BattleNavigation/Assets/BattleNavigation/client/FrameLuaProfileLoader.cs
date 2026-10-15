@@ -29,6 +29,28 @@ namespace BattleNavigation.FrameSync
                 return loader.Read();
         }
 
+        // 状态同步只复用配置读取，不依赖Frame技能表或Frame模拟Core。
+        internal static FrameLuaProfiles LoadMovementData()
+        {
+            using (var loader = new FrameLuaProfileLoader())
+            {
+                using (var units = (LuaTable)loader.env.DoString("return require 'config.unit_profiles'")[0])
+                using (var navigation = (LuaTable)loader.env.DoString("return require 'config.navigation_profiles'")[0])
+                {
+                    var result = new FrameLuaProfiles
+                    {
+                        Units = new FsUnitProfile[units.Length],
+                        Navigation = new FsNavigationProfile[navigation.Length],
+                    };
+                    for (int i = 1; i <= units.Length; ++i)
+                        result.Units[i - 1] = ReadUnit(units.Get<int, LuaTable>(i));
+                    for (int i = 1; i <= navigation.Length; ++i)
+                        result.Navigation[i - 1] = ReadNavigation(navigation.Get<int, LuaTable>(i));
+                    return result;
+                }
+            }
+        }
+
         private byte[] LoadModule(ref string modulePath)
         {
             string relative = modulePath.Replace('.', Path.DirectorySeparatorChar) + ".lua";
