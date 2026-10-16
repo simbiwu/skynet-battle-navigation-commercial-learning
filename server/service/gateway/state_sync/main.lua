@@ -14,6 +14,15 @@ skynet.start(function()
     end
     gateway_options.handler_service = ".state_proxy"
     assert(skynet.call(gateway, "lua", "start", gateway_options))
+    local shutdown_coordinator = skynet.newservice("admin/lesson3_shutdown_coordinator")
+    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+        profile = "state_sync",
+        role = "gateway",
+        endpoint = "state_gateway_shutdown",
+        gateway = gateway,
+        proxy = proxy,
+    }))
+    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
     skynet.error("STATE_GATEWAY_READY port=", conf.port)
     skynet.exit()
 end)

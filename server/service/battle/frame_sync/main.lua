@@ -7,15 +7,30 @@ local cluster = require "skynet.cluster"
 local native  = require "lesson_frame_native"
 local conf    = require "config.frame_sync"
 local asset   = require "config.frame_sync_asset"
+local debug_console_port = tonumber(skynet.getenv("debug_console_port") or "0")
 
 skynet.start(function()
+    if debug_console_port > 0 then
+        skynet.newservice("debug_console", debug_console_port)
+    end
+    
     assert(native.preload(conf.map_path, conf.airnav_path, conf.unit_profiles, conf.navigation_profiles, conf.skills), "FRAME_ASSET_PRELOAD_FAILED")
     local dispatch = skynet.newservice("battle/frame_sync/dispatch")
     assert(skynet.call(dispatch, "lua", "ready"))
     cluster.reload({ [conf.gateway_node] = conf.gateway_address,
                      [conf.battle_node] = conf.battle_address })
+                     
     cluster.open(conf.battle_node, 64) -- 参数是Node名称，不是host:port。
     cluster.register("frame_dispatch", dispatch)
+    local shutdown_coordinator = skynet.newservice("admin/lesson3_shutdown_coordinator")
+    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+        profile = "frame_sync",
+        role = "battle",
+        endpoint = "frame_battle_shutdown",
+        dispatcher = dispatch,
+    }))
+    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
+
     skynet.error("FRAME_BATTLE_READY node=", conf.battle_node, " map=", asset.map_id)
     skynet.exit()
 end)

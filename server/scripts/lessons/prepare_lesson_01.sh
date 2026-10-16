@@ -12,7 +12,7 @@ set -euo pipefail
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 REPO_ROOT="$(cd "$SERVER_ROOT/.." && pwd)"
-RUN_CTL="$SCRIPT_DIR/../linux/run_server.sh"
+RUN_CTL="$SCRIPT_DIR/lesson1_run_server.sh"
 SHARED_MAP_DIR="$REPO_ROOT/shared/navigation/battle_1001"
 BMAP_FILE="$SHARED_MAP_DIR/battle_1001.bmap"
 MANIFEST_FILE="$SHARED_MAP_DIR/battle_1001.manifest.json"
@@ -28,7 +28,7 @@ Usage:
   BUILD_TYPE=Debug ./scripts/lessons/prepare_lesson_01.sh [--rebuild]
 
 Options:
-  --rebuild  调用 run_server.sh rebuild；默认调用 build 做增量构建与测试。
+  --rebuild  调用 Lesson 1 专属入口 rebuild；默认调用 build 做增量构建。
 
 Prerequisite:
   先通过 Git 拉取包含 shared/navigation 与 shared/protocol 的同一课程提交。
@@ -63,7 +63,7 @@ done
 status_output="$($RUN_CTL status 2>&1 || true)"
 if grep -q "RUNNING pid=" <<<"$status_output"; then
     printf '%s\n' "$status_output" >&2
-    fail "stop the running Server before Lesson 1 prepare/build"
+    fail "先停止 Lesson 1 Server，再执行 prepare/build"
 fi
 
 # 验证发布清单中的业务身份，避免仅凭文件名加载错误地图版本。
@@ -105,10 +105,10 @@ validate_published_map
 bash "$SERVER_ROOT/protocol/build_protocol_lesson_01.sh"
 
 if ((REBUILD)); then
-    "$RUN_CTL" rebuild
+    "$SERVER_ROOT/scripts/linux/build_server.sh" rebuild
 else
     # 复用唯一构建入口，保证 Lesson 看到的协议、Native 和 descriptor 与真实 Server 一致。
-    "$RUN_CTL" build
+    "$SERVER_ROOT/scripts/linux/build_server.sh" build
 fi
 
 "$RUN_CTL" doctor

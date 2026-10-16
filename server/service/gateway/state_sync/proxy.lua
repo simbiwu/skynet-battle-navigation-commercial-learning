@@ -6,6 +6,7 @@ local skynet = require("skynet.manager")
 local cluster = require("skynet.cluster")
 local conf = require("config.state_sync")
 local gateway = nil
+local shutdown_coordinator = nil
 
 local function forward(command, payload)
     local ok, err = pcall(cluster.send, conf.battle_node, "@state_dispatch", command, payload)
@@ -30,6 +31,17 @@ skynet.start(function()
             assert(gateway == nil and payload.gateway)
             gateway = payload.gateway
             skynet.retpack(true)
+        elseif command == "set_shutdown_coordinator" then
+            assert(shutdown_coordinator == nil, "shutdown coordinator already set")
+            assert(math.type(payload) == "integer" and payload == source,
+                "shutdown coordinator must configure itself")
+            shutdown_coordinator = source
+            skynet.retpack(true)
+        elseif command == "shutdown" then
+            assert(source == shutdown_coordinator and shutdown_coordinator ~= nil,
+                "untrusted shutdown caller")
+            skynet.retpack(true)
+            skynet.exit()
         elseif command == "send_data" then
             assert(gateway and type(payload.data) == "table")
             if source == gateway then

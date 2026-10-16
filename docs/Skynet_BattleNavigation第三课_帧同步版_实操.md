@@ -4717,16 +4717,16 @@ FRAME_SYNC_BUILD_TYPE=Debug FRAME_SYNC_BUILD_JOBS=8 ./scripts/lessons/lesson3_bu
 
 ```bash
 # 终端A，工作目录server/
-./third_party/skynet/skynet config/frame_battle_process.lua
+./scripts/lessons/lesson3_run_server.sh frame-sync start --battle
 
 # 终端B，工作目录server/；确认A已写出FRAME_BATTLE_READY再启动
-./third_party/skynet/skynet config/frame_gateway_process.lua
+./scripts/lessons/lesson3_run_server.sh frame-sync start --gateway
 
 # 终端C，server/
 python3 tests/frame_sync_integration.py
 ```
 
-重点检查`FRAME_BATTLE_READY`、`FRAME_GATEWAY_READY`和`FRAME_ONE_CLIENT_OK`。进程停止使用各自前台终端Ctrl+C，不向所有Skynet进程发送`pkill`。测试只证明当前一个真实客户端收到12个连续权威帧；不能证明Unity Play、客户端本地预测或高并发负载。
+重点检查`FRAME_BATTLE_READY`、`FRAME_GATEWAY_READY`和`FRAME_ONE_CLIENT_OK`。进程由课程入口按 PID 管理。使用 status 查询；停止时使用 stop --gateway 和 stop --battle，默认先通过 shutdownctl 通知 Gateway 停止监听并关闭连接，再通知 Battle Worker 逐场释放 Native Runtime；单角色 stop --gateway/--battle 也会执行对应收尾。协调关闭失败或超时回退 SIGTERM，只有显式 --force 才升级为 SIGKILL。Gateway 可后台运行，便于连接 debug_console。测试只证明当前一个真实客户端收到12个连续权威帧；不能证明Unity Play、客户端本地预测或高并发负载。
 
 ### 6.6 Windows DLL与团结引擎（Windows编辑源）
 

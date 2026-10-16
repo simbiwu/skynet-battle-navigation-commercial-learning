@@ -13,13 +13,23 @@ local function abort_later()
     end)
 end
 
-local targets = {
-    gateway = { node = "gateway", address = "@gateway_shutdown" },
-    battle = { node = "battle", address = "@battle_shutdown" },
+local profiles = {
+    lesson2 = {
+        gateway = { node = "gateway", address = "@gateway_shutdown", endpoint = "127.0.0.1:2527" },
+        battle = { node = "battle", address = "@battle_shutdown", endpoint = "127.0.0.1:2528" },
+    },
+    state_sync = {
+        gateway = { node = "state_gateway", address = "@state_gateway_shutdown", endpoint = "127.0.0.1:2547" },
+        battle = { node = "state_battle", address = "@state_battle_shutdown", endpoint = "127.0.0.1:2548" },
+    },
+    frame_sync = {
+        gateway = { node = "frame_gateway", address = "@frame_gateway_shutdown", endpoint = "127.0.0.1:2537" },
+        battle = { node = "frame_battle", address = "@frame_battle_shutdown", endpoint = "127.0.0.1:2538" },
+    },
 }
 
-local function shutdown_one(name)
-    local target = assert(targets[name])
+local function shutdown_one(profile, name)
+    local target = assert(profiles[profile][name])
     local ok, result = pcall(
         cluster.call,
         target.node,
@@ -33,17 +43,20 @@ local function shutdown_one(name)
 end
 
 skynet.start(function()
-    cluster.reload({
-        gateway = "127.0.0.1:2527",
-        battle = "127.0.0.1:2528",
-    })
+    local profile = skynet.getenv("shutdown_profile") or "lesson2"
+    local profile_targets = assert(profiles[profile], "unknown shutdown profile: " .. profile)
+    local nodes = {}
+    for _, target in pairs(profile_targets) do
+        nodes[target.node] = target.endpoint
+    end
+    cluster.reload(nodes)
 
     local target = skynet.getenv("shutdown_target") or "all"
     local names
     if target == "all" then
         -- 先停 Gateway，避免 Battle 停止后仍有新请求进入。
         names = { "gateway", "battle" }
-    elseif targets[target] then
+    elseif profile_targets[target] then
         names = { target }
     else
         skynet.error("SHUTDOWNCTL_FAILED unknown target=" .. target)
@@ -52,16 +65,16 @@ skynet.start(function()
     end
 
     for _, name in ipairs(names) do
-        local ok, detail = shutdown_one(name)
+        local ok, detail = shutdown_one(profile, name)
         if not ok then
-            skynet.error("SHUTDOWNCTL_FAILED target=" .. name ..
+            skynet.error("SHUTDOWNCTL_FAILED target=" .. name .. " profile=" .. profile ..
                 " detail=" .. detail)
             abort_later()
             return
         end
     end
 
-    skynet.error("SHUTDOWNCTL_OK target=" .. target)
+    skynet.error("SHUTDOWNCTL_OK target=" .. target .. " profile=" .. profile)
     -- Admin 进程是一次性控制进程；业务结果已记录后终止自身 Runtime。
     abort_later()
 end)

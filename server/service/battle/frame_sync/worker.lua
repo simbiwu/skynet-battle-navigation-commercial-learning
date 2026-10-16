@@ -320,6 +320,51 @@ local function heartbeat()
 end
 
 skynet.start(function()
+    skynet.info_func(function()
+        local running_battles = 0
+        local finished_battles = 0
+        local failed_battles = 0
+        local online_seats = 0
+        local min_frame
+        local max_frame
+
+        for _, battle_id in ipairs(order) do
+            local battle = battles[battle_id]
+            if battle then
+                if battle.status == "RUNNING" then
+                    running_battles = running_battles + 1
+                elseif battle.status == "FINISHED" then
+                    finished_battles = finished_battles + 1
+                elseif battle.status == "FAILED" then
+                    failed_battles = failed_battles + 1
+                end
+
+                for seat_id = 1, conf.seats do
+                    local seat = battle.seats[seat_id]
+                    if seat and seat.online then
+                        online_seats = online_seats + 1
+                    end
+                end
+
+                local frame = battle.core and battle.core.frame or 0
+                min_frame = min_frame and math.min(min_frame, frame) or frame
+                max_frame = max_frame and math.max(max_frame, frame) or frame
+            end
+        end
+
+        return
+        {
+            battles                   = #order,
+            running_battles           = running_battles,
+            finished_battles          = finished_battles,
+            failed_battles            = failed_battles,
+            online_seats              = online_seats,
+            retained_battle_frame_min = min_frame or 0,
+            retained_battle_frame_max = max_frame or 0,
+            dispatcher                = dispatcher and skynet.address(dispatcher) or "unconfigured",
+        }
+    end)
+
     skynet.dispatch("lua", function(session, source, command, args)
         if command == "configure" then
             assert(conf.tick_rate_hz == 60 and conf.scheduler_poll_cs == 1)
@@ -336,7 +381,23 @@ skynet.start(function()
         elseif command == "leave" then skynet.retpack(leave(args))
         elseif command == "replay" then skynet.retpack(replay(args))
         elseif command == "inputs" then inputs(args)
-        elseif command == "disconnect" then disconnect(args)
-        else error("unknown Frame Worker command: " .. tostring(command)) end
+        elseif command == "disconnect" then
+            disconnect(args)
+        elseif command == "shutdown" then
+            -- Native Runtime由Worker独占；逐场关闭Context后才确认进程级关闭。
+            for _, battle_id in ipairs(order) do
+                local battle = battles[battle_id]
+                if battle and battle.core then
+                    core.close(battle.core)
+                    battle.core = nil
+                end
+            end
+            battles = {}
+            order = {}
+            skynet.retpack(true)
+            skynet.exit()
+        else
+            error("unknown Frame Worker command: " .. tostring(command))
+        end
     end)
 end)
