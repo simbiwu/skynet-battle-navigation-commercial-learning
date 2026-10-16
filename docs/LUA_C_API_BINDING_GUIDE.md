@@ -4,6 +4,8 @@
 
 本文面向熟悉 C++、Lua 和 Skynet Service 的读者，不覆盖 Lua C API 全部接口。示例以课程固定的 Skynet v1.8.0 内置 PUC Lua 5.4.7 为准；其他 Lua 版本的 ABI 和 API 可能不同。
 
+当前课程 Native Binding 优先通过 FlyWow 的 lua-binding 封装读写常见值；原始 C API 栈管理集中在子模块的 lua_binding.cpp、lua_table.cpp 和模板实现中。本文保留原始 API 示例用于理解 Lua 本身的栈合同，不表示课程业务代码应重复实现这套封装。
+
 ## 1. 先建立一个模型：C 函数通过栈和 Lua 交换值
 
 Lua 调用 C 函数时，Lua 把参数放在该次调用的栈帧里。C 函数用 `lua_State* L` 找到当前 Lua State，并通过 Lua C API 读取参数、压入返回值。C 函数最后返回“返回值数量”，Lua 从栈顶取出相应数量的值作为结果。
@@ -66,8 +68,12 @@ local battle_nav = require "battle_nav"
 课程入口的核心结构如下：
 
 ```cpp
-extern "C" int luaopen_battle_nav(lua_State* L) {
+extern "C" int luaopen_battle_nav(lua_State* L)
+{
+    // luaL_checkversion 校验 ABI；不压入业务值，错误时由 Lua 加载边界报告。
     luaL_checkversion(L);
+
+    // 空入口栈 [S] -> [S, module_table]；return 1 把栈顶 table 交给 require。
     lua_newtable(L);
 
     // 此处注册函数，最终返回模块 table。
@@ -82,12 +88,14 @@ extern "C" int luaopen_battle_nav(lua_State* L) {
 Lua C 函数可以通过 closure 捕获创建时提供的 upvalue。以课程的 `load_map` 注册代码为例：
 
 ```cpp
-lua_newtable(L);
+lua_newtable(L); // [S] -> [S, module_table]。
 
-lua_pushlightuserdata(L, &MapRegistry::Instance());
-lua_pushcclosure(L, l_load_map, 1);
-lua_setfield(L, -2, "load_map");
+// 依次压入借用的 Registry 地址和闭包；closure 创建后 upvalue 不再单独留栈。
+lua_pushlightuserdata(L, &MapRegistry::Instance()); // [..., registry_pointer]
+lua_pushcclosure(L, l_load_map, 1);                 // 消耗 upvalue，替换为闭包。
+lua_setfield(L, -2, "load_map");                   // 消耗闭包，module_table 保留。
 
+// 当前栈为 [S, module_table]；Lua 取栈顶一个值作为模块结果。
 return 1;
 ```
 
@@ -106,9 +114,11 @@ return 1;
 闭包里的 upvalue 在 C 回调中通过 `lua_upvalueindex(1)` 读取：
 
 ```cpp
-MapRegistry* registry(lua_State* L) {
-    void* pointer = lua_touserdata(L, lua_upvalueindex(1));
-    return static_cast<MapRegistry*>(pointer);
+MapRegistry *registry(lua_State *L)
+{
+    // upvalueindex(1) 是 closure 伪索引，不属于参数栈；touserdata 只读地址、不改变栈。
+    void *pointer = lua_touserdata(L, lua_upvalueindex(1));
+    return static_cast<MapRegistry *>(pointer);
 }
 ```
 
@@ -144,10 +154,13 @@ C++ MapRegistry 单例          -> 真正拥有 Registry 和其中的地图
 课程创建 `NavigationContext` userdata 的简化示例：
 
 ```cpp
-void* storage = lua_newuserdatauv(L, sizeof(LuaNavigationContext), 0);
-auto* owner = new (storage) LuaNavigationContext;
-luaL_getmetatable(L, kContextMeta);
-lua_setmetatable(L, -2);
+// 输入参数栈 [S, args...]；新分配的 userdata 被压到栈顶，尚未构造 C++ 对象。
+void *storage = lua_newuserdatauv(L, sizeof(LuaNavigationContext), 0); // [..., userdata]
+auto *owner = new (storage) LuaNavigationContext;                      // placement new 不改 Lua 栈。
+
+// registry 查询压入 metatable；setmetatable 消耗它并保留 userdata：
+luaL_getmetatable(L, kContextMeta); // [..., userdata, metatable]
+lua_setmetatable(L, -2);            // [..., userdata]
 ```
 
 逐步看栈和对象：
@@ -175,18 +188,24 @@ metatable 是 Lua 用来定义某个值行为的 table。对于课程的 userdat
 下面是简化后的注册顺序：
 
 ```cpp
-if (luaL_newmetatable(L, kPathMeta)) {
+// 入口 [S]；newmetatable 总压入 PathMeta，返回值只表示它此前是否存在。
+if (luaL_newmetatable(L, kPathMeta))
+{
+    // 每次 setfield 都消费函数值并保留目标 table。
     lua_pushcfunction(L, l_path_gc);
     lua_setfield(L, -2, "__gc");
 
+    // [S, PathMeta] -> [S, PathMeta, methods]；注册方法后把 methods 交给 __index。
     lua_newtable(L);
     lua_pushcfunction(L, l_path_count);
     lua_setfield(L, -2, "count");
     lua_pushcfunction(L, l_path_world_point);
     lua_setfield(L, -2, "world_point");
 
-    lua_setfield(L, -2, "__index");
+    lua_setfield(L, -2, "__index"); // 消耗 methods，PathMeta 留在栈顶。
 }
+
+// 移除本函数新增的 PathMeta，恢复 [S]。
 lua_pop(L, 1);
 ```
 

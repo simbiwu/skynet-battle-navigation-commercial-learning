@@ -106,7 +106,7 @@ Server 校验施法者、目标存活/阵营、距离、序号与冷却。Unity 
 
 AI 样例选择最近存活对手，平距按实例 ID 稳定排序；远距离时用 FlyWow find_path_to_unit_range 求路、advance_path 推进。地面移动和动态占位仍走现有 Navigation Context。空中 AABB 查询仅用于单位间弹丸扫掠；当前 BMAP 不含楼体空中遮挡体，不能声称弹丸会被任意建筑阻挡。
 
-Server Battle 通过 require "flywow_navigation" 调用 FlyWow Navigation 的公开 Lua API，这些 API 由 FlyWow Native Lua Binding 注册。直接注册的 C++ 回调标识符与 Lua 可见名称逐字符一致，例如 `find_path_to_unit_range`。Unity 本地预测另走 P/Invoke C ABI；两条跨语言边界遵守各自的名称合同。
+Server Battle 通过 require `flywow_navigation` 调用 FlyWow Navigation 的公开 Lua API，这些 API 由 FlyWow Native Lua Binding 注册。直接注册的 C++ 回调标识符与 Lua 可见名称逐字符一致，例如 `find_path_to_unit_range`。业务入口通过 LuaBinding/LuaTable 读写参数，不直接维护 Lua 栈；原始 C API 的压栈、弹栈、raw 访问、lua_next key 保留及 userdata GC 合同集中说明在 [FlyWow Lua Binding 使用说明](../server/third_party/skynet-flywow/lua-binding/使用说明.md) 和 [Lua C API 入门](LUA_C_API_BINDING_GUIDE.md)。Unity 本地预测另走 P/Invoke C ABI；两条跨语言边界遵守各自的名称合同。
 
 ## 6. Snapshot、Event 与快速反馈
 
