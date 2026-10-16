@@ -23,39 +23,63 @@ run/       PID/控制锁等本机运行状态，不提交 Git
 logs/      后台运行日志，不提交 Git
 ```
 
-## 统一启动入口
+## 课程启动入口
 
-平时不需要手工按顺序执行 bootstrap/build 脚本。`run_server.sh` 会检查固定版本项目依赖和仓库已发布生成物，并做增量 Native 构建：
+总入口只解析课程选择并转发命令。运行操作必须明确课程；第三课还必须选择状态同步或帧同步，避免误用另一套配置、PID 或日志。
 
 ```bash
 cd server
-./scripts/linux/run_server.sh start
-./scripts/linux/run_server.sh status
-./scripts/linux/run_server.sh stop
+./scripts/linux/run_server.sh lesson1 status
+./scripts/linux/run_server.sh lesson2 start
+./scripts/linux/run_server.sh lesson3 state-sync status
+./scripts/linux/run_server.sh lesson3 frame-sync start --battle
+./scripts/linux/run_server.sh lesson3 frame-sync start --gateway
 ```
 
-常用维护命令：
+每课的专属入口是 scripts/lessons/lessonN_run_server.sh；start 负责课程进程启动，不隐式编译依赖。首次运行前先执行对应课程的 prepare/build。第三课必须指定 state-sync 或 frame-sync；Gateway 可后台启动，随后连接其 debug_console。省略 --gateway/--battle 时默认操作两个服务，启动先 Battle 后 Gateway，停止顺序相反。
+
+通用构建命令只转发构建操作，不管理服务进程：
 
 ```bash
-./scripts/linux/run_server.sh doctor
 ./scripts/linux/run_server.sh prepare
 ./scripts/linux/run_server.sh build
 ./scripts/linux/run_server.sh rebuild
-./scripts/linux/run_server.sh start --rebuild
-./scripts/linux/run_server.sh restart
-./scripts/linux/run_server.sh foreground
 ```
 
-约定：
+课程入口支持 prepare、build、rebuild、start、stop、restart、status、doctor；第三课状态同步另支持 test、benchmark。默认关闭无限等待；LESSON_STOP_TIMEOUT_SEC=20 表示 stop 开始后最多等待20秒，超时只向所选进程发送 SIGTERM，随后仍等待其退出。BUILD_TYPE 控制构建类型；第三课进程超时可用 LESSON_STARTUP_TIMEOUT_SEC、LESSON_STOP_TIMEOUT_SEC 覆盖。第二课与第三课的 Battle/Gateway 使用 shutdownctl 协调业务收尾；第三课状态同步和帧同步分别按自己的 Cluster 节点 profile 停止 Gateway 与 Battle Worker。Lesson 1 没有进程内 Coordinator；设置停止超时后由管理脚本向目标进程发送 SIGTERM。
 
-- `start` 默认后台运行，PID 写入 `run/server.pid`，当前日志由 `logs/server.log` 软链接指向；
-- `foreground` 适合 gdb/LuaPanda/直接观察日志；
-- `prepare` 自动补齐仓库固定的 Skynet/protoc/lua-protobuf 依赖和本机构建产物；共享协议与地图缺失时明确失败，不能在部署端临时生成另一版本；
-- `build` 与 `rebuild` 会执行项目 Lua 可变参数策略检查；项目自有稳定接口和业务调用必须使用具名参数；
-- 系统级编译工具缺失时只给出明确安装命令，不在启动脚本里静默执行 `sudo apt`；
-- `rebuild` 只清理 `server/build/*` 和 Skynet 编译产物，不删除 `shared/`、源码或 third_party 固定源码；
-- `stop` 先验证 PID 的 `/proc/<pid>/exe` 确实指向本仓库 Skynet，再发送 SIGTERM；默认不会直接 `kill -9`；
-- 只有显式执行 `stop --force`，且 SIGTERM 超时后，才允许 SIGKILL。
+第一课专属运行示例：
+
+```bash
+./scripts/lessons/lesson1_run_server.sh prepare
+./scripts/lessons/lesson1_run_server.sh start
+./scripts/lessons/lesson1_run_server.sh status
+./scripts/lessons/lesson1_run_server.sh stop
+```
+
+第二课专属运行示例：
+
+```bash
+./scripts/lessons/lesson2_run_server.sh doctor
+./scripts/lessons/lesson2_run_server.sh start
+./scripts/lessons/lesson2_run_server.sh status
+./scripts/lessons/lesson2_run_server.sh stop
+```
+
+第三课方案相互隔离，帧同步 Gateway 可单独后台启动以便连接 debug_console：
+
+```bash
+./scripts/lessons/lesson3_run_server.sh state-sync build
+./scripts/lessons/lesson3_run_server.sh state-sync start
+./scripts/lessons/lesson3_run_server.sh state-sync stop
+./scripts/lessons/lesson3_run_server.sh frame-sync build
+./scripts/lessons/lesson3_run_server.sh frame-sync start --battle
+./scripts/lessons/lesson3_run_server.sh frame-sync start --gateway
+./scripts/lessons/lesson3_run_server.sh frame-sync status
+./scripts/lessons/lesson3_run_server.sh frame-sync stop
+```
+
+第三课帧同步 PID 与控制器诊断日志位于 run/lesson3_frame_sync/、logs/lesson3_frame_sync/；业务日志仍由进程配置写入 logs/frame_battle/、logs/frame_gateway/。状态同步对应独立的 lesson3_state_sync 和 state_battle/state_gateway 日志目录。
 
 只运行 Lua 策略检查：
 
@@ -115,13 +139,13 @@ LuaPanda + gdb 同时跟踪：
 ./scripts/linux/debug_luapanda.sh --gdb
 ```
 
-Gateway 使用 8818，Query 使用 8819。两个 Service 是两个独立 Lua State，因此必须是两个调试 target。正常 `run_server.sh start` 不设置 `LUA_PANDA_ENABLE`，不会加载 LuaPanda runtime。
+Gateway 使用 8818，Query 使用 8819。两个 Service 是两个独立 Lua State，因此必须是两个调试 target。正常课程 start 命令不设置 `LUA_PANDA_ENABLE`，不会加载 LuaPanda runtime。
 
 
 完整断点顺序、故障排查和验收证据见第一课第 31 节。
 ## 第二课双进程运行入口
 
-第二课保留 `run_server.sh` 的单进程入口作为本地调试路径，同时提供 Gateway 与 Map/Battle 分离的真实进程边界：
+第二课专属入口 lesson2_run_server.sh 管理本课运行，并提供 Gateway 与 Map/Battle 分离的真实进程边界：
 
 ```text
 Gateway Process : gateway/gateway_main -> gateway/gateway_proxy -> FlyWow Gateway :19011
@@ -134,15 +158,15 @@ Gateway 只拥有客户端连接、framing 和 Protobuf 编解码；Map/Battle P
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
 BUILD_TYPE=Debug ./scripts/linux/run_server.sh build
-./scripts/lessons/run_lesson_02_processes.sh doctor
-./scripts/lessons/run_lesson_02_processes.sh start
-./scripts/lessons/run_lesson_02_processes.sh status
+./scripts/lessons/lesson2_run_server.sh doctor
+./scripts/lessons/lesson2_run_server.sh start
+./scripts/lessons/lesson2_run_server.sh status
 ```
 
 启动脚本先等待 Map/Battle Process 输出 `LESSON2_BATTLE_PROCESS_READY`，再启动 Gateway；Gateway 日志还应包含 `FLYWOW_GATEWAY_READY` 和 `LESSON2_GATEWAY_PROCESS_READY`。日志分别写入 `logs/lesson2/battle.log`、`logs/lesson2/gateway.log`。停止时使用：
 
 ```bash
-./scripts/lessons/run_lesson_02_processes.sh stop
+./scripts/lessons/lesson2_run_server.sh stop
 ```
 
 脚本的 `doctor` 只检查依赖、协议产物、registry 和 bootstrap 文件，不生成协议，也不修改 shared 发布资产。修改端口时同步更新 `config/gateway.lua`、`config/battle.lua` 和课程文档。
@@ -161,7 +185,7 @@ FlyWow 先提交并 Push，课程再固定已验证的 submodule 提交；正常
 ```bash
 使用固定子模块 server/third_party/skynet-flywow
 ./scripts/linux/run_server.sh build
-./scripts/lessons/run_lesson_02_processes.sh doctor
+./scripts/lessons/lesson2_run_server.sh doctor
 python3 tests/gateway_async_integration.py
 ./third_party/skynet/3rd/lua/lua tests/gateway_proxy_test.lua "$PWD" "$PWD/third_party/skynet-flywow"
 ```

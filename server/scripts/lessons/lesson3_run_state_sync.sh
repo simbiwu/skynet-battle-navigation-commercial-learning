@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
-# 状态同步公开入口：prepare/build/test/battle/gateway；从脚本位置定位server。
-# battle和gateway前台运行，退出由终端Ctrl+C负责；集成测试只停止自己的子进程。
+# 状态同步构建与测试辅助入口：prepare/build/test/benchmark；服务生命周期由 lesson3_run_server.sh state-sync 管理。
+# battle/gateway 兼容子命令转发到课程入口，避免绕开 PID、READY、日志和停止合同。
 # 任一命令失败就停止；未定义变量也立即报错，避免误用错误目录或配置。
 set -euo pipefail
 # 以脚本位置为基准定位 Server 根目录，所以从仓库任意目录调用都有效。
@@ -37,8 +37,8 @@ case "${1:-help}" in
             third_party/skynet/3rd/lua/lua tests/state_sync_benchmark.lua "$SERVER_ROOT"
         ;;
     battle|gateway)
-        # exec 用 Skynet 进程替换当前 Shell；服务保持前台，Ctrl+C/信号直接交给 Skynet。
-        exec third_party/skynet/skynet "config/state_${1}_process.lua"
+        # 兼容命令只转发；真实进程管理集中在 state-sync profile。
+        exec scripts/lessons/lesson3_run_server.sh state-sync start "--$1"
         ;;
     *)
         printf '%s\n' '用法：bash scripts/lessons/lesson3_run_state_sync.sh prepare|build|test|benchmark|battle|gateway'

@@ -133,9 +133,9 @@ Unity 每 1/60 秒采样键盘，通过 StateMovement 的 DllImport 调用 FlyWo
 在 WSL Server 目录运行：
 
     cd ~/workspace/skynet-battle-navigation-commercial-learning/server
-    bash scripts/lessons/lesson3_run_state_sync.sh prepare
-    bash scripts/lessons/lesson3_run_state_sync.sh build
-    bash scripts/lessons/lesson3_run_state_sync.sh test
+    bash scripts/lessons/lesson3_run_server.sh state-sync prepare
+    bash scripts/lessons/lesson3_run_server.sh state-sync build
+    bash scripts/lessons/lesson3_run_server.sh state-sync test
 
 prepare 校验 BMAP/manifest hash，生成配置身份、Server descriptor、Gateway registry并检查协议。Unity C# 和客户端只读配置由同一准备脚本生成到 Windows 编辑源；它检查已有 BMAP hash，不覆盖地图。Windows DLL 由 lesson3_build_state_sync_windows.sh 从 WSL Native 源交叉构建到明确的插件目录；构建机需要 MinGW-w64 C/C++ 工具链。本机已安装所需工具并提供 Assets/Plugins/x86_64/state_navigation.dll。
 
@@ -144,11 +144,11 @@ prepare 校验 BMAP/manifest hash，生成配置身份、Server descriptor、Gat
 
 在线运行需两个 WSL 终端，均在 Server 目录：
 
-    bash scripts/lessons/lesson3_run_state_sync.sh battle
+    bash scripts/lessons/lesson3_run_server.sh state-sync start --battle
 
-    bash scripts/lessons/lesson3_run_state_sync.sh gateway
+    bash scripts/lessons/lesson3_run_server.sh state-sync start --gateway
 
-用固定版 Tuanjie Editor 打开 unity/BattleNavigation，运行 Assets/BattleNavigation/Scenes/State_Battle_1001.unity。Gateway 默认监听 127.0.0.1:19031。WASD 移动，J/K/L 施放三个技能；界面显示状态、Tick、预测队列和校正距离，并提供 Recover、Save Replay。设置 Controller 的 ReplayPath 可离线加载回放。benchmark 是单独性能采样；battle/gateway 前台运行，可由各自终端 Ctrl+C 停止。
+用固定版 Tuanjie Editor 打开 unity/BattleNavigation，运行 Assets/BattleNavigation/Scenes/State_Battle_1001.unity。Gateway 默认监听 127.0.0.1:19031。WASD 移动，J/K/L 施放三个技能；界面显示状态、Tick、预测队列和校正距离，并提供 Recover、Save Replay。设置 Controller 的 ReplayPath 可离线加载回放。benchmark 是单独性能采样；Battle/Gateway 由课程管理器后台运行；用 lesson3_run_server.sh state-sync status 查看状态，并用 stop --battle 或 stop --gateway 停止。默认先关闭 Gateway 监听和连接，再关闭 Battle Worker 并释放 Native Context；仅协调失败或超时才回退 SIGTERM。
 
 ## 9. 验证记录与边界
 

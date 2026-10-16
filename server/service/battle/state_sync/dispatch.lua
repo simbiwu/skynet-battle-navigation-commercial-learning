@@ -4,6 +4,8 @@ local cluster = require("skynet.cluster")
 local conf = require("config.state_sync")
 local ids = require("gateway.protocol.protocol_registry_lesson_03_state_sync").command_ids
 local workers, next_id, controls = {}, 0, 0
+local shutdown_coordinator = nil
+local draining = false
 local actions = {}
 local function worker_for(id)
     if math.type(id) ~= "integer" or id < 1 or id > 0x7fffffff then
@@ -33,7 +35,7 @@ local function incoming(route)
         return
     end
     local action = actions[route.command_id]
-    if not action then
+    if not action or draining then
         return
     end
     if controls >= 64 then
@@ -91,7 +93,16 @@ skynet.start(function()
         assert(skynet.call(workers[i], "lua", "configure", { dispatcher = skynet.self() }))
     end
     skynet.dispatch("lua", function(_, source, command, payload)
-        if command == "ready" then
+        if command == "configure_shutdown" then
+            assert(shutdown_coordinator == nil, "shutdown coordinator already configured")
+            assert(math.type(payload) == "integer" and payload == source,
+                "shutdown coordinator must configure itself")
+            shutdown_coordinator = source
+            skynet.retpack(true)
+        elseif command == "drain_complete" then
+            assert(draining and source == skynet.self(), "untrusted drain barrier")
+            skynet.retpack(true)
+        elseif command == "ready" then
             skynet.retpack(true)
         elseif command == "send_data" then
             incoming(payload)
@@ -108,15 +119,24 @@ skynet.start(function()
                 end
             end
             assert(trusted, "STATE_PUSH_SOURCE")
-            reply({
-                gateway_epoch = payload.session.gateway_epoch,
-                connection_id = payload.session.connection_id,
-                command_id    = ids.STATE_PUSH,
-            }, payload.data)
+            if not draining then
+                reply({
+                    gateway_epoch = payload.session.gateway_epoch,
+                    connection_id = payload.session.connection_id,
+                    command_id    = ids.STATE_PUSH,
+                }, payload.data)
+            end
         elseif command == "shutdown" then
+            assert(source == shutdown_coordinator and shutdown_coordinator ~= nil,
+                "untrusted shutdown caller")
+            draining = true
+            while controls > 0 do
+                skynet.sleep(1)
+            end
             for _, worker in ipairs(workers) do
                 assert(skynet.call(worker, "lua", "shutdown"))
             end
+            assert(skynet.call(skynet.self(), "lua", "drain_complete"))
             skynet.retpack(true)
             skynet.exit()
         else

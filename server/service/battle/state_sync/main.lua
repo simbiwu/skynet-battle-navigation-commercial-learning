@@ -28,6 +28,14 @@ skynet.start(function()
     })
     cluster.open(conf.battle_node, 64)
     cluster.register("state_dispatch", dispatch)
+    local shutdown_coordinator = skynet.newservice("admin/lesson3_shutdown_coordinator")
+    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+        profile = "state_sync",
+        role = "battle",
+        endpoint = "state_battle_shutdown",
+        dispatcher = dispatch,
+    }))
+    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
     skynet.error("STATE_BATTLE_READY")
     skynet.exit()
 end)

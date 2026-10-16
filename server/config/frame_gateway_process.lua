@@ -4,6 +4,7 @@ thread = 4
 harbor = 0
 bootstrap = "snlua bootstrap"
 start = "gateway/frame_sync/main"
+debug_console_port = 8002 -- Gateway 的调试控制台端口；0 表示关闭，控制台默认只监听本机 127.0.0.1。
 logger = "./logs/frame_gateway"
 logservice = "flywow_logger"
 flywow_logger_level = "normal"

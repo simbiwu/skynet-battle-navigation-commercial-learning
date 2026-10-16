@@ -52,7 +52,7 @@ ls -l .vscode/launch.json
 
 ## 3. 准备 LuaPanda 依赖
 
-第一课的 `debug_luapanda.sh` 会执行此脚本。第二课的 `run_server.sh debug` 在本地依赖缺失时也会执行。需要单独修复调试依赖时，在 WSL 中进入 Server 目录运行：
+第一课的 `debug_luapanda.sh` 会执行此脚本。第二课的 `lesson2_run_server.sh start` 在本地依赖缺失时也会执行。需要单独修复调试依赖时，在 WSL 中进入 Server 目录运行：
 
 ```bash
 cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
@@ -122,23 +122,23 @@ LUA_PANDA_READY port=8819
 
 ## 5.1 第二课：Gateway/Battle 双进程
 
-`debug` 是 `run_server.sh` 的动作，不带 `--debug` 或 `--start` 参数。它准备 Server 运行环境，按需调用 `bootstrap_luapanda.sh`，导出 `LUA_PANDA_ENABLE=1` 和默认的 `LUA_PANDA_HOST=127.0.0.1`，再由 `run_lesson_02_processes.sh` 启动 Battle 与 Gateway 两个 Skynet 进程。首次准备依赖可能需要一些时间。
+第二课的运行与状态管理入口是 `lesson2_run_server.sh`。本节在启动服务前，由你在本机环境变量中启用 LuaPanda，并先启动 VS Code 中对应的 LuaPanda target。首次准备调试依赖时运行 `bootstrap_luapanda.sh`。
 
 先在 VS Code 的 Run and Debug 中启动要调试的 LuaPanda target，再在 WSL 终端执行：
 
 ```bash
 cd /home/simbi/workspace/skynet-battle-navigation-commercial-learning/server
-./scripts/linux/run_server.sh debug
+LUA_PANDA_ENABLE=1 LUA_PANDA_HOST=127.0.0.1 ./scripts/lessons/lesson2_run_server.sh start
 ```
 
 第二课的进程状态、日志和停止操作由双进程脚本管理：
 
 ```bash
-./scripts/lessons/run_lesson_02_processes.sh status
-./scripts/lessons/run_lesson_02_processes.sh stop
+./scripts/lessons/lesson2_run_server.sh status
+./scripts/lessons/lesson2_run_server.sh stop
 ```
 
-日志分别位于 `server/logs/lesson2/battle.log` 和 `server/logs/lesson2/gateway.log`。当前 `run_server.sh status/stop` 管理的是单进程 `server.pid`，不能用来查看或停止上述两个进程。
+日志分别位于 `server/logs/lesson2/battle.log` 和 `server/logs/lesson2/gateway.log`。总入口需显式选择课程；第二课状态和停止命令通过 lesson2_run_server.sh 管理。
 
 仓库根目录的 `.vscode/launch.json` 已列出以下端口；`server/debug/luapanda/launch.json.example` 仍只提供第一课的 8818/8819 示例：
 
