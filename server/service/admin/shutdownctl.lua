@@ -28,8 +28,8 @@ local profiles = {
     },
 }
 
-local function shutdown_one(profile, name)
-    local target = assert(profiles[profile][name])
+local function shutdown_one(profile_targets, name)
+    local target = assert(profile_targets[name])
     local ok, result = pcall(
         cluster.call,
         target.node,
@@ -45,6 +45,15 @@ end
 skynet.start(function()
     local profile = skynet.getenv("shutdown_profile") or "lesson2"
     local profile_targets = assert(profiles[profile], "unknown shutdown profile: " .. profile)
+    if profile == "frame_sync" then
+        -- 帧同步 Battle/Gateway 的 Cluster 地址唯一配置在 frame_sync.lua。
+        -- 发布验收会改临时副本的端口；从同一配置读取可保证运行与关闭使用相同地址。
+        local frame_config = require "config.frame_sync"
+        profile_targets.gateway.node = frame_config.gateway_node
+        profile_targets.gateway.endpoint = frame_config.gateway_address
+        profile_targets.battle.node = frame_config.battle_node
+        profile_targets.battle.endpoint = frame_config.battle_address
+    end
     local nodes = {}
     for _, target in pairs(profile_targets) do
         nodes[target.node] = target.endpoint
@@ -65,7 +74,7 @@ skynet.start(function()
     end
 
     for _, name in ipairs(names) do
-        local ok, detail = shutdown_one(profile, name)
+        local ok, detail = shutdown_one(profile_targets, name)
         if not ok then
             skynet.error("SHUTDOWNCTL_FAILED target=" .. name .. " profile=" .. profile ..
                 " detail=" .. detail)

@@ -56,41 +56,114 @@ def log_files(work):
     }
 
 
-def configure_test_ports(config):
-    """按 Lua 配置键精确修改临时配置，返回修改前后 hash 与端口。
+def configure_test_ports(server, runtime):
+    """只改临时包的 Gateway 监听端口与 Battle/Gateway Cluster 地址。
 
-    gateway_port 是整数字段；两个 *_address 保留原 host，仅替换冒号后的端口。
-    每个键必须唯一匹配；改名或结构变化时失败，避免宽泛字符串替换误伤其它数字。
-    端口值仅来自发布脚本的 VERIFY_PORTS，不复制到此文件维护。
+    gateway_port 属于 gateway_frame_sync.lua；gateway_address 和 battle_address
+    属于 frame_sync.lua。每项只允许匹配一次，避免此前把 Gateway 端口改进 Battle 配置。
+    正式归档不变；返回每个文件的修改前后 hash 和实际测试端口。
     """
-    before = release.digest(config)
-    text = config.read_text(encoding="utf-8")
+    targets = {
+        "gateway_port": server / runtime.get(
+            "gateway_config", release.server_relative("{config}/gateway_frame_sync.lua")
+        ),
+        "gateway_address": server / runtime["frame_config"],
+        "battle_address": server / runtime["frame_config"],
+    }
+    before = {}
+    for config in set(targets.values()):
+        before[config] = release.digest(config)
     for key, port in release.VERIFY_PORTS.items():
         if not 1 <= port <= 65535:
             raise ValueError("测试端口超出 1..65535：" + key)
+        config = targets[key]
+        config_key = "port" if key == "gateway_port" else key
+        text = config.read_text(encoding="utf-8")
         if key.endswith("_address"):
-            pattern = r'(^\s*' + re.escape(key) + r'\s*=\s*"[^"\n]+:)\d+(")'
+            pattern = r'(^\s*' + re.escape(config_key) + r'\s*=\s*"[^"\n]+:)\d+(")'
         else:
-            pattern = r"(^\s*" + re.escape(key) + r"\s*=\s*)\d+"
-        # 用回调拼接，避免 replacement 中的数字被解释成 \1 后的组号。
+            pattern = r"(^\s*" + re.escape(config_key) + r"\s*=\s*)\d+"
         def replacement(match):
             suffix = match.group(2) if key.endswith("_address") else ""
             return match.group(1) + str(port) + suffix
         text, count = re.subn(pattern, replacement, text, flags=re.MULTILINE)
         if count != 1:
-            raise RuntimeError("测试端口配置键必须唯一匹配：" + key)
+            raise RuntimeError("测试端口配置键必须唯一匹配：" + config_key + " in " + str(config))
+        config.write_text(text, encoding="utf-8")
     if len(set(release.VERIFY_PORTS.values())) != len(release.VERIFY_PORTS):
         raise ValueError("测试端口不能重复")
-    config.write_text(text, encoding="utf-8")
-    return {"before": before, "after": release.digest(config), "ports": release.VERIFY_PORTS}
+    return {
+        config.relative_to(server.parent).as_posix(): {
+            "before": old_hash, "after": release.digest(config),
+        }
+        for config, old_hash in before.items()
+    } | {"ports": release.VERIFY_PORTS}
+
+
+def configure_debug_console_ports(server, runtime):
+    """只修改临时包 Battle/Gateway 的 debug_console 端口，返回修改前后 hash。
+
+    配置文件和进程角色来自归档 runtime 合同；每个进程配置必须恰好有一个
+    debug_console_port。测试端口由 package_frame_server.py 集中维护，正式包不改。
+    """
+    report = {}
+    process_by_role = {entry["role"]: entry for entry in runtime["processes"]}
+    for role, port in release.VERIFY_DEBUG_CONSOLE_PORTS.items():
+        if role not in process_by_role or not 1 <= port <= 65535:
+            raise ValueError("debug_console 测试配置无效：" + role)
+        config = server / process_by_role[role]["config"]
+        before = release.digest(config)
+        text = config.read_text(encoding="utf-8")
+        pattern = r"(^\s*debug_console_port\s*=\s*)\d+"
+        text, count = re.subn(
+            pattern, lambda match: match.group(1) + str(port), text, flags=re.MULTILINE
+        )
+        if count != 1:
+            raise RuntimeError(role + " 配置必须恰有一个 debug_console_port")
+        config.write_text(text, encoding="utf-8")
+        report[role] = {
+            "before": before, "after": release.digest(config), "port": port,
+        }
+    return report
+
+
+def run_manager(server, runtime, action, work, timeout):
+    """调用解压包自己的生命周期入口，并保存该命令的输出供验收报告使用。
+
+    发布包入口负责选择 frame-sync profile；运行目录和配置均来自本次临时解压目录。
+    timeout 只限制验证器等待命令，不改变发布包正式运行时的停止策略。
+    """
+    manager = server / runtime["manager"]
+    result = subprocess.run(
+        [str(manager), action],
+        cwd=server,
+        text=True,
+        capture_output=True,
+        timeout=timeout,
+        env={**os.environ, "LESSON_STARTUP_TIMEOUT_SEC": str(release.STARTUP_TIMEOUT_SECONDS),
+             "LESSON_STOP_TIMEOUT_SEC": str(release.STOP_TIMEOUT_SECONDS)},
+    )
+    return result.stdout + result.stderr, result.returncode
 
 
 def start_processes(server, runtime, work, processes, report):
-    """按合同顺序启动 Battle/Gateway 并等待各自 READY。
+    """通过发布包自己的 manager 启动服务；旧归档没有 manager 时兼容直接启动。
 
-    processes 由调用者持有；Popen 成功即登记，任何后续异常都由外层 finally 回收。
-    每个进程独立 session，停止时只针对本次创建的进程组，不按名称查杀已有实例。
+    新归档的 manager 在 Battle/Gateway READY 后返回。传统分支保留对早期发布包的
+    验证支持；其 Popen 进程组由调用者登记，并在 finally 中精确回收。
     """
+    if runtime.get("manager"):
+        output, code = run_manager(
+            server, runtime, "start", work, release.STARTUP_TIMEOUT_SECONDS + 10
+        )
+        report["manager_start"] = output
+        if code:
+            raise RuntimeError("发布包 start 失败：\n" + output)
+        status_output, status_code = run_manager(server, runtime, "status", work, 5)
+        report["manager_status"] = status_output
+        if status_code or "battle RUNNING" not in status_output or "gateway RUNNING" not in status_output:
+            raise RuntimeError("发布包 status 未报告 Battle/Gateway 均运行：\n" + status_output)
+        return
     for entry in runtime["processes"]:
         role = entry["role"]
         stdout = work / (role + ".stdout.log")
@@ -136,6 +209,54 @@ def stop_processes(processes):
             process.wait()
 
 
+def stop_managed(server, runtime, report):
+    """停止并核验临时包中的服务；超时兜底只向该临时包 PID 文件指向的进程发信号。
+
+    正常路径由发布脚本调用 Cluster shutdownctl 优雅关闭。若管理命令卡住或报告失败，
+    验证器读取本次临时目录内 lesson3_frame_sync/*.pid，并要求 /proc 命令行同时包含
+    本次解压包绝对路径和对应配置名，确认目标后才发送 SIGTERM；绝不按名称扫描进程。
+    """
+    try:
+        output, code = run_manager(
+            server, runtime, "stop", server.parent, release.STOP_TIMEOUT_SECONDS + 20
+        )
+        report["manager_stop"] = output
+        if code == 0:
+            status_output, status_code = run_manager(
+                server, runtime, "status", server.parent, 5
+            )
+            report["manager_status_after_stop"] = status_output
+            if (status_code == 0 and "RUNNING" not in status_output
+                    and "GRACEFUL_STOPPED" in output):
+                return True
+    except (subprocess.TimeoutExpired, OSError) as error:
+        report["manager_stop_error"] = str(error)
+
+    # 这里的 PID 文件由本次校验中的 manager 创建，目录处于 TemporaryDirectory 下。
+    run_dir = server / runtime.get("run_directory", "run/lesson3_frame_sync")
+    package_root = str(server.resolve())
+    for pid_file in sorted(run_dir.glob("*.pid")):
+        try:
+            pid = int(pid_file.read_text(encoding="ascii").strip())
+            command = Path("/proc") / str(pid) / "cmdline"
+            command_line = command.read_bytes().replace(b"\0", b" ").decode("utf-8", "replace")
+            role = pid_file.stem
+            expected_config = next(
+                entry["config"] for entry in runtime["processes"] if entry["role"] == role
+            )
+            if package_root not in command_line or expected_config not in command_line:
+                continue
+            os.kill(pid, signal.SIGTERM)
+            deadline = time.monotonic() + 3
+            while time.monotonic() < deadline and Path("/proc", str(pid)).exists():
+                time.sleep(0.1)
+            if Path("/proc", str(pid)).exists():
+                os.kill(pid, signal.SIGKILL)
+        except (OSError, ValueError, StopIteration):
+            continue
+    return False
+
+
 def validate_archive(archive, report):
     """清单/依赖通过后才改临时端口并启动；成功失败均保存日志并回收进程。
 
@@ -143,6 +264,8 @@ def validate_archive(archive, report):
     正式归档内容不变，临时端口修改的 hash 单独记录，不冒称为原配置验收。
     """
     processes = []
+    runtime = {}
+    server = None
     with tempfile.TemporaryDirectory(prefix="frame-unpack-") as directory:
         work = Path(directory)
         try:
@@ -157,13 +280,27 @@ def validate_archive(archive, report):
             manifest = json.loads((stage / release.MANIFEST_NAME).read_text(encoding="utf-8"))
             runtime = runtime_contract(manifest)
             server = stage / runtime["server"]
+            if runtime.get("manager"):
+                doctor_output, doctor_code = run_manager(server, runtime, "doctor", work, 10)
+                report["manager_doctor"] = doctor_output
+                if doctor_code:
+                    raise RuntimeError("发布包 doctor 失败：\n" + doctor_output)
 
             # 只检查空闲，不停止已监听的服务；检查与实际 listen 之间仍可能竞争，
             # 若有其它程序抢占，后面的启动检查会失败并回收本次进程。
-            for port in release.VERIFY_PORTS.values():
+            validation_ports = [
+                *release.VERIFY_PORTS.values(),
+                *release.VERIFY_DEBUG_CONSOLE_PORTS.values(),
+            ]
+            if len(set(validation_ports)) != len(validation_ports):
+                raise ValueError("验收端口必须互不重复")
+            for port in validation_ports:
                 with socket.socket() as probe:
                     probe.bind(("127.0.0.1", port))
-            report["validation_only_config"] = configure_test_ports(server / runtime["frame_config"])
+            report["validation_only_config"] = configure_test_ports(server, runtime)
+            report["validation_only_debug_console_config"] = configure_debug_console_ports(
+                server, runtime
+            )
             start_processes(server, runtime, work, processes, report)
 
             # 复用开发源现有客户端，仅注入测试端口；Runtime 全部从解压包读取。
@@ -183,9 +320,14 @@ def validate_archive(archive, report):
             if result.returncode:
                 raise RuntimeError(report["integration"])
         finally:
-            stop_processes(processes)
-            report["processes_stopped"] = all(p.poll() is not None for p in processes)
+            if runtime.get("manager") and server is not None:
+                report["processes_stopped"] = stop_managed(server, runtime, report)
+            else:
+                stop_processes(processes)
+                report["processes_stopped"] = all(p.poll() is not None for p in processes)
             report["logs"] = log_files(work)
+            if not report["processes_stopped"]:
+                raise RuntimeError("发布包进程停止验证失败；详细信息见 validation.json")
 
 
 def main():

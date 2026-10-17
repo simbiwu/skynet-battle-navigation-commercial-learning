@@ -201,6 +201,11 @@ doctor(){
      [[ -s "$SERVER_ROOT/$path" ]] || fail "第二课运行依赖缺失：$path"
    done
  fi
+ if [[ "$PROFILE" == lesson3-frame-sync || "$PROFILE" == lesson3-state-sync ]]; then
+   for path in config/shutdownctl_process.lua service/admin/shutdownctl.lua service/admin/lesson3_shutdown_coordinator.lua; do
+     [[ -s "$SERVER_ROOT/$path" ]] || fail "第三课优雅关闭依赖缺失：$path"
+   done
+ fi
  log "DOCTOR_OK configs=${ROLES[*]}"
 }
 select_roles(){

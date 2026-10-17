@@ -73,6 +73,13 @@ PATHS = {
     "frame_builder":      "{server}/scripts/lessons/lesson3_build_frame_sync_native.sh",
     "descriptor_check":   "{server}/scripts/linux/check_server_descriptor.sh",
     "map_prepare":        "{server}/scripts/lessons/prepare_frame_sync.py",
+    # 发布包只带运行期入口与管理依赖，不带构建入口；入口会被安装到 server/run_server.sh。
+    "release_runner":     "{server}/scripts/linux/run_frame_server.sh",
+    "process_manager":    "{server}/scripts/lessons/manage_lesson_processes.sh",
+    # stop/restart 通过这对现有 shutdownctl 配置和 Service 优雅关闭 Battle/Gateway。
+    "shutdownctl_config": "{config}/shutdownctl_process.lua",
+    "shutdownctl_service":"{server}/service/admin/shutdownctl.lua",
+    "shutdown_coordinator":"{server}/service/admin/lesson3_shutdown_coordinator.lua",
 
 }
 
@@ -83,12 +90,18 @@ PROCESSES = (
     ("gateway", "{gateway_process}", "FRAME_GATEWAY_READY"),
 )
 
-# 仅解压验收副本使用这些端口；正式包仍使用 frame_sync.lua 中的配置。
-# 改测试端口只改这里；验证器同时更新临时 Lua 配置与客户端 PORT。
+# 仅解压验收副本使用这些端口；正式包端口配置保持不变。
+# gateway_port 属于 gateway_frame_sync.lua；两个 *_address 属于 frame_sync.lua 的 Cluster。
+# 验证器同时用 gateway_port 配置客户端 PORT，并在启动前检查所有测试端口空闲。
 VERIFY_PORTS = {
     "gateway_port": 29021,
     "gateway_address": 3537,
     "battle_address": 3538,
+}
+# 临时解包验收还会启动两个 debug_console；使用独立端口，不碰开发/用户进程端口。
+VERIFY_DEBUG_CONSOLE_PORTS = {
+    "battle": 38003,
+    "gateway": 38002,
 }
 STARTUP_TIMEOUT_SECONDS = 25
 CLIENT_TIMEOUT_SECONDS = 30
@@ -123,9 +136,15 @@ RELEASE_FILES = (
     ("{battle_process}", None),
     ("{gateway_process}", None),
     ("{frame_config}", None),
+    # 运行期关闭依赖：包内入口复用项目统一 manager 与 shutdownctl，不另实现进程控制。
+    ("{shutdownctl_config}", None),
+    ("{shutdownctl_service}", None),
+    ("{shutdown_coordinator}", None),
+    ("{process_manager}", None),
+    # 独立用户入口安装在 Server 根目录，方便从发布包根目录执行 ./server/run_server.sh。
+    ("{release_runner}", "{server}/run_server.sh"),
     ("{config}/gateway_frame_sync.lua", None),
     ("{config}/frame_sync_asset.lua", None),
-    ("{config}/gateway.lua", None),
     ("{config}/unit_profiles.lua", None),
     ("{config}/navigation_profiles.lua", None),
     ("{config}/unit_profiles/**/*.lua", None),
@@ -157,7 +176,7 @@ RELEASE_FILES = (
     ("{map_manifest}", None),
     ("{protocol_generated}/lesson_03_frame_sync.pb", None),
     ("{protocol_generated}/lesson_03_frame_sync.pb.sha256", None),
-    ("{protocol_generated}/frame_sync.source.sha256", None),
+    ("{protocol_generated}/lesson_03_frame_sync.source.sha256", None),
 )
 
 # 只用于来源追踪，不会把这些源码放进包；实际发布文件另外逐个计算 hash。
@@ -364,15 +383,19 @@ def configure_release(stage):
     if not re.search(r'map_path\s*=\s*"' + re.escape(expected_map) + r'"', conf):
         raise RuntimeError("frame_sync.lua 的 map_path 与 PATHS[map] 不一致")
     (stage / relative_path("{logs}")).mkdir(parents=True, exist_ok=True)
-    commands = [
-        "./" + server_relative("{skynet_executable}") + " " + server_relative(template)
-        for _, template, _ in PROCESSES
-    ]
     (stage / "README.txt").write_text(
-        "第三课帧同步 Linux Server；BMAP-only，Unity 单独交付。\n"
-        "从解压根目录进入 " + PATHS["server"] + "/；两个终端按顺序启动，先等 Battle READY：\n"
-        + "\n".join(commands) + "\n各终端按 Ctrl-C 停止。\n"
-        "监听及 Cluster 地址见 " + server_relative("{frame_config}") + "。\n"
+        "第三课帧同步 Linux Server；BMAP-only，Unity 单独交付。\n\n"
+        "从解压目录执行以下命令（需要在 Linux/WSL 中运行）：\n"
+        "  ./server/run_server.sh start    后台启动 Battle；READY 后再启动 Gateway\n"
+        "  ./server/run_server.sh status   查看 Battle/Gateway 状态\n"
+        "  ./server/run_server.sh stop     通过 shutdownctl 优雅停止 Gateway，再停止 Battle\n"
+        "  ./server/run_server.sh restart  按上述顺序停止并重新启动\n"
+        "  ./server/run_server.sh doctor   检查 Skynet、配置和关闭控制依赖\n\n"
+        "首次部署不需要执行 prepare 或 build：打包时已经准备发布资产并构建 Native 运行依赖。\n"
+        "进程 PID 文件位于 server/run/lesson3_frame_sync/；标准输出诊断日志位于 "
+        "server/logs/lesson3_frame_sync/；FlyWow 业务日志分别位于 server/logs/frame_battle/ 与 server/logs/frame_gateway/。\n"
+        "Battle/Cluster 配置见 " + server_relative("{frame_config}") + "；Gateway 监听配置见 "
+        + server_relative("{config}/gateway_frame_sync.lua") + "。\n"
         "系统依赖见 release_manifest.json；不包含编译工具、LuaPanda或测试客户端。\n",
         encoding="utf-8",
     )
@@ -425,13 +448,25 @@ def write_manifest(stage, version, source_hashes):
             if (path.is_file() and not EXCLUDED_PARTS.intersection(relative.parts)
                     and path.suffix in SOURCE_SUFFIXES):
                 source_hashes[relative.as_posix()] = digest(path)
-    for path in (Path(__file__), Path(__file__).with_name("verify_frame_release.py"),
-                 *sorted(source_path("{protocol_root}").glob("*.proto"))):
+    for path in (
+        Path(__file__),
+        Path(__file__).with_name("verify_frame_release.py"),
+        source_path("{release_runner}"),
+        source_path("{process_manager}"),
+        source_path("{shutdownctl_config}"),
+        source_path("{shutdownctl_service}"),
+        source_path("{shutdown_coordinator}"),
+        *sorted(source_path("{protocol_root}").glob("*.proto")),
+    ):
         source_hashes[path.relative_to(ROOT).as_posix()] = digest(path)
     runtime = {
         "server": PATHS["server"],
         "executable": server_relative("{skynet_executable}"),
         "frame_config": server_relative("{frame_config}"),
+        "gateway_config": server_relative("{config}/gateway_frame_sync.lua"),
+        "manager": "run_server.sh",
+        "run_directory": "run/lesson3_frame_sync",
+        "capture_directory": "logs/lesson3_frame_sync",
         "processes": [
             {"role": role, "config": server_relative(template), "ready": marker}
             for role, template, marker in PROCESSES
@@ -460,14 +495,20 @@ def write_manifest(stage, version, source_hashes):
 def write_archive(stage, archive):
     """固定 tar/gzip 元数据并原子发布归档，失败清理本次 .tmp 文件。
 
-    只给清单指定的 Skynet 可执行文件保留执行权限，普通文件 0644、目录 0755。
+    只给 Skynet 可执行文件与发布包 run_server.sh 入口保留执行权限，
+    普通文件 0644、目录 0755；避免归档解压后入口无法直接运行。
     相同文件输入可稳定归档；不承诺跨编译器/系统得到相同 Native 二进制。
     """
     executable = relative_path("{skynet_executable}").as_posix()
+    runtime_entry = (relative_path("{server}") / "run_server.sh").as_posix()
+    executable_paths = {
+        stage.name + "/" + executable,
+        stage.name + "/" + runtime_entry,
+    }
     def normalize(info):
         info.uid = info.gid = info.mtime = 0
         info.uname = info.gname = ""
-        info.mode = 0o755 if info.isdir() or info.name == stage.name + "/" + executable else 0o644
+        info.mode = 0o755 if info.isdir() or info.name in executable_paths else 0o644
         return info
 
     temporary = archive.with_suffix(".tmp")
