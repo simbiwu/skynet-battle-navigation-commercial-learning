@@ -2,7 +2,7 @@
 --- 边界：Integration Test Service；以协议已有map_id作为测试标记，不增加协议字段。
 --- 生命周期：runner独占启动回收；Gateway_disconnect仅作连接生命周期通知，无业务回复。
 local skynet = require "skynet.manager"
-local base_config = require "config.gateway_lesson_01"
+local gateway_base_config = require "config.gateway_lesson_01"
 skynet.start(function()
     skynet.name(".gw_async_smoke", skynet.self())
     skynet.dispatch("lua", function(_session, source, command, message)
@@ -45,7 +45,7 @@ skynet.start(function()
         -- FlyWow Gateway 只使用宿主显式传入的完整配置；测试从第一课 profile 复制协议产物，
         -- 再覆盖本测试的 handler、transport、端口和更小的资源上限，不维护第二份 descriptor/Registry。
         local gateway_config = {}
-        for key, value in pairs(base_config) do
+        for key, value in pairs(gateway_base_config) do
             gateway_config[key] = value
         end
         gateway_config.handler_service = ".gw_async_smoke"

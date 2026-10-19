@@ -37,15 +37,15 @@ end
 
 -- 启动时先发布完整 Profile 表，再主动加载配置中的全部地图。
 -- 每张地图完成校验后进入进程 Registry；任一失败都会阻止 Service 就绪。
-function M.start(options)
+function M.start(navigation_query_config_input)
     -- 参数/状态检查：Query Logic 只能初始化一次。
-    assert(config == nil, "navigation query logic already started")
-    config = assert(options)
-    assert(type(config.maps) == "table" and #config.maps > 0,
+    assert(navigation_query_config == nil, "navigation query logic already started")
+    navigation_query_config = assert(navigation_query_config_input)
+    assert(type(navigation_query_config.maps) == "table" and #navigation_query_config.maps > 0,
            "at least one navigation map must be configured")
 
     local loaded_map_ids = {}
-    for _, path in ipairs(config.maps) do
+    for _, path in ipairs(navigation_query_config.maps) do
         local loaded, err = battle_nav.load_map(path)
         assert(loaded, err and (err.code .. ": " .. err.message) or "load_map failed")
         assert(loaded_map_ids[loaded.map_id] == nil,

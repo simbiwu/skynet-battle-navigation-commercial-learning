@@ -7,8 +7,8 @@ local skynet = require "skynet"
 local sharedata = require "skynet.sharedata"
 local battle_nav = require "flywow_navigation"
 local replay_writer = require "battle.replay_writer"
-local scenario = require "battle.scenario_1001"
-local config = require "config.battle"
+local battle_scenario = require "battle.scenario_1001"
+local battle_config = require "config.battle"
 
 -- 只比较逻辑字段，不用 tostring(table)；pairs/hash 地址顺序不能当 determinism 证据。
 local function assert_same_result(a, b)
@@ -55,9 +55,9 @@ local function assert_same_result(a, b)
 end
 
 skynet.start(function()
-    sharedata.new("battle.unit_profiles", config.unit_profiles)
+    sharedata.new("battle.unit_profiles", battle_config.unit_profiles)
     local profiles_loaded, profiles_error =
-        battle_nav.load_navigation_profiles(config.navigation_profiles)
+        battle_nav.load_navigation_profiles(battle_config.navigation_profiles)
     assert(profiles_loaded,
            profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
                "load_navigation_profiles failed")
@@ -67,9 +67,9 @@ skynet.start(function()
     local query_service = skynet.newservice("battle/navigation_query")
     assert(skynet.call(query_service, "lua", "ready"))
     local mgr = skynet.newservice("battle/battle_mgr")
-    local first, err1 = skynet.call(mgr, "lua", "simulate", assert(scenario.make_snapshot(1001)))
+    local first, err1 = skynet.call(mgr, "lua", "simulate", assert(battle_scenario.make_snapshot(1001)))
     assert(first, err1 and err1.message)
-    local second, err2 = skynet.call(mgr, "lua", "simulate", assert(scenario.make_snapshot(1001)))
+    local second, err2 = skynet.call(mgr, "lua", "simulate", assert(battle_scenario.make_snapshot(1001)))
     assert(second, err2 and err2.message)
     assert_same_result(first, second)
     skynet.error("BATTLE_DETERMINISM_OK events=", #first.events,

@@ -3,7 +3,7 @@
 --- ownership：独占 Native Engine；Worker 必须在销毁 Battle 时调用 close。
 --- 输入/输出：席位输入 -> 帧记录/规范化 Checkpoint；失败返回稳定 code。
 --- 不负责：用户认证、fd、Cluster、定时器、Battle 进程持久化恢复。
-local native = require "lesson_frame_native"
+local frame_native = require "lesson_frame_native"
 local M = {}
 
 local MAX_SEATS = 1
@@ -60,15 +60,15 @@ local function copy_input(input)
 end
 
 --- 创建独占Runtime；Native预载MapRegistry。失败清理临时Engine。
----@param options table {map_id,window,max_frames,seat_unit_instance_ids} 由Worker显式传入。
+---@param frame_runtime_config table {map_id,window,max_frames,seat_unit_instance_ids} 由Worker显式传入。
 ---@return FrameRuntime|nil runtime 成功实例，失败为nil。
 ---@return table|nil err 稳定错误Record。
-function M.create(options)
-    assert(options.window >= 1 and options.window <= 32)
-    assert(options.max_frames > 0)
-    assert(#options.seat_unit_instance_ids == MAX_SEATS)
+function M.create(frame_runtime_config)
+    assert(frame_runtime_config.window >= 1 and frame_runtime_config.window <= 32)
+    assert(frame_runtime_config.max_frames > 0)
+    assert(#frame_runtime_config.seat_unit_instance_ids == MAX_SEATS)
 
-    local engine, open_err = native.open(options.map_id)
+    local engine, open_err = frame_native.open(frame_runtime_config.map_id)
     if not engine then return nil, open_err or { code = "NATIVE_OPEN" } end
 
     local checkpoint, save_err = engine:save()
@@ -87,13 +87,13 @@ function M.create(options)
         frame      = frame,
         winner     = winner,
         seats      = { 1 },
-        seat_unit_instance_ids = { [1] = options.seat_unit_instance_ids[1] },
+        seat_unit_instance_ids = { [1] = frame_runtime_config.seat_unit_instance_ids[1] },
         pending    = {},
         last_input = { [1] = { x = 0, z = 0 } },
         missing    = { [1] = 0 },
         records    = {},
-        window     = options.window,
-        max_frames = options.max_frames,
+        window     = frame_runtime_config.window,
+        max_frames = frame_runtime_config.max_frames,
     }
     return runtime
 end

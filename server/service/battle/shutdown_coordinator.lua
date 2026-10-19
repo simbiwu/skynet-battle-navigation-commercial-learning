@@ -5,36 +5,36 @@
 local cluster = require "skynet.cluster"
 local skynet = require "skynet.manager"
 
-local state = {
+local module_state = {
     configured = false,
     shutting_down = false,
     handles = nil,
 }
 
-local function configure(handles)
-    assert(not state.configured, "battle shutdown already configured")
-    assert(type(handles) == "table", "shutdown handles are required")
-    assert(math.type(handles.query_service) == "integer" and
-        math.type(handles.battle_mgr) == "integer" and
-        math.type(handles.dispatcher) == "integer",
+local function configure(shutdown_handles)
+    assert(not module_state.configured, "battle shutdown already configured")
+    assert(type(shutdown_handles) == "table", "shutdown handles are required")
+    assert(math.type(shutdown_handles.query_service) == "integer" and
+        math.type(shutdown_handles.battle_mgr) == "integer" and
+        math.type(shutdown_handles.dispatcher) == "integer",
         "invalid battle shutdown handles")
-    state.handles = handles
-    state.configured = true
+    module_module_state.shutdown_handles = shutdown_handles
+    module_state.configured = true
     cluster.register("battle_shutdown", skynet.self())
     return true
 end
 
 local function shutdown()
-    assert(state.configured, "battle shutdown is not configured")
-    if state.shutting_down then
+    assert(module_state.configured, "battle shutdown is not configured")
+    if module_state.shutting_down then
         return true
     end
-    state.shutting_down = true
+    module_state.shutting_down = true
 
     -- 先关闭入口，拒绝新请求；再关闭 Manager/Worker；最后释放 Query。
-    skynet.call(state.handles.dispatcher, "lua", "shutdown")
-    skynet.call(state.handles.battle_mgr, "lua", "shutdown")
-    skynet.call(state.handles.query_service, "lua", "shutdown")
+    skynet.call(module_state.shutdown_handles.dispatcher, "lua", "shutdown")
+    skynet.call(module_state.shutdown_handles.battle_mgr, "lua", "shutdown")
+    skynet.call(module_state.shutdown_handles.query_service, "lua", "shutdown")
     skynet.error("BATTLE_SHUTDOWN_COMPLETE")
     --- 业务已完成收尾；等待 Native Logger 刷新后再向 shutdownctl 确认。
     --- flush 会 yield；写盘失败抛错误，关闭流程不能谎报成功。
@@ -49,7 +49,7 @@ skynet.start(function()
             return
         end
         if command == "ready" then
-            skynet.retpack(state.configured)
+            skynet.retpack(module_state.configured)
             return
         end
         if command == "shutdown" then

@@ -6,12 +6,12 @@
 
 local skynet = require "skynet"
 local cluster = require "skynet.cluster"
-local process = require "config.battle"
+local battle_process_config = require "config.battle"
 
 skynet.start(function()
-    cluster.reload({ [process.cluster.gateway_node] = process.cluster.gateway_address })
-    cluster.open(process.cluster.local_listen, process.cluster.max_clients)
-    cluster.register(process.cluster.service_name, skynet.self())
+    cluster.reload({ [battle_process_config.cluster.gateway_node] = battle_process_config.cluster.gateway_address })
+    cluster.open(battle_process_config.cluster.local_listen, battle_process_config.cluster.max_clients)
+    cluster.register(battle_process_config.cluster.service_name, skynet.self())
 
     skynet.dispatch("lua", function(_session, _source, command, message)
         if command == "ready" then
@@ -23,10 +23,10 @@ skynet.start(function()
         assert(type(message) == "table" and type(message.data) == "table",
             "gateway data message is required")
 
-        local target = "@" .. process.cluster.gateway_proxy_service
+        local target = "@" .. battle_process_config.cluster.gateway_proxy_service
         if message.data.map_id == 600 then
             cluster.send(
-                process.cluster.gateway_node,
+                battle_process_config.cluster.gateway_node,
                 target,
                 "close",
                 {
@@ -38,7 +38,7 @@ skynet.start(function()
         end
 
         cluster.send(
-            process.cluster.gateway_node,
+            battle_process_config.cluster.gateway_node,
             target,
             "send_data",
             {

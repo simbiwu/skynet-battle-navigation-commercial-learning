@@ -10,7 +10,7 @@ package.path = root .. "/?.lua;" .. package.path
 local function scenario()
     local test = { local_sends = {}, remote_sends = {}, errors = {}, returns = {} }
     local skynet, cluster = {}, {}
-    local config =
+    local gateway_proxy_config =
     {
         cluster =
         {
@@ -43,7 +43,7 @@ local function scenario()
     function skynet.wakeup() error("Proxy must not wake request coroutines") end
     function skynet.fork() error("Proxy must not create background tasks") end
     function cluster.reload(nodes)
-        assert(nodes.battle == config.cluster.remote_address)
+        assert(nodes.battle == gateway_proxy_config.cluster.remote_address)
     end
     function cluster.open(port, limit)
         assert(port == 2527 and limit == 64)
@@ -66,6 +66,7 @@ local function scenario()
     package.loaded["skynet.cluster"] = cluster
     package.loaded["shared.debug.luapanda_debug"] = { start = function() end }
     dofile(root .. "/service/gateway/gateway_proxy.lua")
+    test.gateway_proxy_config = gateway_proxy_config
     return test
 end
 
@@ -91,7 +92,7 @@ local test = scenario()
 rejects(test, 99, "send_data", message(), "not ready")
 rejects(test, 8, "close", message(), "not ready")
 rejects(test, 9, "bind_gateway", { gateway_service = 99 }, "binding is invalid")
-test.dispatch(1, 9, "start", config)
+test.dispatch(1, 9, "start", test.gateway_proxy_config)
 assert(test.returns[1].remote_node == "battle")
 assert(test.returns[1].remote_address == "127.0.0.1:2528")
 rejects(test, 9, "start", nil, "only start once")
@@ -169,7 +170,7 @@ assert(#test.local_sends == before + 1)
 for _, flag in ipairs({ "fail_ready", "not_ready" }) do
     local failed = scenario()
     failed[flag] = true
-    rejects(failed, 9, "start", nil, "battle process is not ready")
+    rejects(failed, 9, "start", failed.gateway_proxy_config, "battle process is not ready")
     rejects(failed, 99, "send_data", message(), "not ready")
 end
 print("PROXY_SEND_DATA_UNIT_OK")

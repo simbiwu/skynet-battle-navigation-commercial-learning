@@ -8,21 +8,21 @@ package.path = root
     .. "/third_party/skynet-flywow/navigation/lualib/?.lua;"
     .. package.path
 package.cpath = root .. "/third_party/skynet-flywow/build/native/?.so;" .. package.cpath
-local nav = require("flywow_navigation")
-assert(nav.load_navigation_profiles(require("config.navigation_profiles")))
-assert(nav.load_map(root .. "/../shared/navigation/battle_1001/battle_1001.bmap"))
-local core = require("battle.state_sync.runtime")
+local navigation_api = require("flywow_navigation")
+assert(navigation_api.load_navigation_profiles(require("config.navigation_profiles")))
+assert(navigation_api.load_map(root .. "/../shared/navigation/battle_1001/battle_1001.bmap"))
+local state_sync_runtime = require("battle.state_sync.runtime")
 for _, count in ipairs({ 1, 16, 32 }) do
     local states, times = {}, {}
     for id = 1, count do
-        states[id] = assert(core.create(id))
+        states[id] = assert(state_sync_runtime.create(id))
     end
     for tick = 1, 120 do
         local before = os.clock()
         local budget = { remaining = 4 }
         for _, state in ipairs(states) do
-            assert(core.accept_inputs(state, { { input_seq = tick, x = 0, z = 0 } }) == "OK")
-            core.step(state, budget)
+            assert(state_sync_runtime.accept_inputs(state, { { input_seq = tick, x = 0, z = 0 } }) == "OK")
+            state_sync_runtime.step(state, budget)
         end
         times[#times + 1] = (os.clock() - before) * 1000
     end
@@ -43,7 +43,7 @@ for _, count in ipairs({ 1, 16, 32 }) do
         )
     )
     for _, state in ipairs(states) do
-        core.close(state)
+        state_sync_runtime.close(state)
     end
     collectgarbage("collect")
 end

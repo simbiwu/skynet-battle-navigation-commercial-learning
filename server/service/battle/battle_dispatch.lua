@@ -5,16 +5,19 @@
 --- 不负责：不实现寻路、AI 或战斗结算，不接受客户端 Snapshot。
 local cluster = require "skynet.cluster"
 local skynet = require "skynet"
-local process = require "config.battle"
-local scenario = require "battle.scenario_1001"
+local battle_process_config = require "config.battle"
+local battle_scenario = require "battle.scenario_1001"
 local protocol_registry = require "gateway.protocol.protocol_registry_lesson_02"
 local command_ids = protocol_registry.command_ids
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
-local query_service = nil    -- 本进程 Query Service，由 battle_main 注入一次。
-local battle_mgr = nil       -- 本进程 BattleMgr，由 battle_main 注入一次。
-local in_flight = 0          -- 正在等待自动战斗结果的请求数，由此 Service 独占。
-local shutting_down = false  -- 已收到关闭请求；不再接受新的 Gateway 数据。
+local module_state =
+{
+    query_service_handle = nil, -- 本进程 Query Service，由 battle_main 注入一次。
+    battle_manager_handle = nil, -- 本进程 BattleMgr，由 battle_main 注入一次。
+    in_flight_auto_battle_requests = 0, -- 正在等待自动战斗结果的请求数，由此 Service 独占。
+    is_shutting_down = false, -- 已收到关闭请求；不再接受新的 Gateway 数据。
+}
 local MAX_IN_FLIGHT = 4      -- 超限立即返回 BUSY，避免无限排队。
 local MAX_EVENTS = 100       -- 一次网络结果允许的最大 Event 数。
 local MAX_POINTS = 256      -- 当前固定地图实际产生228点；仍有硬预算，Gateway最终限制65535字节。
@@ -31,11 +34,11 @@ local RESULT = {
 ---@param handles BattleDispatchHandles 本进程已创建的 Query/BattleMgr handles。
 ---@return boolean 配置成功；重复配置或非法 handle 抛错。
 local function configure(handles)
-    assert(query_service == nil and battle_mgr == nil, "battle_dispatch already configured")
+    assert(module_state.query_service_handle == nil and module_state.battle_manager_handle == nil, "battle_dispatch already configured")
     assert(type(handles) == "table" and type(handles.query_service) == "number" and
         type(handles.battle_mgr) == "number", "invalid battle_dispatch handles")
-    query_service = handles.query_service
-    battle_mgr = handles.battle_mgr
+    module_state.query_service_handle = handles.query_service
+    module_state.battle_manager_handle = handles.battle_mgr
     return true
 end
 
@@ -87,23 +90,23 @@ local function run_auto_battle(request)
         return rejected(RESULT.BAD_SCENARIO, "unknown scenario_id")
     end
 
-    if in_flight >= MAX_IN_FLIGHT then
+    if module_state.in_flight_auto_battle_requests >= MAX_IN_FLIGHT then
         return rejected(RESULT.BUSY, "battle request limit reached")
     end
 
     -- 数据准备：由 Server 固定场景模块构造 Snapshot。
-    local snapshot = assert(scenario.make_snapshot(request.scenario_id))
+    local snapshot = assert(battle_scenario.make_snapshot(request.scenario_id))
 
-    -- 核心计算：同步调用 BattleMgr；in_flight 在调用前后成对修改。
-    in_flight = in_flight + 1
+    -- 核心计算：同步调用 BattleMgr；module_state.in_flight_auto_battle_requests 在调用前后成对修改。
+    module_state.in_flight_auto_battle_requests = module_state.in_flight_auto_battle_requests + 1
     local call_ok, result, worker_error = pcall(
         skynet.call,
-        battle_mgr,
+        module_state.battle_manager_handle,
         "lua",
         "simulate",
         snapshot
     )
-    in_flight = in_flight - 1
+    module_state.in_flight_auto_battle_requests = module_state.in_flight_auto_battle_requests - 1
 
     if not call_ok or result == nil then
         skynet.error(
@@ -142,12 +145,12 @@ end
 ---@return BattleResultRecord Query/Battle 业务结果；本地 call 可能 yield。
 local function dispatch_gateway(payload)
     -- 参数/状态检查：Battle 依赖必须已经由 battle_main 注入。
-    assert(query_service ~= nil and battle_mgr ~= nil, "battle_dispatch is not ready")
+    assert(module_state.query_service_handle ~= nil and module_state.battle_manager_handle ~= nil, "battle_dispatch is not ready")
     assert(type(payload) == "table", "gateway payload must be table")
 
     -- 核心计算：CommandId 选择唯一业务处理器，避免 Gateway 参与业务路由。
     if payload.command_id == command_ids.QUERY_CELL then
-        return skynet.call(query_service, "lua", "query_cell", { request = payload.data })
+        return skynet.call(module_state.query_service_handle, "lua", "query_cell", { request = payload.data })
     end
 
     if payload.command_id == command_ids.RUN_AUTO_BATTLE then
@@ -165,10 +168,10 @@ end
 --- 执行业务分发；有返回数据时通过统一 send_data 发回 Gateway。
 --- payload：Gateway 转发的连接身份、command_id 和已解码 data；可能 yield。
 local function forward_data(payload)
-    if shutting_down then
+    if module_state.is_shutting_down then
         return
     end
-    assert(query_service ~= nil and battle_mgr ~= nil,
+    assert(module_state.query_service_handle ~= nil and module_state.battle_manager_handle ~= nil,
         "battle_dispatch is not ready")
     assert(
         type(payload) == "table" and type(payload.data) == "table",
@@ -194,8 +197,8 @@ local function forward_data(payload)
 
     local send_ok, send_error = pcall(
         cluster.send,
-        process.cluster.gateway_node,
-        "@" .. process.cluster.gateway_proxy_service,
+        battle_process_config.cluster.gateway_node,
+        "@" .. battle_process_config.cluster.gateway_proxy_service,
         "send_data",
         {
             gateway_epoch = payload.gateway_epoch,
@@ -212,8 +215,8 @@ end
 --- 停止接收新请求，等待当前自动战斗返回，再退出 Dispatch Service。
 --- 返回 true；等待期间会 yield，调用方是 Battle shutdown coordinator。
 local function shutdown()
-    shutting_down = true
-    while in_flight > 0 do
+    module_state.is_shutting_down = true
+    while module_state.in_flight_auto_battle_requests > 0 do
         skynet.sleep(1)
     end
     skynet.retpack(true)
@@ -231,8 +234,8 @@ local function close_connection(data)
 
     local ok, err = pcall(
         cluster.send,
-        process.cluster.gateway_node,
-        "@" .. process.cluster.gateway_proxy_service,
+        battle_process_config.cluster.gateway_node,
+        "@" .. battle_process_config.cluster.gateway_proxy_service,
         "close",
         data
     )
@@ -247,7 +250,7 @@ skynet.start(function()
         if command == "configure" then
             skynet.retpack(configure(payload))
         elseif command == "ready" then
-            skynet.retpack(query_service ~= nil and battle_mgr ~= nil)
+            skynet.retpack(module_state.query_service_handle ~= nil and module_state.battle_manager_handle ~= nil)
         elseif command == "shutdown" then
             shutdown()
         elseif command == "send_data" then

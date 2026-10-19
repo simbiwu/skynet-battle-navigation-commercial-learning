@@ -5,14 +5,14 @@
 
 local cluster = require "skynet.cluster"
 local skynet = require "skynet.manager"
-local process = nil
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
-local state =
+local module_state =
 {
-    gateway_service = nil,
-    started = false,
-    shutting_down = false,
+    process_config = nil, -- 启动时注入的 Cluster 配置；Proxy 生命周期内固定。
+    gateway_service_handle = nil, -- 组合根绑定的 Gateway Service；仅用于本地投递。
+    is_started = false, -- Cluster 监听和远端 ready 检查都成功后置为 true。
+    is_shutting_down = false, -- 收到关闭命令后置位，表示不再承接新转发。
 }
 
 --- 校验统一 send_data 合同；只检查传输路由字段，不解释业务 payload。
@@ -43,8 +43,8 @@ end
 local function forward_to_battle(data)
     local ok, err = pcall(
         cluster.send,
-        process.cluster.remote_node,
-        "@" .. process.cluster.remote_service,
+        module_state.process_config.cluster.remote_node,
+        "@" .. module_state.process_config.cluster.remote_service,
         "send_data",
         data
     )
@@ -59,7 +59,7 @@ end
 local function forward_to_gateway(data)
     validate_data(data)
     return skynet.send(
-        state.gateway_service,
+        module_state.gateway_service_handle,
         "lua",
         "send_data",
         data
@@ -68,24 +68,24 @@ end
 
 --- 建立 Cluster 监听并等待 Battle ready；只初始化传输路径。
 --- 返回远程节点信息；可能 yield，不创建业务请求表。
-local function start(config)
-    assert(not state.started and process == nil, "gateway proxy can only start once")
-    assert(type(config) == "table" and type(config.cluster) == "table",
+local function start(process_config)
+    assert(not module_state.is_started and module_state.process_config == nil, "gateway proxy can only start once")
+    assert(type(process_config) == "table" and type(process_config.cluster) == "table",
         "gateway proxy requires the selected course cluster config")
-    process = config
+    module_state.process_config = process_config
 
     cluster.reload(
         {
-            [process.cluster.remote_node] = process.cluster.remote_address,
+            [module_state.process_config.cluster.remote_node] = module_state.process_config.cluster.remote_address,
         }
     )
-    cluster.open(process.cluster.local_listen, process.cluster.max_clients)
-    cluster.register(process.cluster.proxy_service, skynet.self())
+    cluster.open(module_state.process_config.cluster.local_listen, module_state.process_config.cluster.max_clients)
+    cluster.register(module_state.process_config.cluster.proxy_service, skynet.self())
 
     local ready_ok, ready_result = pcall(
         cluster.call,
-        process.cluster.remote_node,
-        "@" .. process.cluster.remote_service,
+        module_state.process_config.cluster.remote_node,
+        "@" .. module_state.process_config.cluster.remote_service,
         "ready"
     )
     assert(
@@ -93,44 +93,44 @@ local function start(config)
         "battle process is not ready: " .. tostring(ready_result)
     )
 
-    state.started = true
+    module_state.is_started = true
     skynet.name(".gateway_proxy", skynet.self())
 
     return
     {
-        remote_node = process.cluster.remote_node,
-        remote_address = process.cluster.remote_address,
+        remote_node = module_state.process_config.cluster.remote_node,
+        remote_address = module_state.process_config.cluster.remote_address,
     }
 end
 
 --- 注入当前 Gateway Service handle；Proxy 只保存这个传输目标。
---- options 由 composition root 提供；重复绑定或非法 handle 直接失败。
-local function bind_gateway(options)
-    assert(state.started and state.gateway_service == nil,
+--- gateway_binding 由 composition root 提供；重复绑定或非法 handle 直接失败。
+local function bind_gateway(gateway_binding)
+    assert(module_state.is_started and module_state.gateway_service_handle == nil,
         "gateway proxy binding is invalid")
     assert(
-        type(options) == "table" and
-        math.type(options.gateway_service) == "integer" and
-        options.gateway_service > 0,
+        type(gateway_binding) == "table" and
+        math.type(gateway_binding.gateway_service) == "integer" and
+        gateway_binding.gateway_service > 0,
         "gateway_service is required"
     )
 
-    state.gateway_service = options.gateway_service
+    module_state.gateway_service_handle = gateway_binding.gateway_service
     return true
 end
 
 --- 停止 Proxy 接收新转发；Gateway Coordinator 随后让本 Service 退出。
 --- 返回 true；不执行业务 I/O，不保存连接状态。
 local function shutdown()
-    state.shutting_down = true
-    state.started = false
+    module_state.is_shutting_down = true
+    module_state.is_started = false
     return true
 end
 
 --- 将 Battle 的 close 控制消息转发给 Gateway；不判断业务结果。
 --- connection_id 必须指向具体连接，广播关闭不在本接口内定义。
 local function close_gateway(data)
-    assert(state.started and state.gateway_service ~= nil,
+    assert(module_state.is_started and module_state.gateway_service_handle ~= nil,
         "gateway proxy is not ready")
     assert(type(data) == "table", "gateway close data is required")
     assert(type(data.gateway_epoch) == "string" and
@@ -141,7 +141,7 @@ local function close_gateway(data)
         "connection_id must be positive for close")
 
     return skynet.send(
-        state.gateway_service,
+        module_state.gateway_service_handle,
         "lua",
         "close",
         data
@@ -163,11 +163,11 @@ skynet.start(function()
             skynet.exit()
             return
         elseif command == "send_data" then
-            assert(state.started and state.gateway_service ~= nil,
+            assert(module_state.is_started and module_state.gateway_service_handle ~= nil,
                 "gateway proxy is not ready")
             validate_data(data)
 
-            if source == state.gateway_service then
+            if source == module_state.gateway_service_handle then
                 forward_to_battle(data)
             else
                 forward_to_gateway(data)
@@ -176,7 +176,7 @@ skynet.start(function()
         elseif command == "gateway_disconnect" then
             --- Gateway 已释放连接资源；本 Proxy 不保存连接或待回应请求。
             --- 消费本地可信通知即可，不能把它当成未知业务命令抛错。
-            assert(source == state.gateway_service, "untrusted disconnect source")
+            assert(source == module_state.gateway_service_handle, "untrusted disconnect source")
             return
         elseif command == "close" then
             close_gateway(data)

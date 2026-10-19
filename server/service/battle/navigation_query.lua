@@ -4,7 +4,7 @@
 --- 生命周期：进程启动时创建一次；启动阶段加载 BMAP，运行期只读查询。
 --- 不负责：不注册全局服务名、不代理第二课高频寻路、不保存动态单位。
 local skynet = require "skynet"
-local config = require "config.battle"
+local battle_process_config = require "config.battle"
 local query_logic = require "battle.navigation.query_logic"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
@@ -14,7 +14,7 @@ local luapanda_debug = require "shared.debug.luapanda_debug"
 skynet.start(function()
     --- Query 是独立 Lua State，使用与 Gateway 不同的 LuaPanda port。
     luapanda_debug.start(8819)
-    query_logic.start(config)
+    query_logic.start(battle_process_config)
 
     --- 本 Service 只接受 Battle Dispatch 的本地查询调用。
     skynet.dispatch("lua", function(_session, _source, command, payload)
@@ -43,6 +43,6 @@ skynet.start(function()
         "NAV_QUERY_READY address=",
         skynet.address(skynet.self()),
         " map_count=",
-        #config.maps
+        #battle_process_config.maps
     )
 end)

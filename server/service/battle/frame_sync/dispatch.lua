@@ -5,23 +5,26 @@
 --- 不负责：连接身份的最终授权（Worker通过Session绑定验证）、Navigation和玩法。
 local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
-local conf    = require "config.frame_sync"
+local frame_sync_config    = require "config.frame_sync"
 local ids     = require("gateway.protocol.protocol_registry_lesson_03_frame_sync").command_ids
 
-local workers = {}  -- 固定数量的长期Service handles。
-local next_id = 0  -- 本Battle OS进程内单调BattleID；不重用。
-local shutdown_coordinator = nil -- 唯一允许关闭Dispatch/Worker池的本地Service。
-local draining = false -- drain屏障后拒绝新的客户端业务消息。
-local control_in_flight = 0 -- 正在等待Worker控制调用完成的请求数。
-local diagnostics =
+local module_state =
 {
-    input_batches_received     = 0, -- 从 Gateway 收到的输入批次数，不是单条输入数。
-    control_requests_received  = 0, -- 收到的入场、恢复、离开、回放等非输入请求数。
-    control_errors             = 0, -- control 调用失败并转成 INTERNAL 的次数。
-    disconnects_received       = 0, -- 收到的 Gateway 断线事件数。
-    frame_pushes_received      = 0, -- 从 Worker 收到并准备回推的帧推送数。
-    gateway_messages_attempted = 0, -- 尝试发送给 Gateway 的响应或推送数。
-    gateway_send_errors        = 0, -- 同步 cluster.send 调用抛出的错误数。
+    worker_handles = {}, -- 本 Dispatch 独占的固定 Worker Service handle 池。 -- 固定数量的长期Service handles。
+    next_battle_id = 0, -- 本 Battle 进程内单调分配且不重用的 Battle ID。 -- 本Battle OS进程内单调BattleID；不重用。
+    shutdown_coordinator_handle = nil, -- 被授权执行关闭和 drain 的本地 Service。 -- 唯一允许关闭Dispatch/Worker池的本地Service。
+    is_draining = false, -- drain 屏障开始后拒绝新的客户端业务请求。 -- drain屏障后拒绝新的客户端业务消息。
+    control_requests_in_flight = 0, -- 正在等待 Worker 控制调用返回的请求数。 -- 正在等待Worker控制调用完成的请求数。
+    diagnostics =
+    {
+        input_batches_received     = 0, -- 从 Gateway 收到的输入批次数，不是单条输入数。
+        control_requests_received  = 0, -- 收到的入场、恢复、离开、回放等非输入请求数。
+        control_errors             = 0, -- control 调用失败并转成 INTERNAL 的次数。
+        disconnects_received       = 0, -- 收到的 Gateway 断线事件数。
+        frame_pushes_received      = 0, -- 从 Worker 收到并准备回推的帧推送数。
+        gateway_messages_attempted = 0, -- 尝试发送给 Gateway 的响应或推送数。
+        gateway_send_errors        = 0, -- 同步 cluster.send 调用抛出的错误数。
+    }
 }
 
 --- id路由是battle_id%worker_count+1；不同Battle不会因join落到另一Worker。
@@ -29,14 +32,14 @@ local function worker_for(battle_id)
     if math.type(battle_id) ~= "integer" or battle_id < 1 or battle_id > 0x7fffffff then
         return nil
     end
-    return workers[battle_id % #workers + 1]
+    return module_state.worker_handles[battle_id % #module_state.worker_handles + 1]
 end
 
 --- 请求/回推只带跨进程纯值record；不传fd、buffer借用或Lua userdata。
 local function reply(route, response)
-    diagnostics.gateway_messages_attempted =
-        diagnostics.gateway_messages_attempted + 1
-    local ok, err = pcall(cluster.send, conf.gateway_node, "@frame_proxy", "send_data",
+    module_state.diagnostics.gateway_messages_attempted =
+        module_state.diagnostics.gateway_messages_attempted + 1
+    local ok, err = pcall(cluster.send, frame_sync_config.gateway_node, "@frame_proxy", "send_data",
     {
         gateway_epoch = route.gateway_epoch,
         connection_id = route.connection_id,
@@ -44,38 +47,38 @@ local function reply(route, response)
         data          = response,
     })
     if not ok then
-        diagnostics.gateway_send_errors = diagnostics.gateway_send_errors + 1
+        module_state.diagnostics.gateway_send_errors = module_state.diagnostics.gateway_send_errors + 1
         skynet.error("FRAME_REPLY_FAILED ", tostring(err))
     end
 end
 
 local function control(route)
-    local req = route.data
-    local args =
+    local request = route.data
+    local worker_command =
     {
-        battle_id = req.battle_id,
-        request = req,
+        battle_id = request.battle_id,
+        request = request,
         session = { gateway_epoch = route.gateway_epoch,
                     connection_id = route.connection_id },
     }
     if route.command_id == ids.FRAME_JOIN then
-        if req.scenario_id ~= 1001 then return { code = "BAD_SCENARIO" } end
-        if req.battle_id == 0 then
-            if next_id >= 0x7fffffff then return { code = "ID_EXHAUSTED" } end
-            next_id = next_id + 1
-            args.battle_id = next_id
-            return skynet.call(worker_for(next_id), "lua", "create", args)
+        if request.scenario_id ~= 1001 then return { code = "BAD_SCENARIO" } end
+        if request.battle_id == 0 then
+            if module_state.next_battle_id >= 0x7fffffff then return { code = "ID_EXHAUSTED" } end
+            module_state.next_battle_id = module_state.next_battle_id + 1
+            worker_command.battle_id = module_state.next_battle_id
+            return skynet.call(worker_for(module_state.next_battle_id), "lua", "create", worker_command)
         end
-        return skynet.call(worker_for(req.battle_id), "lua", "join", args)
+        return skynet.call(worker_for(request.battle_id), "lua", "join", worker_command)
     end
-    local target = worker_for(req.battle_id)
-    if not target then return { code = "NOT_FOUND" } end
+    local worker_handle = worker_for(request.battle_id)
+    if not worker_handle then return { code = "NOT_FOUND" } end
     if route.command_id == ids.FRAME_RECOVER then
-        return { state = skynet.call(target, "lua", "recover", args) }
+        return { state = skynet.call(worker_handle, "lua", "recover", worker_command) }
     elseif route.command_id == ids.FRAME_LEAVE then
-        return skynet.call(target, "lua", "leave", args)
+        return skynet.call(worker_handle, "lua", "leave", worker_command)
     elseif route.command_id == ids.FRAME_REPLAY then
-        return skynet.call(target, "lua", "replay", args)
+        return skynet.call(worker_handle, "lua", "replay", worker_command)
     end
     return { code = "BAD_COMMAND" }
 end
@@ -83,14 +86,14 @@ end
 local function incoming(route)
     assert(type(route) == "table" and type(route.data) == "table")
     assert(type(route.gateway_epoch) == "string" and route.connection_id > 0, "invalid gateway route")
-    if draining then
+    if module_state.is_draining then
         return
     end
     if route.command_id == ids.FRAME_INPUT then
-        diagnostics.input_batches_received = diagnostics.input_batches_received + 1
-        local target = worker_for(route.data.battle_id)
-        if target then
-            skynet.send(target, "lua", "inputs",
+        module_state.diagnostics.input_batches_received = module_state.diagnostics.input_batches_received + 1
+        local worker_handle = worker_for(route.data.battle_id)
+        if worker_handle then
+            skynet.send(worker_handle, "lua", "inputs",
             {
                 battle_id = route.data.battle_id,
                 request = route.data,
@@ -100,13 +103,13 @@ local function incoming(route)
         end
         return
     end
-    diagnostics.control_requests_received = diagnostics.control_requests_received + 1
+    module_state.diagnostics.control_requests_received = module_state.diagnostics.control_requests_received + 1
     -- skynet.call可能yield；route只保存已经解码的值record，不保存fd或Socket buffer。
-    control_in_flight = control_in_flight + 1
+    module_state.control_requests_in_flight = module_state.control_requests_in_flight + 1
     local ok, response = pcall(control, route)
-    control_in_flight = control_in_flight - 1
+    module_state.control_requests_in_flight = module_state.control_requests_in_flight - 1
     if not ok then
-        diagnostics.control_errors = diagnostics.control_errors + 1
+        module_state.diagnostics.control_errors = module_state.diagnostics.control_errors + 1
         skynet.error("FRAME_CONTROL_FAILED ", tostring(response))
         response = route.command_id == ids.FRAME_RECOVER and
             { state = { code = "INTERNAL" } } or { code = "INTERNAL" }
@@ -115,53 +118,53 @@ local function incoming(route)
 end
 
 skynet.start(function()
-    for index = 1, conf.workers do
-        workers[index] = skynet.newservice("battle/frame_sync/worker")
-        assert(skynet.call(workers[index], "lua", "configure",
+    for index = 1, frame_sync_config.workers do
+        module_state.worker_handles[index] = skynet.newservice("battle/frame_sync/worker")
+        assert(skynet.call(module_state.worker_handles[index], "lua", "configure",
             { dispatcher = skynet.self() }))
     end
     skynet.info_func(function()
         return
         {
-            workers                    = #workers,
-            next_battle_id             = next_id,
-            input_batches_received     = diagnostics.input_batches_received,
-            control_requests_received  = diagnostics.control_requests_received,
-            control_errors             = diagnostics.control_errors,
-            disconnects_received       = diagnostics.disconnects_received,
-            frame_pushes_received      = diagnostics.frame_pushes_received,
-            gateway_messages_attempted = diagnostics.gateway_messages_attempted,
-            gateway_send_errors        = diagnostics.gateway_send_errors,
+            workers                    = #module_state.worker_handles,
+            next_battle_id             = module_state.next_battle_id,
+                input_batches_received     = module_state.diagnostics.input_batches_received,
+                control_requests_received  = module_state.diagnostics.control_requests_received,
+                control_errors             = module_state.diagnostics.control_errors,
+                disconnects_received       = module_state.diagnostics.disconnects_received,
+                frame_pushes_received      = module_state.diagnostics.frame_pushes_received,
+                gateway_messages_attempted = module_state.diagnostics.gateway_messages_attempted,
+                gateway_send_errors        = module_state.diagnostics.gateway_send_errors,
         }
     end)
 
     skynet.dispatch("lua", function(_, source, command, payload)
         if command == "configure_shutdown" then
-            assert(shutdown_coordinator == nil, "shutdown coordinator already configured")
+            assert(module_state.shutdown_coordinator_handle == nil, "shutdown coordinator already configured")
             assert(math.type(payload) == "integer" and payload == source,
                 "shutdown coordinator must configure itself")
-            shutdown_coordinator = source
+            module_state.shutdown_coordinator_handle = source
             skynet.retpack(true)
         elseif command == "drain_complete" then
-            assert(draining and source == skynet.self(), "untrusted drain barrier")
+            assert(module_state.is_draining and source == skynet.self(), "untrusted drain barrier")
             skynet.retpack(true)
         elseif command == "ready" then
             skynet.retpack(true)
         elseif command == "send_data" then
             incoming(payload)
         elseif command == "disconnect" then
-            diagnostics.disconnects_received = diagnostics.disconnects_received + 1
-            for _, handle in ipairs(workers) do
+            module_state.diagnostics.disconnects_received = module_state.diagnostics.disconnects_received + 1
+            for _, handle in ipairs(module_state.worker_handles) do
                 skynet.send(handle, "lua", "disconnect", payload)
             end
         elseif command == "frame_push" then
-            diagnostics.frame_pushes_received = diagnostics.frame_pushes_received + 1
+            module_state.diagnostics.frame_pushes_received = module_state.diagnostics.frame_pushes_received + 1
             local trusted = false
-            for _, handle in ipairs(workers) do
+            for _, handle in ipairs(module_state.worker_handles) do
                 if source == handle then trusted = true; break end
             end
             assert(trusted, "untrusted frame source")
-            if not draining then
+            if not module_state.is_draining then
                 reply(
                 {
                     gateway_epoch = payload.session.gateway_epoch,
@@ -170,14 +173,14 @@ skynet.start(function()
                 }, payload.data)
             end
         elseif command == "shutdown" then
-            assert(source == shutdown_coordinator and shutdown_coordinator ~= nil,
+            assert(source == module_state.shutdown_coordinator_handle and module_state.shutdown_coordinator_handle ~= nil,
                 "untrusted shutdown caller")
-            draining = true
-            while control_in_flight > 0 do
+            module_state.is_draining = true
+            while module_state.control_requests_in_flight > 0 do
                 skynet.sleep(1)
             end
             -- Worker owns each Native Runtime; wait for every Worker to release it.
-            for _, handle in ipairs(workers) do
+            for _, handle in ipairs(module_state.worker_handles) do
                 assert(skynet.call(handle, "lua", "shutdown"))
             end
             assert(skynet.call(skynet.self(), "lua", "drain_complete"))

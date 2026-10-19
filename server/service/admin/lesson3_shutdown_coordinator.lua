@@ -6,7 +6,7 @@
 local cluster = require "skynet.cluster"
 local skynet = require "skynet.manager"
 
-local state = {
+local module_state = {
     configured = false,
     shutting_down = false,
     profile = nil,
@@ -17,56 +17,56 @@ local state = {
     proxy = nil,
 }
 
-local function configure(options)
-    assert(not state.configured, "lesson3 shutdown already configured")
-    assert(type(options) == "table", "shutdown options are required")
-    assert(options.profile == "state_sync" or options.profile == "frame_sync",
+local function configure(shutdown_configuration)
+    assert(not module_state.configured, "lesson3 shutdown already configured")
+    assert(type(shutdown_configuration) == "table", "shutdown configuration is required")
+    assert(shutdown_configuration.profile == "state_sync" or shutdown_configuration.profile == "frame_sync",
         "invalid lesson3 shutdown profile")
-    assert(options.role == "battle" or options.role == "gateway",
+    assert(shutdown_configuration.role == "battle" or shutdown_configuration.role == "gateway",
         "invalid lesson3 shutdown role")
-    assert(type(options.endpoint) == "string" and #options.endpoint > 0,
+    assert(type(shutdown_configuration.endpoint) == "string" and #shutdown_configuration.endpoint > 0,
         "shutdown endpoint is required")
 
-    if options.role == "battle" then
-        assert(math.type(options.dispatcher) == "integer",
+    if shutdown_configuration.role == "battle" then
+        assert(math.type(shutdown_configuration.dispatcher) == "integer",
             "battle dispatcher handle is required")
-        state.dispatcher = options.dispatcher
-        assert(skynet.call(state.dispatcher, "lua", "configure_shutdown", skynet.self()))
+        module_state.dispatcher = shutdown_configuration.dispatcher
+        assert(skynet.call(module_state.dispatcher, "lua", "configure_shutdown", skynet.self()))
     else
-        assert(math.type(options.gateway) == "integer" and
-            math.type(options.proxy) == "integer",
+        assert(math.type(shutdown_configuration.gateway) == "integer" and
+            math.type(shutdown_configuration.proxy) == "integer",
             "gateway and proxy handles are required")
-        state.gateway = options.gateway
-        state.proxy = options.proxy
-        assert(skynet.call(state.proxy, "lua", "set_shutdown_coordinator", skynet.self()))
+        module_state.gateway = shutdown_configuration.gateway
+        module_state.proxy = shutdown_configuration.proxy
+        assert(skynet.call(module_state.proxy, "lua", "set_shutdown_coordinator", skynet.self()))
     end
 
-    state.profile = options.profile
-    state.role = options.role
-    state.endpoint = options.endpoint
-    cluster.register(state.endpoint, skynet.self())
-    state.configured = true
+    module_state.profile = shutdown_configuration.profile
+    module_state.role = shutdown_configuration.role
+    module_state.endpoint = shutdown_configuration.endpoint
+    cluster.register(module_state.endpoint, skynet.self())
+    module_state.configured = true
     return true
 end
 
 local function shutdown()
-    assert(state.configured, "lesson3 shutdown is not configured")
-    if state.shutting_down then
+    assert(module_state.configured, "lesson3 shutdown is not configured")
+    if module_state.shutting_down then
         return true
     end
-    state.shutting_down = true
+    module_state.shutting_down = true
 
-    if state.role == "gateway" then
+    if module_state.role == "gateway" then
         -- Gateway 只关闭本进程内的监听、连接和 Proxy，不通知或改变 Battle 进程。
-        assert(skynet.call(state.gateway, "lua", "stop"))
-        assert(skynet.call(state.proxy, "lua", "shutdown"))
+        assert(skynet.call(module_state.gateway, "lua", "stop"))
+        assert(skynet.call(module_state.proxy, "lua", "shutdown"))
     else
         -- Battle Dispatch 通知 Worker 释放其拥有的 Native Battle Runtime。
-        assert(skynet.call(state.dispatcher, "lua", "shutdown"))
+        assert(skynet.call(module_state.dispatcher, "lua", "shutdown"))
     end
 
-    skynet.error("LESSON3_SHUTDOWN_COMPLETE profile=", state.profile,
-        " role=", state.role)
+    skynet.error("LESSON3_SHUTDOWN_COMPLETE profile=", module_state.profile,
+        " role=", module_state.role)
     require("flywow_logger").flush()
     return true
 end
@@ -86,7 +86,7 @@ skynet.start(function()
             return
         end
         if command == "ready" then
-            skynet.retpack(state.configured)
+            skynet.retpack(module_state.configured)
             return
         end
         if command == "shutdown" then

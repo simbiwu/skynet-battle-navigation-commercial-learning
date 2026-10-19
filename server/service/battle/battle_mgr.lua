@@ -6,25 +6,28 @@
 local skynet = require "skynet"
 local luapanda_debug = require "shared.debug.luapanda_debug"
 
-local workers = {}
-local next_worker = 1
-local shutting_down = false
-local active_simulations = 0
+local module_state =
+{
+    worker_handles = {}, -- 本 Manager 独占并负责关闭的 Battle Worker handles。
+    next_worker_index = 1, -- round-robin 下一次分配的 Worker 下标。
+    is_shutting_down = false, -- 关闭后拒绝新模拟请求。
+    active_simulation_calls = 0, -- 正在等待 Worker 返回的 simulate 调用数。
+}
 
--- 按稳定 round-robin 选择 Worker；Manager 单 Service owner 修改 next_worker。
+-- 按稳定 round-robin 选择 Worker；Manager 单 Service owner 修改 module_state.next_worker_index。
 local function choose_worker()
-    local worker = workers[next_worker]
-    next_worker = next_worker % #workers + 1
+    local worker = module_state.worker_handles[module_state.next_worker_index]
+    module_state.next_worker_index = module_state.next_worker_index % #module_state.worker_handles + 1
     return worker
 end
 
 -- 把纯数据 snapshot 发给一个 Worker；本函数会在 skynet.call 处 yield。
 local function simulate(snapshot)
-    if shutting_down then
+    if module_state.is_shutting_down then
         return nil, { code = "SERVER_SHUTTING_DOWN", message = "battle manager is shutting down" }
     end
     local worker = choose_worker()
-    active_simulations = active_simulations + 1
+    module_state.active_simulation_calls = module_state.active_simulation_calls + 1
     local ok, result, err = pcall(
         skynet.call,
         worker,
@@ -32,7 +35,7 @@ local function simulate(snapshot)
         "simulate",
         snapshot
     )
-    active_simulations = active_simulations - 1
+    module_state.active_simulation_calls = module_state.active_simulation_calls - 1
     if not ok then
         return nil, { code = "WORKER_CALL_FAILED", message = tostring(result) }
     end
@@ -40,14 +43,14 @@ local function simulate(snapshot)
 end
 
 local function shutdown()
-    shutting_down = true
-    while active_simulations > 0 do
+    module_state.is_shutting_down = true
+    while module_state.active_simulation_calls > 0 do
         skynet.sleep(1)
     end
-    for _, worker in ipairs(workers) do
+    for _, worker in ipairs(module_state.worker_handles) do
         skynet.call(worker, "lua", "shutdown")
     end
-    workers = {}
+    module_state.worker_handles = {}
     skynet.retpack(true)
     skynet.exit()
 end
@@ -57,13 +60,13 @@ skynet.start(function()
     local count = tonumber(skynet.getenv("battle_worker_count")) or 2
     assert(count >= 1)
     for _ = 1, count do
-        workers[#workers + 1] = skynet.newservice("battle/battle_worker")
-        skynet.call(workers[#workers], "lua", "debug_start", 8822 + #workers)
+        module_state.worker_handles[#module_state.worker_handles + 1] = skynet.newservice("battle/battle_worker")
+        skynet.call(module_state.worker_handles[#module_state.worker_handles], "lua", "debug_start", 8822 + #module_state.worker_handles)
     end
 
     skynet.dispatch("lua", function(_, _, command, payload)
         if command == "ready" then
-            skynet.retpack(#workers > 0)
+            skynet.retpack(#module_state.worker_handles > 0)
             return
         end
         if command == "simulate" then

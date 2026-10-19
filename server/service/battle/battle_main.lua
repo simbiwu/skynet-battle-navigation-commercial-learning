@@ -7,14 +7,14 @@ local cluster = require "skynet.cluster"
 local skynet = require "skynet"
 local sharedata = require "skynet.sharedata"
 local battle_nav = require "flywow_navigation"
-local process = require "config.battle"
+local battle_process_config = require "config.battle"
 
 -- 先等待地图和 Worker Pool 就绪，再向 Gateway 发布 cluster 入口。
 -- 无参数/返回；会创建 Service、执行本地 call/cluster I/O 并 yield。
 skynet.start(function()
-    sharedata.new("battle.unit_profiles", process.unit_profiles)
+    sharedata.new("battle.unit_profiles", battle_process_config.unit_profiles)
     local profiles_loaded, profiles_error =
-        battle_nav.load_navigation_profiles(process.navigation_profiles)
+        battle_nav.load_navigation_profiles(battle_process_config.navigation_profiles)
     assert(profiles_loaded,
            profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
                "load_navigation_profiles failed")
@@ -31,10 +31,10 @@ skynet.start(function()
     assert(skynet.call(dispatcher, "lua", "ready"))
 
     cluster.reload({
-        [process.cluster.gateway_node] = process.cluster.gateway_address,
+        [battle_process_config.cluster.gateway_node] = battle_process_config.cluster.gateway_address,
     })
-    cluster.open(process.cluster.local_listen, process.cluster.max_clients)
-    cluster.register(process.cluster.service_name, dispatcher)
+    cluster.open(battle_process_config.cluster.local_listen, battle_process_config.cluster.max_clients)
+    cluster.register(battle_process_config.cluster.service_name, dispatcher)
     local shutdown_coordinator =
         skynet.newservice("battle/shutdown_coordinator")
     assert(skynet.call(shutdown_coordinator, "lua", "configure", {
@@ -43,7 +43,7 @@ skynet.start(function()
         dispatcher = dispatcher,
     }))
     assert(skynet.call(shutdown_coordinator, "lua", "ready"))
-    skynet.error("LESSON2_BATTLE_PROCESS_READY node=", process.cluster.service_name,
+    skynet.error("LESSON2_BATTLE_PROCESS_READY node=", battle_process_config.cluster.service_name,
                  " query=", skynet.address(query_service),
                  " manager=", skynet.address(mgr),
                  " dispatch=", skynet.address(dispatcher),

@@ -8,17 +8,17 @@ package.path = root
     .. "/third_party/skynet-flywow/navigation/lualib/?.lua;"
     .. package.path
 package.cpath = root .. "/third_party/skynet-flywow/build/native/?.so;" .. package.cpath
-local nav = require("flywow_navigation")
-assert(nav.load_navigation_profiles(require("config.navigation_profiles")))
-assert(nav.load_map(root .. "/../shared/navigation/battle_1001/battle_1001.bmap"))
-local conf = require("config.state_sync")
-conf.max_battles = 2
-conf.retention_cs = 3
-conf.max_ticks = 90 -- 此独立测试缩短寿命，不改真实配置文件。
-local core = require("battle.state_sync.runtime")
-local actual_create = core.create
+local navigation_api = require("flywow_navigation")
+assert(navigation_api.load_navigation_profiles(require("config.navigation_profiles")))
+assert(navigation_api.load_map(root .. "/../shared/navigation/battle_1001/battle_1001.bmap"))
+local state_sync_config = require("config.state_sync")
+state_sync_config.max_battles = 2
+state_sync_config.retention_cs = 3
+state_sync_config.max_ticks = 90 -- 此独立测试缩短寿命，不改真实配置文件。
+local state_sync_runtime = require("battle.state_sync.runtime")
+local actual_create = state_sync_runtime.create
 local owned = {}
-core.create = function(id)
+state_sync_runtime.create = function(id)
     local value, err = actual_create(id)
     owned[id] = value
     return value, err

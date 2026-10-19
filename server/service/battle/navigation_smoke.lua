@@ -6,7 +6,7 @@
 local skynet = require "skynet"
 local battle_nav = require "flywow_navigation"
 local sharedata = require "skynet.sharedata"
-local config = require "config.battle"
+local battle_config = require "config.battle"
 
 -- 把 Binding 的 nil,{code,message} 合同变成可读的 Smoke 失败日志。
 -- value/error 属于本次同步调用；成功返回原值，失败抛错终止此检查；不 I/O、不 yield。
@@ -18,9 +18,9 @@ end
 -- 等待同进程地图加载完成，然后在当前 Lua State 执行同步 Native 查询。
 -- 无参数；成功输出 marker；启动阶段可 yield，导航调用本身不 yield。
 skynet.start(function()
-    sharedata.new("battle.unit_profiles", config.unit_profiles)
+    sharedata.new("battle.unit_profiles", battle_config.unit_profiles)
     local profiles_loaded, profiles_error =
-        battle_nav.load_navigation_profiles(config.navigation_profiles)
+        battle_nav.load_navigation_profiles(battle_config.navigation_profiles)
     assert(profiles_loaded,
            profiles_error and (profiles_error.code .. ": " .. profiles_error.message) or
                "load_navigation_profiles failed")

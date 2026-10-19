@@ -4,9 +4,9 @@
 --- 不负责：Gateway监听、玩家认证、持久化重启恢复。
 local skynet  = require "skynet"
 local cluster = require "skynet.cluster"
-local native  = require "lesson_frame_native"
-local conf    = require "config.frame_sync"
-local asset   = require "config.frame_sync_asset"
+local frame_native  = require "lesson_frame_native"
+local frame_sync_config    = require "config.frame_sync"
+local frame_sync_asset_config   = require "config.frame_sync_asset"
 local debug_console_port = tonumber(skynet.getenv("debug_console_port") or "0")
 
 skynet.start(function()
@@ -14,13 +14,13 @@ skynet.start(function()
         skynet.newservice("debug_console", debug_console_port)
     end
     
-    assert(native.preload(conf.map_path, conf.airnav_path, conf.unit_profiles, conf.navigation_profiles, conf.skills), "FRAME_ASSET_PRELOAD_FAILED")
+    assert(frame_native.preload(frame_sync_config.map_path, frame_sync_config.airnav_path, frame_sync_config.unit_profiles, frame_sync_config.navigation_profiles, frame_sync_config.skills), "FRAME_ASSET_PRELOAD_FAILED")
     local dispatch = skynet.newservice("battle/frame_sync/dispatch")
     assert(skynet.call(dispatch, "lua", "ready"))
-    cluster.reload({ [conf.gateway_node] = conf.gateway_address,
-                     [conf.battle_node] = conf.battle_address })
+    cluster.reload({ [frame_sync_config.gateway_node] = frame_sync_config.gateway_address,
+                     [frame_sync_config.battle_node] = frame_sync_config.battle_address })
                      
-    cluster.open(conf.battle_node, 64) -- 参数是Node名称，不是host:port。
+    cluster.open(frame_sync_config.battle_node, 64) -- 参数是Node名称，不是host:port。
     cluster.register("frame_dispatch", dispatch)
     local shutdown_coordinator = skynet.newservice("admin/lesson3_shutdown_coordinator")
     assert(skynet.call(shutdown_coordinator, "lua", "configure", {
@@ -31,6 +31,6 @@ skynet.start(function()
     }))
     assert(skynet.call(shutdown_coordinator, "lua", "ready"))
 
-    skynet.error("FRAME_BATTLE_READY node=", conf.battle_node, " map=", asset.map_id)
+    skynet.error("FRAME_BATTLE_READY node=", frame_sync_config.battle_node, " map=", frame_sync_asset_config.map_id)
     skynet.exit()
 end)

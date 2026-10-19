@@ -2,13 +2,13 @@
 --- 输入：已发布BMAP、独立lesson_frame_native.so；失败断言立即退出。
 --- 运行：server目录 ./third_party/skynet/3rd/lua/lua tests/frame_binding_test.lua。
 package.cpath = "./build/frame_sync/?.so;" .. package.cpath
-local native = require "lesson_frame_native"
-local config = require "config.frame_sync"
-assert(native.preload(config.map_path, config.airnav_path,
+local frame_native = require "lesson_frame_native"
+local frame_sync_config = require "config.frame_sync"
+assert(frame_native.preload(frame_sync_config.map_path, frame_sync_config.airnav_path,
                       require "config.unit_profiles",
-                      require "config.navigation_profiles", config.skills))
-local first = assert(native.open(1001))
-local second = assert(native.open(1001))
+                      require "config.navigation_profiles", frame_sync_config.skills))
+local first = assert(frame_native.open(1001))
+local second = assert(frame_native.open(1001))
 local initial = assert(first:save())
 assert(initial == second:save())
 assert(first:step_frame(1,

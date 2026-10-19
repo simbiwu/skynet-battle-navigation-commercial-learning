@@ -5,34 +5,34 @@
 local cluster = require "skynet.cluster"
 local skynet = require "skynet.manager"
 
-local state = {
+local module_state = {
     configured = false,
     shutting_down = false,
     handles = nil,
 }
 
-local function configure(handles)
-    assert(not state.configured, "gateway shutdown already configured")
-    assert(type(handles) == "table" and
-        math.type(handles.gateway_service) == "integer" and
-        math.type(handles.proxy_service) == "integer",
+local function configure(shutdown_handles)
+    assert(not module_state.configured, "gateway shutdown already configured")
+    assert(type(shutdown_handles) == "table" and
+        math.type(shutdown_handles.gateway_service) == "integer" and
+        math.type(shutdown_handles.proxy_service) == "integer",
         "invalid gateway shutdown handles")
-    state.handles = handles
-    state.configured = true
+    module_module_state.shutdown_handles = shutdown_handles
+    module_state.configured = true
     cluster.register("gateway_shutdown", skynet.self())
     return true
 end
 
 local function shutdown()
-    assert(state.configured, "gateway shutdown is not configured")
-    if state.shutting_down then
+    assert(module_state.configured, "gateway shutdown is not configured")
+    if module_state.shutting_down then
         return true
     end
-    state.shutting_down = true
+    module_state.shutting_down = true
 
     -- FlyWow stop 会停止监听并关闭已有连接；随后 Proxy 不再转发。
-    skynet.call(state.handles.gateway_service, "lua", "stop")
-    skynet.call(state.handles.proxy_service, "lua", "shutdown")
+    skynet.call(module_state.shutdown_handles.gateway_service, "lua", "stop")
+    skynet.call(module_state.shutdown_handles.proxy_service, "lua", "shutdown")
     skynet.error("GATEWAY_SHUTDOWN_COMPLETE")
     --- 业务已完成收尾；等待 Native Logger 刷新后再向 shutdownctl 确认。
     --- flush 会 yield；写盘失败抛错误，关闭流程不能谎报成功。
@@ -47,7 +47,7 @@ skynet.start(function()
             return
         end
         if command == "ready" then
-            skynet.retpack(state.configured)
+            skynet.retpack(module_state.configured)
             return
         end
         if command == "shutdown" then

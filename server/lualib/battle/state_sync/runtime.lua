@@ -1,32 +1,37 @@
 --- 状态同步权威模拟；每场Runtime独占Context、输入、单位和弹丸。
 --- Step同步no-yield；不require Skynet，不读取socket、DB或墙钟。
 --- Navigation来自FlyWow公开API，配置在进程启动时固定，战斗中不热替换。
-local nav = require("flywow_navigation")
-local conf = require("config.state_sync")
+local navigation_api = require("flywow_navigation")
+local state_sync_config = require("config.state_sync")
 local M = {}
 -- Unit/Skill配置只维护一份源；本Lua State建立按业务ID查询的只读索引，不把数组位置当ID。
-local units_by_profile, skills_by_id, skill_order = {}, {}, {}
-assert(#conf.skills >= 3 and #conf.skills <= 16, "SKILL_LIMIT") -- 每单位冷却状态和复制记录的真实容量。
-for _, profile in ipairs(conf.unit_profiles) do
+local module_state =
+{
+    units_by_profile_id = {}, -- 只读单位配置索引，按公开 unit_id 查找。
+    skills_by_id = {}, -- 只读技能配置索引，按公开 skill_id 查找。
+    skill_ids_in_order = {}, -- 按 skill_id 排序的稳定遍历顺序。
+}
+assert(#state_sync_config.skills >= 3 and #state_sync_config.skills <= 16, "SKILL_LIMIT") -- 每单位冷却状态和复制记录的真实容量。
+for _, profile in ipairs(state_sync_config.unit_profiles) do
     assert(
         math.type(profile.unit_id) == "integer"
             and profile.unit_id > 0
-            and not units_by_profile[profile.unit_id],
+            and not module_state.units_by_profile_id[profile.unit_id],
         "UNIT_PROFILE_ID"
     )
-    units_by_profile[profile.unit_id] = profile
+    module_state.units_by_profile_id[profile.unit_id] = profile
 end
-for _, skill in ipairs(conf.skills) do
+for _, skill in ipairs(state_sync_config.skills) do
     assert(
         math.type(skill.skill_id) == "integer"
             and skill.skill_id > 0
-            and not skills_by_id[skill.skill_id],
+            and not module_state.skills_by_id[skill.skill_id],
         "SKILL_ID"
     )
-    skills_by_id[skill.skill_id] = skill
-    skill_order[#skill_order + 1] = skill.skill_id
+    module_state.skills_by_id[skill.skill_id] = skill
+    module_state.skill_ids_in_order[#module_state.skill_ids_in_order + 1] = skill.skill_id
 end
-table.sort(skill_order)
+table.sort(module_state.skill_ids_in_order)
 
 ---@class StateRuntime
 ---@field tick integer 已提交的60Hz逻辑Tick。
@@ -52,7 +57,7 @@ local function emit(s, value)
     value.event_seq = s.event_seq
     value.server_tick = s.tick
     s.events[#s.events + 1] = value
-    if #s.events > conf.event_window then
+    if #s.events > state_sync_config.event_window then
         table.remove(s.events, 1)
     end
 end
@@ -76,7 +81,7 @@ end
 ---@return StateRuntime|nil
 ---@return table|nil
 function M.create(id)
-    local ctx, err = nav.new_context(1001)
+    local ctx, err = navigation_api.new_context(1001)
     if not ctx then
         return nil, err
     end
@@ -104,7 +109,7 @@ function M.create(id)
             { x_mm = 11000, y_mm = 0, z_mm = -4000 },
             { x_mm = 9000, y_mm = 0, z_mm = -4000 },
         }
-        local profile = assert(units_by_profile[1])
+        local profile = assert(module_state.units_by_profile_id[1])
         assert(profile.unit_id == 1 and profile.movement.mode == "ground")
         assert(
             math.type(profile.max_hp) == "integer"
@@ -124,7 +129,7 @@ function M.create(id)
                 and profile.movement.speed_mm_per_sec <= 60 * assert(ctx:cell_size_mm()),
             "INVALID_MOVE_SPEED"
         )
-        for id, skill in ipairs(conf.skills) do
+        for id, skill in ipairs(state_sync_config.skills) do
             assert(
                 math.type(skill.damage) == "integer"
                     and math.type(skill.range_mm) == "integer"
@@ -133,7 +138,7 @@ function M.create(id)
                     and skill.range_mm >= 0
                     and skill.range_mm <= 30000
                     and skill.cooldown_ticks >= 1
-                    and skill.cooldown_ticks <= conf.max_ticks,
+                    and skill.cooldown_ticks <= state_sync_config.max_ticks,
                 "INVALID_SKILL"
             )
             assert(
@@ -171,7 +176,7 @@ function M.create(id)
                 path = nil,
                 repath = 0,
             }
-            for _, skill_id in ipairs(skill_order) do
+            for _, skill_id in ipairs(module_state.skill_ids_in_order) do
                 u.cooldown[skill_id] = 0
             end
             s.units[#s.units + 1] = u
@@ -225,7 +230,7 @@ function M.accept_inputs(s, batch)
             end
         end
     end
-    if last - s.consumed > conf.input_window then
+    if last - s.consumed > state_sync_config.input_window then
         return "INPUT_WINDOW"
     end
     for _, v in ipairs(fresh) do
@@ -299,7 +304,7 @@ local function damage(s, caster, target, skill, cast_seq)
 end
 
 local function cast(s, caster, skill_id, target_id, cast_seq)
-    local skill = skills_by_id[skill_id]
+    local skill = module_state.skills_by_id[skill_id]
     local target = s.by_id[target_id]
     local code = "OK"
     if not skill then
@@ -394,7 +399,7 @@ local function ai(s, u, budget)
     if target.hp == 0 then
         return
     end
-    local skill = assert(skills_by_id[1])
+    local skill = assert(module_state.skills_by_id[1])
     if distance2(u.position, target.position) <= skill.range_mm * skill.range_mm then
         if u.cooldown[1] <= s.tick then
             cast(s, u, 1, target.instance_id, 0)
@@ -507,7 +512,7 @@ function M.step(s, budget)
         s.winner = enemies_alive and 2 or 3
     elseif not enemies_alive then
         s.winner = 1
-    elseif s.tick >= conf.max_ticks then
+    elseif s.tick >= state_sync_config.max_ticks then
         s.winner = 3
     end
     if s.winner ~= 0 then
@@ -542,7 +547,7 @@ function M.snapshot(s, seq)
         }
     end
     for index, u in ipairs(s.units) do
-        for _, skill_id in ipairs(skill_order) do
+        for _, skill_id in ipairs(module_state.skill_ids_in_order) do
             local cooldowns = value.units[index].cooldowns
             cooldowns[#cooldowns + 1] = { skill_id = skill_id, ready_tick = u.cooldown[skill_id] }
         end
