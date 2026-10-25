@@ -86,7 +86,7 @@ python3 tests/gateway_async_integration.py
 cd "$FLYWOW_ROOT"
 SKYNET_LUA=/path/to/course/server/third_party/skynet/3rd/lua/lua \
   python3 -m unittest discover -s tests -p 'test_*.py'
-python3 scripts/ci/check_repository.py
+python3 scripts/quality/check_repository.py
 ```
 
 2026-10-01 在本机固定 Skynet/Lua 基线上已验证：框架13项测试、课程 Proxy 合同测试、真实 TCP/WS 的 A 延迟/B 先返回、半包/fragment、推送、编码错误、业务失败、断线迟到回包、网络超限与未握手 WS 容量；实际第一课本地 Query、第二课双进程 Query/RunAutoBattle 和多连接查询也通过。课程 Debug 构建及2项 Native 回归通过。

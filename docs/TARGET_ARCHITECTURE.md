@@ -274,7 +274,7 @@ Recast 只存在：
 
 ```text
 tools/nav_builder
-CI Asset Build
+offline asset build
 local authoring validation
 ```
 

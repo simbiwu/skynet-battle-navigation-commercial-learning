@@ -80,7 +80,7 @@ Gateway 采用课程现有的 CommandId、最小 Envelope 和双向 `send_data` 
 - 完整真实 Gateway 集成通过 TCP、WebSocket、握手、异步消息、网络限制、单进程地图查询、双进程 Battle_1001 结果和 Cluster 主动关闭。
 - Gateway/Battle 优雅关闭通过，测试进程按 owner 清理。
 
-没有把 Editor 测试当作 Player/IL2CPP 验证，也没有把网络结果验证当作人工完整观看 Unity Replay。未做商业规模压测或长期 soak；CI 新增 Native 核心构建门禁，远端 CI 未执行。正式发布和两个主工作区的 Git 同步尚未执行。
+没有把 Editor 测试当作 Player/IL2CPP 验证，也没有把网络结果验证当作人工完整观看 Unity Replay。未做商业规模压测或长期 soak；当前没有远端自动构建检查；本次也未执行远端验证。正式发布和两个主工作区的 Git 同步尚未执行。
 
 
 ### Battle 射程语义

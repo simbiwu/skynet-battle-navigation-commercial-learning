@@ -45,7 +45,7 @@ gateway/
 navigation/
 ```
 
-模块自己的运行时、Native、客户端、Unity、测试、工具和构建脚本都放在模块目录内，例如 `gateway/lualib/`、`gateway/native/`、`navigation/unity/`。FlyWow 根目录不直接放模块级的 `lualib/`、`native/`、`service/`、`unity/`、`clients/`、`tools/` 或测试目录；根级 `scripts/ci/` 只属于仓库质量门禁。
+模块自己的运行时、Native、客户端、Unity、测试、工具和构建脚本都放在模块目录内，例如 `gateway/lualib/`、`gateway/native/`、`navigation/unity/`。FlyWow 根目录不直接放模块级的 `lualib/`、`native/`、`service/`、`unity/`、`clients/`、`tools/` 或测试目录；根级 `scripts/quality/` 只放仓库自检工具。
 
 ## 1.2 Lua、Native 与构建产物命名
 

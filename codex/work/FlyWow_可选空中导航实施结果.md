@@ -29,7 +29,7 @@ API 为 `set_air_obstacle`、`remove_air_obstacle`、`find_air_path`、`move_air
 |真实 Lua + Python|固定 Skynet 修改版 Lua 5.4.7 + 实际 `.so`，Python unittest 9/9，无 skipped；含完整空中调用链、独立例子、nil/error、关闭/GC、旧快照、资产门禁损坏与包 hash|
 |Unity Editor|团结引擎 1.10.0（2022.3.62t12），隔离派生工程实跑 EditMode 14/14，0 failed/0 skipped；包括旧 BMAP、Unity/Native 共用 golden、取整/闭边界/LayerMask/区间合并/错误 hash/发布身份/幂等/失败清理|
 |Sanitizer|Debug 核心 AddressSanitizer + UndefinedBehaviorSanitizer + leak detection，CTest 3/3，通过；未屏蔽 sanitizer 错误|
-|静态门禁|FlyWow `scripts/ci/check_repository.py` 成功；新增 C++ clang-format dry-run/Werror 成功；46 个相关路径的修改文本 UTF-8/LF 检查通过|
+|静态门禁|FlyWow `scripts/quality/check_repository.py` 成功；新增 C++ clang-format dry-run/Werror 成功；46 个相关路径的修改文本 UTF-8/LF 检查通过|
 
 Lua 运行使用固定宿主 jemalloc 预加载，使独立解释器提供 Native 依赖的 `je_malloc` ABI；未替换生产 allocator 或系统 Lua。Native golden 与实际 Unity Writer 共享相同十六进制 fixtures，而非两个自造格式。
 

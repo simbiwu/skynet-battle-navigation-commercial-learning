@@ -81,7 +81,7 @@ export SKYNET_LUA="$PWD/third_party/skynet/3rd/lua/lua"
 export SKYNET_LUACLIB="$PWD/luaclib"
 cd "$PWD/third_party/skynet-flywow"
 python3 -m unittest discover -s tests -p 'test_*.py'
-python3 scripts/ci/check_repository.py
+python3 scripts/quality/check_repository.py
 ```
 
 Server目录运行真实集成，验收依赖Python cryptography 46.0.5及Node 22：

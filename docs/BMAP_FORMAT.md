@@ -243,7 +243,7 @@ Exporter 同时输出：
 battle_1001.manifest.json
 ```
 
-供人和 CI 查看：
+供人工 查看：
 
 ```json
 {

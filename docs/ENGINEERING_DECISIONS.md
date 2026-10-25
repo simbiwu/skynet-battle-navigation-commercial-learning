@@ -301,7 +301,7 @@ tools/nav_builder
 --debug-obj
 ```
 
-方便 CI 和离线定位。
+方便人工排查和离线定位。
 
 ## D023 - Build Fingerprint
 

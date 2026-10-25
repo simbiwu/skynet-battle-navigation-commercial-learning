@@ -10,7 +10,7 @@
 Unity Snapshot
     ↓ 逐字段编码
 BMAP V1（二进制运行时资产）
-    + Manifest（人和 CI 查看用的摘要）
+    + Manifest（人工 查看用的摘要）
     ↓ 发布到 shared/navigation
 Server BMapReader
     ↓ 校验通过后逐字段解码
@@ -29,7 +29,7 @@ immutable GridMap
 
 因为类型宽度、内存对齐、字节序和版本演进都可能不同；文件损坏时，直接读取还可能把错误数据当成合法地图。
 
-BMAP 把字段顺序、字段宽度、字节序、长度和校验方式写成稳定合同。`BMAP` 是 Server 运行时真正读取的二进制资产；`Manifest` 是给人、发布脚本和 CI 快速审查的 JSON 摘要。Server Runtime 不把 Manifest 当地图数据源。
+BMAP 把字段顺序、字段宽度、字节序、长度和校验方式写成稳定合同。`BMAP` 是 Server 运行时真正读取的二进制资产；`Manifest` 是给人、发布脚本 快速审查的 JSON 摘要。Server Runtime 不把 Manifest 当地图数据源。
 
 ## 2. BMAP V1 的整体布局
 
@@ -264,7 +264,7 @@ unity/BattleNavigation/Assets/BattleNavigation/Editor/BMapManifestWriter.cs
 }
 ```
 
-它帮助人和 CI 快速确认：地图 ID、版本、尺寸、原点、可走格数量、高度范围和 Payload CRC 是否符合预期。`walkable_cells + blocked_cells = 1508 + 892 = 2400`，说明统计覆盖了全部 Cell。
+它帮助人工 快速确认：地图 ID、版本、尺寸、原点、可走格数量、高度范围和 Payload CRC 是否符合预期。`walkable_cells + blocked_cells = 1508 + 892 = 2400`，说明统计覆盖了全部 Cell。
 
 Manifest 是观察和发布审查数据，不是完整地图，也不能替代 BMAP Reader 的格式、长度和 CRC 校验。当前字段中的 `payload_crc32` 是内容校验摘要；如果长期发布合同需要密码学内容 hash，应在明确合同后增加独立字段，不能把 CRC 当作身份 hash。
 

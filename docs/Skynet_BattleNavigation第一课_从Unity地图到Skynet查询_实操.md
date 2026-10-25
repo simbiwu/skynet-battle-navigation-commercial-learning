@@ -3404,7 +3404,7 @@ Writer 使用显式 offset 逐字段写入，目的是让 C# 与 C++ 不依赖�
 
 如果进程在写入中途失败，正式旧文件仍然保留；不能直接打开正式路径边写边覆盖。
 
-Manifest 是观察副产物：人和 CI 可以快速看到地图尺寸、CRC、可走格数与高度范围，但 Server Runtime 不把 JSON 当权威输入。
+Manifest 是观察副产物：人工可以快速看到地图尺寸、CRC、可走格数与高度范围，但 Server Runtime 不把 JSON 当权威输入。
 
 #### Writer 文件学习导航
 
@@ -3697,7 +3697,7 @@ Assets/BattleNavigation/Editor/BMapManifestWriter.cs
 ```
 
 ```csharp
-// 职责：为一次 BMAP 导出生成便于人和 CI 审查的 JSON 摘要。
+// 职责：为一次 BMAP 导出生成便于人工审查的 JSON 摘要。
 // 边界：Unity Editor Review Artifact；Server Runtime 不读取 Manifest。
 // 输入/输出：Snapshot + BMAP 校验信息 -> JSON 文件。
 // 不负责：不影响 BMAP 合法性，不作为 Runtime 数据源。
@@ -3707,7 +3707,7 @@ using UnityEngine;
 
 namespace BattleNavigation.Editor
 {
-    /// <summary>生成供人和 CI Review 的 JSON 摘要；Server Runtime 不读取它。</summary>
+    /// <summary>生成供人工 Review 的 JSON 摘要；Server Runtime 不读取它。</summary>
     public static class BMapManifestWriter
     {
         [Serializable]
@@ -3791,7 +3791,7 @@ namespace BattleNavigation.Editor
 }
 ```
 
-JSON Manifest 供人和 CI 查看，不参与 Server Runtime 加载。它让 Reviewer 不打开二进制也能看到地图版本、尺寸、CRC、可走格数量和高度范围。Server 的权威输入只有通过校验的 BMAP。
+JSON Manifest 供人工查看，不参与 Server Runtime 加载。它让 Reviewer 不打开二进制也能看到地图版本、尺寸、CRC、可走格数量和高度范围。Server 的权威输入只有通过校验的 BMAP。
 
 本节先保证两个 Writer 文件编译通过，不要手工调用 `BMapWriter.Write()` 拼一个 Scene 路径；下一节由唯一 Exporter 统一组织输出目录和调用顺序。
 
@@ -4547,7 +4547,7 @@ Window -> General -> Test Runner -> EditMode -> Run All
 
 ```text
 Unity Bake 候选输出：<仓库根目录>/shared/navigation/battle_1001/battle_1001.bmap
-人工/CI 审查旁路：<同目录>/battle_1001.manifest.json
+人工审查旁路：<同目录>/battle_1001.manifest.json
 Server 已发布输入：拉取同一 Git 提交后得到的上述两个文件
 ```
 
@@ -4572,7 +4572,7 @@ sha256sum shared/navigation/battle_1001/battle_1001.bmap
 git diff -- shared/navigation/battle_1001
 ```
 
-Manifest 便于人和 CI 审查，Runtime Loader 不依赖它。BMAP 才是 Server 权威输入，但两者必须成对提交，避免 Reviewer 看见的版本说明与二进制不一致。
+Manifest 便于人工审查，Runtime Loader 不依赖它。BMAP 才是 Server 权威输入，但两者必须成对提交，避免 Reviewer 看见的版本说明与二进制不一致。
 
 新 Scene 的 `mapId=1002` 时，Exporter 写入独立的 `shared/navigation/battle_1002/`。Server 还必须显式增加对应地图配置，不能让新文件名悄悄替换 `battle_1001`。Server 不加载 `.unity`、GameObject、NavMeshAgent、Rigidbody 或 Animator。
 
@@ -6935,7 +6935,7 @@ git submodule status
 ./scripts/linux/run_server.sh doctor
 ```
 
-`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua` 和 `gateway/tools/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向主仓库内的 FlyWow 子模块，但这不会改变主仓库的 gitlink，发布和 CI 仍使用固定 submodule。
+`git submodule status` 前面的提交号必须与主仓库提交记录一致；`doctor` 必须能找到 `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua` 和 `gateway/tools/generate_gateway_registry.py`。本地正在开发 FlyWow 时，可以临时设置 `FLYWOW_ROOT` 指向主仓库内的 FlyWow 子模块，但这不会改变主仓库的 gitlink，发布始终使用固定 submodule。
 
 同一进程需要多个监听端口时，不复制 Gateway 代码。由 composition root 多次调用 `skynet.newservice("flywow_gateway")`，为每个 Service 传入不同 `port`、`transport` 和业务 `handler_service`；每个实例拥有独立 Lua State、监听 fd、连接表和生命周期。主 Service 必须保存这些 handle，并在停服时分别调用 `stop`。
 
