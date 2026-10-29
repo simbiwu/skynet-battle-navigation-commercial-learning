@@ -14,22 +14,46 @@ skynet.start(function()
         skynet.newservice("debug_console", debug_console_port)
     end
     
-    assert(frame_native.preload(frame_sync_config.map_path, frame_sync_config.airnav_path, frame_sync_config.unit_profiles, frame_sync_config.navigation_profiles, frame_sync_config.skills), "FRAME_ASSET_PRELOAD_FAILED")
+    local preload_result = frame_native.preload(
+        frame_sync_config.map_path,
+        frame_sync_config.airnav_path,
+        frame_sync_config.unit_profiles,
+        frame_sync_config.navigation_profiles,
+        frame_sync_config.skills
+    )
+    if preload_result ~= true then
+        skynet.error("FRAME_BATTLE_START_FAILED asset preload")
+        skynet.abort()
+        return
+    end
     local dispatch = skynet.newservice("battle/frame_sync/dispatch")
-    assert(skynet.call(dispatch, "lua", "ready"))
+    if skynet.call(dispatch, "lua", "ready") ~= true then
+        skynet.error("FRAME_BATTLE_START_FAILED dispatcher is not ready")
+        skynet.abort()
+        return
+    end
     cluster.reload({ [frame_sync_config.gateway_node] = frame_sync_config.gateway_address,
                      [frame_sync_config.battle_node] = frame_sync_config.battle_address })
                      
     cluster.open(frame_sync_config.battle_node, 64) -- 参数是Node名称，不是host:port。
     cluster.register("frame_dispatch", dispatch)
     local shutdown_coordinator = skynet.newservice("admin/lesson3_shutdown_coordinator")
-    assert(skynet.call(shutdown_coordinator, "lua", "configure", {
+    local configure_result = skynet.call(shutdown_coordinator, "lua", "configure", {
         profile = "frame_sync",
         role = "battle",
         endpoint = "frame_battle_shutdown",
         dispatcher = dispatch,
-    }))
-    assert(skynet.call(shutdown_coordinator, "lua", "ready"))
+    })
+    if type(configure_result) ~= "table" or not configure_result.ok then
+        skynet.error("FRAME_BATTLE_START_FAILED shutdown coordinator configuration")
+        skynet.abort()
+        return
+    end
+    if skynet.call(shutdown_coordinator, "lua", "ready") ~= true then
+        skynet.error("FRAME_BATTLE_START_FAILED shutdown coordinator is not ready")
+        skynet.abort()
+        return
+    end
 
     skynet.error("FRAME_BATTLE_READY node=", frame_sync_config.battle_node, " map=", frame_sync_asset_config.map_id)
     skynet.exit()

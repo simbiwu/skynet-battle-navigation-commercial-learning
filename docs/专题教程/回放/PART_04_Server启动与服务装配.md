@@ -782,20 +782,36 @@ server/service/gateway/gateway_main.lua
 ~~~lua
 local proxy_service =
     skynet.newservice("gateway/gateway_proxy")
-assert(skynet.call(proxy_service, "lua", "start"))
+local proxy_start_result = skynet.call(proxy_service, "lua", "start")
+if not proxy_start_result.ok then
+    skynet.error("Gateway Proxy 启动失败：", proxy_start_result.code, " ", proxy_start_result.message)
+    skynet.abort()
+    return
+end
 
 local gateway_service =
     skynet.newservice("flywow_gateway")
-assert(skynet.call(proxy_service, "lua", "bind_gateway", {
+local binding_result = skynet.call(proxy_service, "lua", "bind_gateway", {
     gateway_service = gateway_service,
-}))
+})
+if not binding_result.ok then
+    skynet.error("Gateway 绑定失败：", binding_result.code, " ", binding_result.message)
+    skynet.abort()
+    return
+end
 
-local gateway = assert(skynet.call(gateway_service, "lua", "start", {
+local gateway_start_result = skynet.call(gateway_service, "lua", "start", {
     handler_service = proxy_service,
     host = config.host,
     port = config.port,
     transport = config.transport,
-}))
+})
+if not gateway_start_result.ok then
+    skynet.error("FlyWow Gateway 启动失败：", gateway_start_result.code, " ", gateway_start_result.message)
+    skynet.abort()
+    return
+end
+local gateway = gateway_start_result.value
 ~~~
 
 Proxy 先启动，FlyWow Gateway 后绑定，是因为客户端入口必须先有可用的 Battle 转发目标。
@@ -883,12 +899,17 @@ command_id
 ### 12.4 最后绑定 19011
 
 ~~~lua
-skynet.call(gateway_service, "lua", "start", {
+local gateway_start_result = skynet.call(gateway_service, "lua", "start", {
     handler_service = proxy_service,
     host = config.host,
     port = config.port,
     transport = config.transport,
 })
+if not gateway_start_result.ok then
+    skynet.error("FlyWow Gateway 启动失败：", gateway_start_result.code, " ", gateway_start_result.message)
+    skynet.abort()
+    return
+end
 ~~~
 
 当前配置：

@@ -16,7 +16,7 @@
 | 6 | server/service/gateway/gateway_proxy.lua：dispatch_remote | 将 gateway_epoch、connection_id、command_id 和业务数据转发；cluster.send 后立即返回 |
 | 7 | `server/service/battle/battle_dispatch.lua`：`forward_result`、`dispatch_gateway` | 调 Query 或 BattleMgr，业务处理可以 yield；完成后反向 cluster.send |
 | 8 | Proxy：receive_battle_result、reply_entry | 接收按 command 编码的业务 response，context:reply 单向投递 Gateway |
-| 9 | FlyWow：`deliver_response` | 核对 handler 来源、实例与连接；按 command 编码，一次完整消息写入 |
+| 9 | FlyWow：`deliver_outbound_message` | 核对 handler 来源、实例与连接；按 command 编码，一次完整消息写入 |
 | 10 | FlyWow：`detach`、`timeout_loop`；Proxy：`disconnected`、`expire_pending` | 网络读超时与项目返回路由过期分属两层，均不等待业务协程 |
 
 WebSocket 由 pinned Skynet 的 `http.websocket` 完成 Upgrade、mask、fragment 和 binary 消息拼接，再进入同一个 `dispatch_payload`。WS 握手前就计入连接上限；拒绝尚未 socket.start 的 accepted fd 使用 `socket.close_fd`，已经接管的连接使用 transport 关闭路径。
@@ -65,7 +65,7 @@ FlyWow 的 endpoint 提供薄的响应上下文，不接管既有 dispatch，不
 ## 失败与资源
 
 - 协议损坏、未知命令、网络读超时、速率超限和持续写缓冲增长按网络策略关闭连接。
-- 业务失败和响应编码失败不关闭健康连接，不阻止后续读取。
+- 业务失败和响应编码失败不关闭健康连接，不阻止后续读取。Gateway 内部可预期失败及 start/stop、配置等 Service 操作均按 FlyWowResult 返回，错误码用于流程分支，message 只用于诊断；ready 等谓词返回自然 boolean。
 - Proxy 发送失败和 Battle 错误映射为对应 command 的已登记响应类型；Gateway 编码和投递不依赖 request_id。
 - 断线后迟到响应由 Gateway 按 gateway_epoch/connection_id 丢弃；重复、迟到或旧实例结果不会投递到新连接，不自动撤销已经接纳的业务。
 - Gateway 实例身份与不复用的连接编号防止误投；fd 不进入业务合同。

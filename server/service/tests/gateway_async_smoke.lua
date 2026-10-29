@@ -57,7 +57,8 @@ skynet.start(function()
         gateway_config.write_warning_close_kb = 64
         gateway_config.max_pending_handshakes = 2
         gateway_config.handshake_timeout_ticks = 100
-        skynet.call(gateway, "lua", "start", gateway_config)
+        local start_result = skynet.call(gateway, "lua", "start", gateway_config)
+        assert(start_result.ok, start_result.message)
     end
     skynet.error("GATEWAY_ASYNC_SMOKE_READY")
 end)

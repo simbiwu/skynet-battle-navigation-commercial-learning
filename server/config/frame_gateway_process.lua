@@ -17,6 +17,7 @@ lualoader = "./third_party/skynet/lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            "./third_party/skynet/lualib/?.lua;" ..
            "./third_party/skynet/lualib/?/init.lua;" ..
+           "./third_party/skynet-flywow/common/lualib/?.lua;" ..
            "./third_party/skynet-flywow/gateway/lualib/?.lua;" ..
            "./third_party/skynet-flywow/gateway/lualib/?/init.lua;" ..
            "./third_party/skynet-flywow/logger/lualib/?.lua"

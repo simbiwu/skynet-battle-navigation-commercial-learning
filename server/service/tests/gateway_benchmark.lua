@@ -37,7 +37,7 @@ skynet.start(function()
         })
     end)
     gateway = skynet.newservice("flywow_gateway")
-    skynet.call(gateway, "lua", "start",
+    local start_result = skynet.call(gateway, "lua", "start",
     {
         handler_service = ".gw_benchmark",
         transport = skynet.getenv("bench_transport") or "tcp",
@@ -59,5 +59,6 @@ skynet.start(function()
             skynet.error(string.format("BENCH_STATS clients=%d sent=%d dropped=%d lua_kib=%.1f handler_kib=%.1f",
                 stats.clients, stats.responses_sent, stats.responses_dropped, lua_kib, handler_kib))
         end
+    assert(start_result.ok, start_result.message)
     end)
 end)

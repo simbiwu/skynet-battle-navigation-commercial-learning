@@ -4,7 +4,7 @@
 
 Gateway和客户端SDK完成P-256密钥交换、32字节随机挑战、HKDF-SHA256和双向HMAC-SHA256证明，完成后进入ready。合法客户端指成功完成协议握手的客户端，不附带账号授权。无需登录、宿主会话表或Watchdog。业务Service继续使用D039异步收发。
 
-不增加包头加密、CRC、逐包HMAC、账号或自动重连。Envelope和业务协议版本3不变；连接协议不兼容旧客户端，双端一起更新，不自动降级。
+不增加包头加密、CRC、逐包HMAC、账号或自动重连。Envelope和业务协议版本4不变；连接协议不兼容旧客户端，双端一起更新，不自动降级。
 
 ```text
 接纳连接 -> CLIENT_HELLO -> SERVER_CHALLENGE -> CLIENT_PROOF -> SERVER_READY
@@ -51,9 +51,15 @@ HKDF为Extract+Expand；不得把平台默认散列式ECDH结果当成Z。没有
 - Native擦除敏感数组；Unity托管私钥与Web Crypto内部内存由平台回收，不保证内部副本零残留。
 - disconnect合同保持现状，包括握手失败连接；handler应允许从未收到请求的连接断开。
 
+## Lua 返回值与 Native 错误边界
+
+Gateway 内部需要向调用方报告预期失败的模块 API 使用 FlyWowResult<T>：ok=true 时读取 value，ok=false 时依据稳定 code 分支，message/details 只用于诊断。registry.build_index、codec.new/decode_envelope/decode_request/encode_response 和握手 new/accept/receive/confirm 都遵循这份合同；谓词仍返回 boolean，find_command 的未知命令仍以 nil 表示正常的查找未命中。
+
+Native Lua Binding 保留其跨 C ABI 合同：成功返回值按原生形式返回，失败返回 nil, { code, message }。握手 Lua 模块在 Native 边界检查这两个返回值并转换成 FlyWowResult。Gateway Service 的 start、stop、配置命令和同步调用错误均通过 Skynet RPC 返回 FlyWowResult；ready 等谓词保持 boolean。生产实现不使用 assert 或 error 报告普通校验/运行失败；意外 Native C++ 异常也在 Lua C ABI 内转换为错误记录。
+
 ## 构建与接入
 
-本次未授权commit/push。Server在WSL、框架在独立编辑源修改，固定submodule gitlink未更新；开发运行显式指定框架：
+Server、Gateway宿主配置和课程文档以主仓库WSL工作区为编辑源；FlyWow实现及模块文档在主仓库的固定submodule内维护。FlyWow代码提交并推送后，主仓库再更新gitlink并提交推送。Gateway运行时通过进程 lua_path 加载 common/lualib/flywow_result.lua，与 Gateway 自身模块使用同一 FlyWowResult<T> 合同：
 
 ```bash
 cd ~/workspace/skynet-battle-navigation-commercial-learning/server
@@ -95,7 +101,7 @@ Windows的Tools/GatewayHandshakeInterop.csproj编译真实客户端源码；.NET
 
 ## 阅读与审计
 
-继续读Gateway的accept_client、run_tcp、dispatch_payload、deliver_response。process_handshake只是接入门槛；状态机和密码细节分别在handshake.lua和Native绑定中。业务主线继续异步投递和独立回包。
+继续读Gateway的accept_client、run_tcp、dispatch_payload、deliver_outbound_message。process_handshake只是接入门槛；状态机和密码细节分别在handshake.lua和Native绑定中。业务主线继续异步投递和独立回包。
 
 审计修正：Lua C ABI、Native失败导入释放、Lua分配longjmp的C++析构边界、Gateway窥视内部阶段、独立模块配置快照/具名参数、H5缺少Crypto时Socket创建顺序、示例假定Protobuf字段顺序。doctor使用固定Lua实际加载Native绑定。原有用户规范/格式修改保留。
 

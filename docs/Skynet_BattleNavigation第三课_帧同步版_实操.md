@@ -3146,17 +3146,32 @@ local skynet = require "skynet"
 local conf = require "config.frame_sync"
 skynet.start(function()
     local proxy = skynet.newservice("gateway/frame_sync/proxy")
-    assert(skynet.call(proxy, "lua", "start"))
+    local proxy_start_result = skynet.call(proxy, "lua", "start")
+    if not proxy_start_result.ok then
+        skynet.error("Frame Proxy 启动失败：", proxy_start_result.code, " ", proxy_start_result.message)
+        skynet.abort()
+        return
+    end
     local gateway = skynet.newservice("flywow_gateway")
-    assert(skynet.call(proxy, "lua", "bind", { gateway = gateway }))
-    assert(skynet.call(gateway, "lua", "start",
+    local binding_result = skynet.call(proxy, "lua", "bind", { gateway = gateway })
+    if not binding_result.ok then
+        skynet.error("Frame Gateway 绑定失败：", binding_result.code, " ", binding_result.message)
+        skynet.abort()
+        return
+    end
+    local gateway_start_result = skynet.call(gateway, "lua", "start",
     {
         handler_service = ".frame_proxy",
         host = "127.0.0.1",
         port = conf.gateway_port,
         transport = "tcp",
         protocol_version = 3,
-    }))
+    })
+    if not gateway_start_result.ok then
+        skynet.error("Frame Gateway 启动失败：", gateway_start_result.code, " ", gateway_start_result.message)
+        skynet.abort()
+        return
+    end
     skynet.error("FRAME_GATEWAY_READY port=", conf.gateway_port)
     skynet.exit()
 end)
