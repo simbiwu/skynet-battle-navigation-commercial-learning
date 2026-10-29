@@ -23,29 +23,7 @@
       "autoReconnect": true,
       "useCHook": false
     },
-    {
-      "type": "lua",
-      "request": "launch",
-      "name": "LuaPanda FlyWow Gateway",
-      "cwd": "${workspaceFolder}/server",
-      "connectionPort": 8820,
-      "stopOnEntry": false,
-      "autoPathMode": true,
-      "autoReconnect": true,
-      "useCHook": false
-    },
      {
-      "type": "lua",
-      "request": "launch",
-      "name": "LuaPanda FlyWow Gateway",
-      "cwd": "${workspaceFolder}/server",
-      "connectionPort": 8820,
-      "stopOnEntry": false,
-      "autoPathMode": true,
-      "autoReconnect": true,
-      "useCHook": false
-    },
-    {
       "type": "lua",
       "request": "launch",
       "name": "battle_dispatch",
@@ -103,7 +81,6 @@
       "configurations": [
         "LuaPanda Lesson1 Gateway",
         "LuaPanda Lesson1 Query",
-        "LuaPanda FlyWow Gateway",
         "battle_dispatch",
         "battle_mgr",
         "work1",

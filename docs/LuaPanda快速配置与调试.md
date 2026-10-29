@@ -146,13 +146,12 @@ LUA_PANDA_ENABLE=1 LUA_PANDA_HOST=127.0.0.1 ./scripts/lessons/lesson2_run_server
 | --- | ---: | --- |
 | Lesson1 Gateway | 8818 | 第二课由 Gateway Proxy Service 连接此 target |
 | Lesson1 Query | 8819 | 第二课 Query Service 复用此 target |
-| FlyWow Gateway | 8820 | FlyWow Gateway Service 入口调用 `luapanda_debug.start(8820)` |
 | `battle_dispatch` | 8821 | Service 入口调用 `luapanda_debug.start(8821)` |
 | `battle_mgr` | 8822 | Service 入口调用 `luapanda_debug.start(8822)` |
 | `work1` | 8823 | 第一个 Worker 由 Manager 分配端口 |
 | `work2` | 8824 | 第二个 Worker 由 Manager 分配端口 |
 
-`LuaPanda Lesson2 Gateway + Battle` compound 包含表中七个 target。Gateway Main 负责创建 Proxy 和 FlyWow Gateway；它会退出，因此 8818 连接在长期运行的 Gateway Proxy Service 中，8820 连接在长期运行的 FlyWow Gateway Service 中。每个目标必须在对应 Service 的 Lua State 内调用 `start(端口)`，并在对应日志中出现 `LUA_PANDA_READY port=...` 后，才算真正连接成功。这里的配置和源码已做静态核对，实际连接和断点命中仍需启动 VS Code target 与双进程验证。
+`LuaPanda Lesson2 Gateway + Battle` compound 包含表中六个 target。Gateway Main 负责创建 Proxy 和 FlyWow Gateway；它会退出，因此 8818 连接在长期运行的 Gateway Proxy Service 中。FlyWow Gateway 不会自行启动 LuaPanda；如需调试，应在其入口按本机需要显式接入调试模块并分配未占用端口。每个目标必须在对应 Service 的 Lua State 内调用 `start(端口)`，并在对应日志中出现 `LUA_PANDA_READY port=...` 后，才算真正连接成功。这里的配置和源码已做静态核对，实际连接和断点命中仍需启动 VS Code target 与双进程验证。
 
 ## 6. 新增 Service 的配置
 

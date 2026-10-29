@@ -6,15 +6,14 @@ return {
     port = 19031,
     backlog = 128,
     transport = "tcp",
-    websocket_protocol = "ws",
     descriptor_path = "../shared/protocol/generated/server/lesson_03_state_sync.pb",
     registry_module = "gateway.protocol.protocol_registry_lesson_03_state_sync",
     protocol_version = 4,
     max_frame_bytes = 0xffff,
+    max_requests_per_second = 200, -- 每连接每秒最多接纳的业务请求数。
+    max_total_requests_per_second = 10000, -- 整个 Gateway 每秒最多接纳的业务请求数。
     read_timeout_ticks = 3000,
     idle_timeout_ticks = 30000,
-    max_requests_per_second = 200,
-    max_total_requests_per_second = 10000,
     max_pending_handshakes = 128,
     handshake_timeout_ticks = 1000,
     max_clients = 1024,

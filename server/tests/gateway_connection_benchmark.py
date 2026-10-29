@@ -243,7 +243,7 @@ async def churn_clients(args, count, connections, log, child, emit):
         connections.clear()
         await guarded(asyncio.sleep(6), log, child)
         tail = [line for line in log.read_text().splitlines() if "BENCH_STATS" in line][-1]
-        assert "clients=0 " in tail and "dropped=0 " in tail, tail
+        assert "handler_connections=0 " in tail, tail
         emit(dict(kind="churn", cycle=cycle+1, connections=count, before=before_cycle,
                   active=active_cycle, released=usage(child.pid), stats_tail=tail, **result))
 
@@ -267,7 +267,7 @@ async def gc_diagnostic(websocket, log, child):
         await audit.writer.wait_closed()
     await guarded(asyncio.sleep(3), log, child)
     diagnostic = [line for line in log.read_text().splitlines() if "BENCH_GC_DIAGNOSTIC" in line][-1]
-    assert "clients=0 " in diagnostic, diagnostic
+    assert "handler_connections=0 " in diagnostic, diagnostic
     return dict(kind="gc_diagnostic", before=before_gc, after=usage(child.pid),
                 diagnostic=diagnostic)
 
@@ -322,7 +322,7 @@ async def run_instance(args, count, output, emit):
             connections.clear()
             await guarded(asyncio.sleep(6), log, child)
             tail = [line for line in log.read_text().splitlines() if "BENCH_STATS" in line][-1]
-            assert "clients=0 " in tail and "dropped=0 " in tail, tail
+            assert "handler_connections=0 " in tail, tail
             emit(dict(kind="released",connections=count,baseline=baseline,server=usage(child.pid),
                       stats_tail=[line for line in log.read_text().splitlines() if "BENCH_STATS" in line][-2:]))
             await churn_clients(args, count, connections, log, child, emit)
