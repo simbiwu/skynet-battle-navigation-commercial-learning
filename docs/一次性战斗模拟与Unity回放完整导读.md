@@ -111,7 +111,7 @@ Protobuf Envelope
 - `server/third_party/skynet-flywow/gateway/clients/unity/FlyWowHandshake.cs`：Unity 端 SDK 握手。
 - `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`：服务端接入、TCP/WS 帧读取、握手和业务派发。
 - `server/third_party/skynet-flywow/gateway/lualib/codec.lua`：使用加载后的 descriptor 解码 Envelope/Request，并编码 Response。
-- `server/third_party/skynet-flywow/gateway/lualib/registry.lua` 与 `server/lualib/gateway/protocol/protocol_registry_lesson_02.lua`：命令号到请求/响应 Protobuf 类型的映射与校验。
+- `server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py` 与 `server/lualib/gateway/protocol/protocol_registry_lesson_02.lua`：构建期生成命令号到请求/响应 Protobuf 类型的映射，Gateway 启动时只读校验后直接使用。
 
 注意：ProtoBuf 负责把有类型的字段编码成 bytes；它不负责 TCP 分帧、连接、重试、Battle 路由或播放。长度帧负责字节边界；Envelope 负责通用协议头；body 才是具体业务消息。
 

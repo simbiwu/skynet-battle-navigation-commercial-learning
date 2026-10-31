@@ -53,7 +53,7 @@ HKDF为Extract+Expand；不得把平台默认散列式ECDH结果当成Z。没有
 
 ## Lua 返回值与 Native 错误边界
 
-Gateway 内部需要向调用方报告预期失败的模块 API 使用 FlyWowResult<T>：ok=true 时读取 value，ok=false 时依据稳定 code 分支，message/details 只用于诊断。registry.build_index、codec.new/decode_envelope/decode_request/encode_response 和握手 new/accept/receive/confirm 都遵循这份合同；谓词仍返回 boolean，find_command 的未知命令仍以 nil 表示正常的查找未命中。
+Gateway 内部需要向调用方报告预期失败的模块 API 使用 FlyWowResult<T>：ok=true 时读取 value，ok=false 时依据稳定 code 分支，message/details 只用于诊断。Gateway 启动时只读校验生成的 Registry，codec.new/decode_envelope/decode_request/encode_response 和握手 new/accept/receive/confirm 都遵循这份合同；谓词仍返回 boolean，commands[command_id] 的未知命令仍以 nil 表示正常的查找未命中。
 
 Native Lua Binding 保留其跨 C ABI 合同：成功返回值按原生形式返回，失败返回 nil, { code, message }。握手 Lua 模块在 Native 边界检查这两个返回值并转换成 FlyWowResult。Gateway Service 的 start、stop、配置命令和同步调用错误均通过 Skynet RPC 返回 FlyWowResult；ready 等谓词保持 boolean。生产实现不使用 assert 或 error 报告普通校验/运行失败；意外 Native C++ 异常也在 Lua C ABI 内转换为错误记录。
 

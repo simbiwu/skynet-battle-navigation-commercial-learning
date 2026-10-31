@@ -1,4 +1,7 @@
 #!/usr/bin/env bash
+# 第一行 shebang 告诉系统用 Bash 解释本文件；也可显式运行 bash 加脚本路径。
+# 调用：可从任意当前工作目录启动；脚本按自身路径定位工程目录。外部相对路径参数按调用时目录解析，建议传绝对路径。
+# 示例：bash /absolute/path/to/checkout/server/scripts/lessons/manage_lesson_processes.sh [按本文件头部说明填写参数]
 # 职责：统一管理各课 PID、日志、READY、状态与停止；第二课及第三课使用 Cluster shutdownctl 做业务收尾。
 # 课程：lesson1、lesson2、lesson3-state-sync、lesson3-frame-sync 各自使用隔离配置、READY 标记和 PID/log 路径。
 # 调用：由 lessonN_run_server.sh 转发 start|stop|restart|status|doctor [--gateway|--battle]。
@@ -8,16 +11,42 @@
 # 关闭：Lesson 2/3 先调用进程内协调器；默认无限等待，正数超时到达后仅向所选业务进程发 SIGTERM，随后仍等待退出。Lesson 1 无协调器，直接 SIGTERM 后等待退出。
 # 兼容：run_lesson_02_processes.sh 仅把旧调用转发到本管理器，不再实现第二份进程逻辑。
 set -euo pipefail
+# Bash 语法速读：只解释本脚本实际使用的 Bash 写法；流程注释说明每一步为什么执行。
+#   set -euo pipefail：-e 遇到未处理的失败通常退出，但条件判断、&& 和 || 等位置有例外，关键失败仍应显式检查；-u 遇到未设置变量时报错（提供默认值展开时除外）；pipefail 让管道任一步失败都能向外报告。
+#   双引号中的 "$NAME" 把变量值作为一个完整参数；路径含空格时不会拆成多个参数。
+#   $(命令)运行命令并用标准输出替换当前位置；命令在子 Shell 中运行，里面的 cd 不改变主脚本目录。
+#   NAME:-默认值展开：变量未设置或为空字符串时使用默认值。
+#   NAME:?错误说明展开：必需变量未设置或为空时显示说明并以非零状态失败。
+#   间接展开：先把变量的值当作另一个变量名，再读取那个变量的值。
+#   "$@"逐个保留所有位置参数；双引号防止参数中的空格被拆开。
+#   $#表示参数个数，$1/$2依次表示传入的第一个/第二个参数。
+#   shift 丢弃第一个位置参数，其余参数向前移动一位。
+#   [[ 条件 ]]执行 Bash 条件判断；-f检查普通文件，-d检查目录，-x检查可执行文件，-s检查非空文件，-e检查存在的路径，-n检查非空字符串。
+#   case ... in 按输入匹配分支；分支以 ) 开始、;;结束，*)是兜底分支。
+#   name() { ...; }定义函数；调用函数名即可执行函数体。
+#   local 声明函数内部临时变量；函数返回后恢复调用者同名变量的值。
+#   for/while ... do ... done 重复执行循环体；列表或条件决定循环何时结束。
+#   name=(...)创建 Bash 数组；数组的 @ 展开逐项传参并保留每个元素边界。
+#   单竖线 | 把左侧标准输出交给右侧；它不同于条件运算符 ||。
+#   >把输出写入并覆盖文件；2>&1把标准错误接到标准输出当前去向。
+#   命令末尾的 & 在后台启动进程；$!取得最近后台进程 PID，wait 等待它并收取退出码。
+#   exec 用目标命令替换当前 Shell；外层不再执行后续语句，退出状态由目标命令决定。
 SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
 SERVER_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd)"
 SKYNET="$SERVER_ROOT/third_party/skynet/skynet"
+# ${变量:?错误说明} 要求变量已设置且非空；缺失时 Bash 显示错误并停止，避免管理错误课程的进程。课程入口会设置 LESSON_PROCESS_PROFILE。
 PROFILE="${LESSON_PROCESS_PROFILE:?必须由课程入口设置 LESSON_PROCESS_PROFILE}"
+# ${变量:-默认值} 在未设置或空值时使用默认值；例如未设置启动超时则 START_TIMEOUT=20 秒。
 START_TIMEOUT="${LESSON_STARTUP_TIMEOUT_SEC:-20}"
+# 未设置停止超时时 STOP_TIMEOUT=0，表示不启用超时回退；例如 LESSON_STOP_TIMEOUT_SEC=30 时采用 30 秒。
 STOP_TIMEOUT="${LESSON_STOP_TIMEOUT_SEC:-0}"
 DO_GATEWAY=0
 DO_BATTLE=0
+# $1 是动作参数；省略时用 help。例：start 会进入启动分支，不传参数显示帮助。
 ACTION="${1:-help}"
 if [[ $# -gt 0 ]]; then shift; fi
+# profile 选择不同课程配置；ROLES、CONFIG_*, MARKER_*、LOGGER_* 共同描述该配置要管理的进程。
+# Bash 的 name=(...) 创建数组，ROLES=(battle gateway) 表示两个可独立启动/停止的角色。
 case "$PROFILE" in
  lesson1)
    RUN_KEY=lesson1; ROLES=(server); CONFIG_server=skynet.lua; MARKER_server=NAV_SERVER_READY; LOGGER_server=server ;;
@@ -37,6 +66,7 @@ case "$PROFILE" in
 esac
 RUN_DIR="$SERVER_ROOT/run/$RUN_KEY"
 CAPTURE_DIR="$SERVER_ROOT/logs/$RUN_KEY"
+# 下面的函数只读状态或管理子进程；pid_file/capture_file 返回路径文本供调用者保存。
 usage() {
  cat <<USAGE
 用法：lessonN_run_server.sh start|stop|restart|status|doctor [--gateway|--battle]
@@ -51,9 +81,12 @@ fail(){ log "ERROR: $*"; exit 1; }
 [[ "$STOP_TIMEOUT" =~ ^[0-9]+$ ]] || fail "LESSON_STOP_TIMEOUT_SEC 必须是非负整数"
 pid_file(){ printf '%s/%s.pid' "$RUN_DIR" "$1"; }
 capture_file(){ printf '%s/%s.log' "$CAPTURE_DIR" "$1"; }
+# config_of/marker_of/logger_of 按角色名拼出字段名；${!key} 间接读取该字段的值。
 config_of(){ local key="CONFIG_$1"; printf '%s' "${!key}"; }
 marker_of(){ local key="MARKER_$1"; printf '%s' "${!key}"; }
 logger_of(){ local key="LOGGER_$1"; printf '%s' "${!key}"; }
+# read_pid 把有效 PID 写到标准输出；文件不存在/进程已退出时返回 1，格式或归属错误则 fail。
+# 调用方可用 p="$(read_pid role)" 捕获输出；命令替换中的局部变量不会改动主脚本变量。
 read_pid(){
  local role="$1" f p conf
  f="$(pid_file "$role")"; [[ -s "$f" ]] || return 1
@@ -63,6 +96,8 @@ read_pid(){
  ps -p "$p" -o args= | grep -F -- "$conf" >/dev/null || fail "PID $p 不属于配置 $conf"
  printf '%s\n' "$p"
 }
+# start_role 启动一个 Skynet 角色，并创建 PID、输出捕获文件和本次启动日志 offset 记录。
+# & 把 Skynet 放入后台，$! 立刻给出该进程 PID；Shell 本身继续运行 READY 检查。
 start_role(){
  local role="$1" p f c logger day offset
  f="$(pid_file "$role")"; c="$(config_of "$role")"; logger="$(logger_of "$role")"
@@ -76,6 +111,8 @@ start_role(){
  p=$!; printf '%s\n' "$p" > "$f"
  log "STARTING role=$role pid=$p capture=$(capture_file "$role")"
 }
+# await_ready 从保存的日志偏移处查找本次启动的 READY 标记；旧日志中的同名标记不算成功。
+# for ((...)) 是 Bash 整数循环；START_TIMEOUT=0 时条件允许循环持续等待，不设启动期限。
 await_ready(){
  local role="$1" p f marker logger day offset i
  f="$(pid_file "$role")"; p="$(read_pid "$role")" || fail "$role 启动后立即退出"
@@ -111,6 +148,8 @@ SHUTDOWNCTLPID=""
 stop_timed_out(){
  ((STOP_TIMEOUT > 0 && SECONDS - STOP_STARTED_AT >= STOP_TIMEOUT))
 }
+# run_shutdownctl 用 sed 生成一次性 Admin 配置并启动 Skynet；返回 0=收到成功标记、2=控制器失败/异常退出、1=超时。
+# 配置写入由 > 覆盖文件；随后通过后台进程日志等待确认，不让控制器占用业务角色 PID。
 run_shutdownctl(){
  local profile_name="$1" target="$2"
  local f="$RUN_DIR/shutdownctl_${target}.lua"
@@ -140,6 +179,7 @@ run_shutdownctl(){
    sleep 1
  done
 }
+# wait_for_pids 逐个检查传入的目标 PID；全部退出才返回 0，显式停止期限到达返回 1。
 wait_for_pids(){
  local p any_running
  while :; do
@@ -152,6 +192,8 @@ wait_for_pids(){
    sleep 1
  done
 }
+# stop_roles 先收集仍运行的角色和 PID，再请求业务优雅关闭；需要回退时只向这批 PID 发送 SIGTERM。
+# active_roles 与 active_pids 是并行数组：相同下标分别保存角色名和其 PID，顺序保持一致。
 stop_roles(){
  local profile_name="" role p ctl_status=0 graceful_target=""
  local -a active_roles=() active_pids=()
@@ -193,6 +235,7 @@ stop_roles(){
  for role in "${active_roles[@]}"; do rm -f "$(pid_file "$role")"; log "STOPPED role=$role"; done
 }
 
+# doctor 只检查可启动所需的 Skynet、配置和课程文件，不启动或停止进程。
 doctor(){
  [[ -x "$SKYNET" ]] || fail "Skynet 不可执行：$SKYNET；先运行 Server build"
  for role in "${ROLES[@]}"; do [[ -f "$SERVER_ROOT/config/$(config_of "$role")" ]] || fail "配置缺失：$(config_of "$role")"; done
@@ -208,6 +251,7 @@ doctor(){
  fi
  log "DOCTOR_OK configs=${ROLES[*]}"
 }
+# 根据命令行选项决定 roles 数组；未选角色时默认同时选 Gateway 与 Battle。
 select_roles(){
  if [[ "$PROFILE" == lesson1 ]]; then DO_BATTLE=1; return; fi
  if ((DO_GATEWAY==0 && DO_BATTLE==0)); then DO_GATEWAY=1; DO_BATTLE=1; fi
@@ -217,6 +261,7 @@ case "$ACTION" in
 esac
 # 只有实际管理动作才创建本机运行状态与诊断日志目录；help 不产生文件系统副作用。
 mkdir -p "$RUN_DIR" "$CAPTURE_DIR"
+# 参数处理逐个读取 "$1"；每轮末尾 shift 消耗已处理选项，直到 $# 变为 0。
 while [[ $# -gt 0 ]]; do
  case "$1" in --gateway) DO_GATEWAY=1 ;; --battle) DO_BATTLE=1 ;; *) usage >&2; fail "未知参数：$1" ;; esac
  shift

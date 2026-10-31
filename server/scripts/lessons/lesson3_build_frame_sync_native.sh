@@ -1,8 +1,9 @@
 #!/usr/bin/env bash
+# 第一行 shebang 告诉系统用 Bash 解释本文件；也可显式运行 bash 加脚本路径。
 # 职责：构建帧同步 Native Core、Lua Binding、Gateway 握手 Native 与原生测试程序。
-# 调用：cd server 后执行 ./scripts/lessons/lesson3_build_frame_sync_native.sh；也可从任意目录调用绝对路径。
+# 调用：可从任意目录用脚本绝对路径启动；FRAME_SYNC_SOURCE_DIR 和 FRAME_SYNC_BUILD_DIR 的相对值以 server/ 为基准。
 # 常规构建不需要设置环境变量；下面列出的变量都是可选覆盖项，不是脚本位置参数。
-# 临时覆盖示例：FRAME_SYNC_BUILD_TYPE=Debug ./scripts/lessons/lesson3_build_frame_sync_native.sh
+# 临时覆盖示例：FRAME_SYNC_BUILD_TYPE=Debug bash /path/to/server/scripts/lessons/lesson3_build_frame_sync_native.sh
 # 该写法只向这次脚本调用传值；也可先 export FRAME_SYNC_BUILD_TYPE=Debug 再运行脚本。
 # 环境变量：
 #   FRAME_SYNC_CMAKE：CMake 可执行文件，默认 cmake。
@@ -23,6 +24,16 @@
 # pipefail：如果后续命令使用管道，管道中任一命令失败都会使整条管道失败。
 set -euo pipefail
 
+# Bash 语法速读：只解释本脚本实际使用的 Bash 写法；流程注释说明每一步为什么执行。
+#   set -euo pipefail：-e 遇到未处理的失败通常退出，但条件判断、&& 和 || 等位置有例外，关键失败仍应显式检查；-u 遇到未设置变量时报错（提供默认值展开时除外）；pipefail 让管道任一步失败都能向外报告。
+#   双引号中的 "$NAME" 把变量值作为一个完整参数；路径含空格时不会拆成多个参数。
+#   $(命令)运行命令并用标准输出替换当前位置；命令在子 Shell 中运行，里面的 cd 不改变主脚本目录。
+#   NAME:-默认值展开：变量未设置或为空字符串时使用默认值。
+#   [[ 条件 ]]执行 Bash 条件判断；-f检查普通文件，-s检查非空文件。
+#   case ... in 按输入匹配分支；分支以 ) 开始、;;结束，*)是兜底分支。
+#   name() { ...; }定义函数；调用函数名即可执行函数体。
+#   单竖线 | 把左侧标准输出交给右侧；它不同于条件运算符 ||。
+#   >把输出写入并覆盖文件；2>&1把标准错误接到标准输出当前去向。
 # 由脚本自身的位置定位目录，不依赖调用者当前所在目录。
 # SCRIPT_DIR 是 server/scripts/lessons；向上两级得到 server/ 根目录。
 SCRIPT_DIR="$(cd -- "$(dirname -- "$0")" && pwd)"
@@ -33,7 +44,8 @@ FLYWOW_BUILD_SCRIPT="$SERVER_ROOT/third_party/skynet-flywow/scripts/build_flywow
 SKYNET_ROOT="$SERVER_ROOT/third_party/skynet"
 GATEWAY_NATIVE_OUTPUT="$SERVER_ROOT/third_party/skynet-flywow/build/native/flywow_gateway_crypto.so"
 
-# 调用者可通过 FRAME_SYNC_* 环境变量覆盖默认值；${NAME:-default} 表示变量未设置或为空时采用 default。
+# 调用者可通过 FRAME_SYNC_* 环境变量覆盖默认值；${NAME:-default} 在变量未设置或为空时采用 default。
+# 例如 FRAME_SYNC_BUILD_TYPE=Debug bash ... 会把 BUILD_TYPE 设为 Debug；不设置时使用 Release。
 # 左侧变量是脚本内部使用的名称；下面取出的值会在末尾转换成 CMake 参数。
 # FRAME_SYNC_CMAKE 选择 CMake 可执行文件，默认从 PATH 中查找 cmake。
 CMAKE_BIN="${FRAME_SYNC_CMAKE:-cmake}"

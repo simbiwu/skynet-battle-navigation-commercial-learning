@@ -49,7 +49,7 @@ accept_client
 read_exact
   -> dispatch_payload
   -> codec.decode_envelope
-  -> registry.find_command
+  -> module_state.registry.commands[command_id]
   -> codec.decode_request
   -> skynet.send(handler, "gateway_dispatch", payload)
   -> gateway_proxy.dispatch_remote
@@ -64,7 +64,7 @@ read_exact
 
 ## Result 与错误边界
 
-Gateway 内部和 Service 的 start/stop、配置及同步操作统一以 FlyWowResult<T> 报告可预期失败；调用方先检查 ok，再读取 value 或稳定 code。ready、expired 等谓词继续返回 boolean，find_command 未命中仍是正常的 nil。Native Lua Binding 保留 nil, {code, message} 原生合同，由握手模块转换为 FlyWowResult。生产实现不以 assert 或 error 表示普通输入/运行失败；测试断言仍可使用 assert。
+Gateway 内部和 Service 的 start/stop、配置及同步操作统一以 FlyWowResult<T> 报告可预期失败；调用方先检查 ok，再读取 value 或稳定 code。ready、expired 等谓词继续返回 boolean，生成表的 commands[command_id] 未命中仍是正常的 nil。Native Lua Binding 保留 nil, {code, message} 原生合同，由握手模块转换为 FlyWowResult。生产实现不以 assert 或 error 表示普通输入/运行失败；测试断言仍可使用 assert。
 
 ## 读代码时先回答的四个问题
 
