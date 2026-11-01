@@ -2098,28 +2098,24 @@ int closeEngine(lua_State *state)
 
 extern "C" int luaopen_lesson_frame_native(lua_State *state)
 {
-    LuaBinding lua(state);
-    LuaTable   meta;
-
-    // setFunction 由通用 Binding 管理 closure/upvalue 和临时栈；此处只组合公开 Lua 方法。
-    auto methods = lua.newTable();
-    methods.setFunction("step_frame", stepFrame);
-    methods.setFunction("save", saveEngine);
-    methods.setFunction("restore", restoreEngine);
-    methods.setFunction("identity", identity);
-    methods.setFunction("close", closeEngine);
-
-    if (!lua.registerUserdata<Owner>(kUserdataType, meta))
-        return lua.pushError();
-    // 注册成功后才把方法表绑定到 userdata 类型，提供 Lua 冒号调用入口。
-    meta.writeValue("__index", methods);
-
-    // 模块 table 只导出资产预加载与 Engine 创建两个构造阶段 API。
-    auto module = lua.newTable();
-    module.setFunction("preload", preloadAssets);
-    module.setFunction("open", openEngine);
-
-    return lua.returnValues(module);
+    static const luaL_Reg methods[] =
+    {
+        {"step_frame", &LuaBinding::nativeCallback<stepFrame>},
+        {"save", &LuaBinding::nativeCallback<saveEngine>},
+        {"restore", &LuaBinding::nativeCallback<restoreEngine>},
+        {"identity", &LuaBinding::nativeCallback<identity>},
+        {"close", &LuaBinding::nativeCallback<closeEngine>},
+        {nullptr, nullptr},
+    };
+    static const luaL_Reg functions[] =
+    {
+        {"preload", &LuaBinding::nativeCallback<preloadAssets>},
+        {"open", &LuaBinding::nativeCallback<openEngine>},
+        {nullptr, nullptr},
+    };
+    LuaBinding::registerUserdata<Owner>(state, kUserdataType, methods);
+    luaL_newlib(state, functions);
+    return 1;
 }
 ```
 

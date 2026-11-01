@@ -4244,7 +4244,7 @@ Native 在同一模块中扩展 load_air_map(path)、保持 `new_context(map_id)
 
 load_air_map 在 Battle Process 启动阶段读取并注册 immutable AMAP，返回实际 map_id、map_version、width、height。`new_context(map_id)` 通过进程级 MapRegistry 与 AirMapRegistry 查找资产：找不到 AMAP 时允许 Ground-only Context；找到时校验身份和尺寸，再把 `shared_ptr<const AirMap>` 传入 Context。Ground/Air scratch 仍由每个 Context 独占。
 
-注册入口时沿用 module.setFunction(...) 与 registerContext(...) 模式；闭包捕获进程级 Registry 地址，不捕获 Lua State 私有 Context。同步更新 FlyWow Wrapper 的 LuaDoc，说明失败 record、ownership 和同步不 yield 合同。
+注册入口时沿用 module.setFunction<callback>(...) 与 registerContext(...) 模式；闭包捕获进程级 Registry 地址，不捕获 Lua State 私有 Context。同步更新 FlyWow Wrapper 的 LuaDoc，说明失败 record、ownership 和同步不 yield 合同。
 
 ### 22.8 Server 启动时怎样保证 BMAP/AMAP 是同一个发布版本
 
