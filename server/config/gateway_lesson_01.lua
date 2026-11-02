@@ -13,10 +13,10 @@ return {
     max_frame_bytes = 0xffff,                                -- 单帧最大字节数；TCP uint16 framing 的上限。
     max_requests_per_second = 200, -- 每连接每秒最多接纳的业务请求数。
     max_total_requests_per_second = 10000, -- 整个 Gateway 每秒最多接纳的业务请求数。
-    read_timeout_ticks = 3000,                               -- TCP 定长读取或 WS 握手最长等待 30 秒。
-    idle_timeout_ticks = 30000,                              -- WebSocket 完整消息空闲最长等待 300 秒。
+    read_timeout_ms = 30000,                               -- TCP 定长读取或 WS 握手最长等待 30 秒。
+    idle_timeout_ms = 300000,                              -- WebSocket 完整消息空闲最长等待 300 秒。
     max_pending_handshakes = 128,                            -- 同时进行应用握手的连接数上限。
-    handshake_timeout_ticks = 1000,                          -- 从接纳到握手完成的最长时间，单位为 10ms tick。
+    handshake_timeout_ms = 10000,                          -- 从接纳到握手完成的最长时间，单位毫秒。
     max_clients = 1024,                                      -- Gateway 允许保持的最大在线连接数。
     write_warning_close_kb = 1024,                           -- 写缓冲达到 1 MiB 时关闭慢连接，防止内存持续增长。
 
