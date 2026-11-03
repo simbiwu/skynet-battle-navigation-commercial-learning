@@ -7,7 +7,7 @@
 ```text
 server/service/gateway/gateway_main.lua
   -> server/service/gateway/gateway_proxy.lua
-  -> server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua
+  -> server/third_party/skynet-flywow/gateway/service/flywow_gateway.lua
   -> server/third_party/skynet-flywow/gateway/lualib/handshake.lua
   -> server/third_party/skynet-flywow/gateway/lualib/codec.lua
   -> server/service/battle/battle_dispatch.lua

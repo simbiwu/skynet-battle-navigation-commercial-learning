@@ -3221,8 +3221,7 @@ logservice = "flywow_logger"
 flywow_logger_level = "normal"
 
 luaservice = "./service/?.lua;./third_party/skynet/service/?.lua;" ..
-             "./third_party/skynet-flywow/gateway/service/?.lua;" ..
-             "./third_party/skynet-flywow/gateway/service/gateway/?.lua"
+             "./third_party/skynet-flywow/gateway/service/?.lua"
 lualoader = "./third_party/skynet/lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            "./third_party/skynet/lualib/?.lua;" ..

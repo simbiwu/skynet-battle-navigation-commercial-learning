@@ -482,7 +482,7 @@ service/gateway/gateway_proxy.lua         Gateway 的 Battle 转发 adapter
 service/battle/battle_main.lua             Battle 进程 composition root
 service/battle/navigation_query.lua        Battle 进程中的地图 Query Service
 service/battle/battle_dispatch.lua         Battle 对外 Cluster 分发入口
-third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua                 FlyWow Gateway Service（来自框架仓库）
+third_party/skynet-flywow/gateway/service/flywow_gateway.lua                 FlyWow Gateway Service（来自框架仓库）
 lualib/gateway/protocol/protocol_registry_<course>.lua  每个课程协议构建入口单独生成的 command registry
 lualib/battle/navigation/query_logic.lua   Query 内部业务模块
 ```

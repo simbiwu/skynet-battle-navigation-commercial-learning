@@ -15,8 +15,7 @@ bootstrap = "snlua bootstrap"           -- 使用 Skynet 标准 Lua Bootstrap。
 -- Navigation 是本进程需要的 FlyWow 模块；Gateway Service 仅加入 Gateway 专属进程配置。
 -- 单进程 Adapter 同时启动课程 Gateway 与 Navigation；生产双进程配置按角色缩小搜索路径。
 luaservice = "./service/?.lua;./third_party/skynet/service/?.lua;" ..
-             "./third_party/skynet-flywow/gateway/service/?.lua;" ..
-             "./third_party/skynet-flywow/gateway/service/gateway/?.lua"
+             "./third_party/skynet-flywow/gateway/service/?.lua"
 lualoader = "./third_party/skynet/lualib/loader.lua"
 lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            "./third_party/skynet/lualib/?.lua;" ..

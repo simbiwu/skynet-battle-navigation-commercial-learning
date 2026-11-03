@@ -109,7 +109,7 @@ Protobuf Envelope
 
 - `unity/BattleNavigation/Assets/BattleNavigation/Scripts/Protocol/LengthFrame.cs`：uint16 大端长度头的打包/校验。
 - `server/third_party/skynet-flywow/gateway/clients/unity/FlyWowHandshake.cs`：Unity 端 SDK 握手。
-- `server/third_party/skynet-flywow/gateway/service/gateway/flywow_gateway.lua`：服务端接入、TCP/WS 帧读取、握手和业务派发。
+- `server/third_party/skynet-flywow/gateway/service/flywow_gateway.lua`：服务端接入、TCP/WS 帧读取、握手和业务派发。
 - `server/third_party/skynet-flywow/gateway/lualib/codec.lua`：使用加载后的 descriptor 解码 Envelope/Request，并编码 Response。
 - `server/third_party/skynet-flywow/gateway/tools/generate_gateway_registry.py` 与 `server/lualib/gateway/protocol/protocol_registry_lesson_02.lua`：构建期生成命令号到请求/响应 Protobuf 类型的映射，Gateway 启动时只读校验后直接使用。
 
@@ -133,7 +133,7 @@ Protobuf Envelope
 - `server/config/gateway.lua`：客户端监听地址/端口、协议版本、descriptor 与 registry 路径及网络边界。
 - `server/service/gateway/gateway_main.lua`：组装 Proxy 与 FlyWow Gateway。
 - `server/service/gateway/gateway_proxy.lua`：接收本地解码消息，将 gateway_epoch、connection_id、command_id、request_id 与业务数据用 `cluster.send` 发到 Battle；响应沿消息字段原路传回，不维护每请求 route-token 表。
-- FlyWow `gateway/service/gateway/flywow_gateway.lua`：`dispatch_payload`、TCP `read_exact`/读取任务、响应投递和连接验证。
+- FlyWow `gateway/service/flywow_gateway.lua`：`dispatch_payload`、TCP `read_exact`/读取任务、响应投递和连接验证。
 
 网络身份不要混淆：`fd` 是 OS Socket；`connection_id` 是 Gateway 当前实例中的逻辑连接身份；`request_id` 关联客户端一次请求与响应。它们不能代替 `battle_id`、`unit_id` 或持久业务身份。
 

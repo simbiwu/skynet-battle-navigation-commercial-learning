@@ -84,7 +84,7 @@ Windows仅Unity编辑源；文档/Server非Unity文件通过Git工作流同步�
 
 - 增加 AIRN 可选资产路径、统一 UnitProfile 中的飞行 AirBody、Battle-local 动态空中障碍重建、空中寻路/扫掠移动及失败原子性测试。当前发布地图没有静态 AIRN，因此只验证 BMAP-only 兼容和动态障碍，不宣称静态 AIRN 配对资产已端到端通过。
 
-- Gateway 在 `gateway/service/gateway/flywow_gateway.lua` 移除了对“指定有效连接且 request_id=0 主动消息”的拒绝条件，保留 connection_id/request_id 范围、epoch、ready、目标连接和编码等检查。扩展 `gateway/tests/gateway_async_test.lua` 覆盖目标连接定向发送、双连接隔离、广播隔离、关闭/未知目标丢弃和旧 epoch。已验证旧条件下负向断言失败，修复后输出 `GATEWAY_ASYNC_UNIT_OK`。
+- Gateway 在 `gateway/service/flywow_gateway.lua` 移除了对“指定有效连接且 request_id=0 主动消息”的拒绝条件，保留 connection_id/request_id 范围、epoch、ready、目标连接和编码等检查。扩展 `gateway/tests/gateway_async_test.lua` 覆盖目标连接定向发送、双连接隔离、广播隔离、关闭/未知目标丢弃和旧 epoch。已验证旧条件下负向断言失败，修复后输出 `GATEWAY_ASYNC_UNIT_OK`。
 
 - Windows Unity 工程加入 xLua Lua 5.4、FrameNative/FrameConnection/FrameLuaProfileLoader/FrameBattleController，并由同一 Lua UnitProfile 配置读取模拟参数；协议生成 C# 已按 WSL 唯一 Proto 源更新，校验值同步写入 `shared/protocol/generated/unity/NavigationQuery.cs.sha256`。
 

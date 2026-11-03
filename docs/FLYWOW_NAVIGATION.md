@@ -9,7 +9,7 @@ FlyWow 开发源位于 WSL 主仓库子模块 `~/workspace/skynet-battle-navigat
 ```text
 gateway/
   lualib/flywow/gateway/
-  service/gateway/flywow_gateway.lua
+  service/flywow_gateway.lua
   native/gateway_crypto/
   clients/unity/
   clients/h5/
