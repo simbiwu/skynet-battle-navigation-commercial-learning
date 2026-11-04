@@ -6687,9 +6687,7 @@ return {
     registry_module = "gateway.protocol.navigation_registry",                            -- FlyWow 自动生成的 command registry。
     protocol_version = 3,                          -- 与 sint64 WorldPosition 跨端合同一致的 Envelope 版本。
 
-    max_frame_bytes = 0xffff,                     -- TCP uint16 framing 上限；WebSocket 复用同一业务上限。
     max_clients = 1024,                           -- 当前 Gateway 最大在线连接数。
-    write_warning_close_kb = 1024,                -- 写缓冲 warning 达到该 KB 时关闭慢连接。
 }
 ```
 
@@ -7319,6 +7317,7 @@ SOCKET.open(fd, address)
 local skynet = require "skynet"
 local socketdriver = require "skynet.socketdriver"
 local netpack = require "skynet.netpack"
+local MAX_FRAME_BYTES = 0xffff -- netpack 的 uint16 帧头固定决定上限，不由宿主配置。
 local config = require "config.game"
 local codec = require "gateway.protocol.navigation_codec"
 
@@ -7387,7 +7386,7 @@ local function send_response(conn, request_id, response)
         body,
         config.protocol_version)
 
-    if #envelope == 0 or #envelope > config.max_frame_bytes then
+    if #envelope == 0 or #envelope > MAX_FRAME_BYTES then
         protocol_close(conn.fd, "response frame too large")
         return false
     end
@@ -7409,7 +7408,7 @@ local function dispatch_packet(fd, msg, sz)
         return
     end
 
-    if #payload == 0 or #payload > config.max_frame_bytes then
+    if #payload == 0 or #payload > MAX_FRAME_BYTES then
         protocol_close(fd, "invalid frame size")
         return
     end
@@ -7551,10 +7550,10 @@ function SOCKET.error(fd, message)
 end
 
 -- size 是 Skynet socket 层报告的待发送缓冲区 KB 数。
--- 慢客户端持续积压到阈值时主动断开，避免一个连接长期吃掉发送内存。
+-- 收到非零写缓冲积压告警时主动断开，避免一个连接长期吃掉发送内存。
 function SOCKET.warning(fd, size)
     skynet.error("NAV_TCP_WRITE_WARNING fd=", fd, " pending_kb=", size)
-    if size >= config.write_warning_close_kb then
+    if size > 0 then
         detach_connection(fd, "write buffer overflow", "shutdown")
     end
 end
@@ -7608,8 +7607,6 @@ end
 -- 从 listen 返回到 wait 登记 token 之间必须保持 no-yield，避免未来重构引入丢失通知窗口。
 local function start_gateway(query_address)
     assert(query_service == nil, "navigation gateway already started")
-    assert(config.max_frame_bytes > 0 and config.max_frame_bytes <= 0xffff,
-           "netpack frame limit must fit uint16")
     assert(config.max_clients > 0, "max_clients must be positive")
     assert(config.max_inflight_per_connection > 0,
            "max_inflight_per_connection must be positive")
@@ -7646,7 +7643,7 @@ local function start_gateway(query_address)
                  ":", started.port or config.port,
                  " query=", skynet.address(query_service),
                  " framing=netpack-u16be",
-                 " max_frame=", config.max_frame_bytes)
+                 " max_frame=", MAX_FRAME_BYTES)
     return true
 end
 

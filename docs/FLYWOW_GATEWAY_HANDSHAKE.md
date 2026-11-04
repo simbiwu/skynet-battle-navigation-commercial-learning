@@ -16,7 +16,7 @@ Gateway和客户端SDK完成P-256密钥交换、32字节随机挑战、HKDF-SHA2
                        独立响应入口 -> 编码 -> 写客户端
 ```
 
-Gateway拥有fd及连接；`gateway/lualib/handshake.lua`拥有状态机、并发计数和期限；`flywow_gateway_crypto` Native userdata拥有敏感数据。握手模块不写Socket、不引用业务、不创建Service或协程。同步密码运算只在握手执行，不yield。
+Gateway拥有fd及连接；`gateway/lualib/handshake.lua`拥有逐连接状态机和期限；`flywow_gateway_crypto` Native userdata拥有敏感数据。握手模块不写Socket、不引用业务、不创建Service或协程。同步密码运算只在握手执行，不yield。
 
 ## 固定字节合同
 
@@ -41,10 +41,10 @@ HKDF为Extract+Expand；不得把平台默认散列式ECDH结果当成Z。没有
 
 ## 状态与资源
 
-- Gateway：hello -> proof -> confirm -> ready；失败释放上下文。
+- Gateway：hello -> proof -> confirm -> ready；close 先提交 closed 再释放 Native 对象，重复关闭不重复释放；confirm 在 SERVER_READY 写成功后释放 Native 并提交 ready。
 - 未ready不投递或缓存业务包；出站业务入口也拒绝未ready连接。
 - TCP先检查该阶段精确长度再读body；WS完整消息交给握手模块。
-- 待握手计入max_clients；max_pending_handshakes默认min(128,max_clients)。
+- 已接纳的握手连接计入宿主显式提供的 max_clients；连接配额统一由 Gateway 检查。
 - handshake_timeout_ticks默认1000，即10秒，从连接登记开始，包含WS Upgrade；消息不刷新期限，复用扫描协程。
 - 错误类型/版本/公钥/证明/顺序/写入失败关闭，不在同连接重试，不记录secret、证明或payload。
 - 成功后释放临时私钥及派生密钥，只留ready标记；不需要登录会话或重连编号。

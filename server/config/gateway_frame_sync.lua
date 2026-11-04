@@ -4,18 +4,12 @@
 return {
     host = "127.0.0.1",
     port = 19021,
-    backlog = 128,
     transport = "tcp",
     descriptor_path = "../shared/protocol/generated/server/lesson_03_frame_sync.pb",
     registry_module = "gateway.protocol.protocol_registry_lesson_03_frame_sync",
     protocol_version = 4,
-    max_frame_bytes = 0xffff,
-    max_requests_per_second = 200, -- 每连接每秒最多接纳的业务请求数。
-    max_total_requests_per_second = 10000, -- 整个 Gateway 每秒最多接纳的业务请求数。
     read_timeout_ms = 30000,
     idle_timeout_ms = 300000,
-    max_pending_handshakes = 128,
     handshake_timeout_ms = 10000,
     max_clients = 1024,
-    write_warning_close_kb = 1024,
 }

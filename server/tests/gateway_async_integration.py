@@ -365,19 +365,7 @@ def limits():
     with socket.create_connection(("127.0.0.1", 19021), timeout=3) as sock:
         sock.sendall(b"\0")
         assert sock.recv(1) == b"", "partial header must time out"
-    client = Client(19021)
-    try:
-        payload = envelope(8)
-        packet = struct.pack(">H", len(payload)) + payload
-        client.sock.sendall(packet * 220)
-        try:
-            while True:
-                client.receive()
-        except (EOFError, ConnectionResetError):
-            pass
-    finally:
-        client.close()
-    # ready六连接+pending二连接达到max_clients=8；pending=2另外在握手测试覆盖。
+    # 六条 ready 连接加两条未握手连接共同占满宿主显式分配的八个名额。
     ready, held = [], []
     try:
         for _ in range(6):
@@ -441,28 +429,6 @@ def handshake_contract(websocket):
         assert client.sock.recv(1) in (b"", b"\x88"), "handshake deadline must close"
     finally:
         client.close()
-    held = []
-    try:
-        for _ in range(2):
-            held.append(Client(port, websocket, handshake=False))
-        rejected = None
-        try:
-            try:
-                rejected = Client(port, websocket, handshake=False)
-                rejected.send(message)
-                rejected.receive_bytes()
-                raise AssertionError("handshake capacity not enforced")
-            except (EOFError, ConnectionResetError, BrokenPipeError):
-                pass
-        finally:
-            if rejected:
-                rejected.close()
-    finally:
-        for client in held:
-            client.close()
-    time.sleep(0.15)
-    client = Client(port, websocket)
-    client.close()
     print("REAL_WS_HANDSHAKE_OK" if websocket else "REAL_TCP_HANDSHAKE_OK")
 
 

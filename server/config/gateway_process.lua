@@ -20,9 +20,10 @@ lua_path = "./?.lua;./lualib/?.lua;./lualib/?/init.lua;" ..
            "./third_party/skynet-flywow/gateway/lualib/?.lua;" ..
            "./third_party/skynet-flywow/gateway/lualib/?/init.lua;" ..
            "./third_party/skynet-flywow/logger/lualib/?.lua"
-lua_cpath = "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
-            "./third_party/skynet/luaclib/?.so;" ..
-            "./third_party/skynet-flywow/build/native/?.so"
+-- FlyWow Native 优先从固定子模块构建目录加载，避免宿主旧产物遮蔽当前公开 API。
+lua_cpath = "./third_party/skynet-flywow/build/native/?.so;" ..
+            "./luaclib/?.so;./third_party/lua-protobuf-runtime/?.so;" ..
+            "./third_party/skynet/luaclib/?.so"
 cpath = "./third_party/skynet/cservice/?.so;" ..
         "./third_party/skynet-flywow/build/native/?.so"
 

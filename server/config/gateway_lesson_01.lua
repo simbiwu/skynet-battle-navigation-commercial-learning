@@ -5,20 +5,12 @@
 return {
     host = "127.0.0.1",                                     -- Gateway 监听地址；127.0.0.1 只允许本机客户端连接。
     port = 19011,                                            -- Gateway 业务端口；客户端和集成测试连接此端口。
-    backlog = 128,                                           -- OS accept 队列长度；不等于 max_clients。
     transport = "tcp",                                       -- 接入协议；当前生产验收使用 tcp，也可由 FlyWow 支持 websocket。
     descriptor_path = "../shared/protocol/generated/server/lesson_01.pb", -- FileDescriptorSet 路径；相对 Server 工作目录。
     registry_module = "gateway.protocol.protocol_registry_lesson_01", -- Registry Lua 模块；由 FlyWow 脚本生成，不手工维护。
     protocol_version = 4,                                    -- Envelope 协议版本；必须与客户端握手合同一致。
-    max_frame_bytes = 0xffff,                                -- 单帧最大字节数；TCP uint16 framing 的上限。
-    max_requests_per_second = 200, -- 每连接每秒最多接纳的业务请求数。
-    max_total_requests_per_second = 10000, -- 整个 Gateway 每秒最多接纳的业务请求数。
     read_timeout_ms = 30000,                               -- TCP 定长读取或 WS 握手最长等待 30 秒。
     idle_timeout_ms = 300000,                              -- WebSocket 完整消息空闲最长等待 300 秒。
-    max_pending_handshakes = 128,                            -- 同时进行应用握手的连接数上限。
     handshake_timeout_ms = 10000,                          -- 从接纳到握手完成的最长时间，单位毫秒。
     max_clients = 1024,                                      -- Gateway 允许保持的最大在线连接数。
-    write_warning_close_kb = 1024,                           -- 写缓冲达到 1 MiB 时关闭慢连接，防止内存持续增长。
-
-
 }

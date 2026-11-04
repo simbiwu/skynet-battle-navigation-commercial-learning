@@ -2,6 +2,7 @@
 --- 边界：测试 Service；不加载地图或执行 Battle，Gateway 保留真实编解码与握手。
 --- 生命周期：仅由 runner 启动并回收；统计每5秒采样，不记录逐请求日志。
 local skynet = require "skynet.manager"
+local gateway_base_config = require "config.gateway_lesson_02" -- 复用宿主当前协议 bundle，只覆盖基准运行参数。
 local gateway
 local active_connections = {}
 local request_count = 0
@@ -47,18 +48,18 @@ skynet.start(function()
         })
     end)
     gateway = skynet.newservice("flywow_gateway")
-    local start_result = skynet.call(gateway, "lua", "start",
-    {
-        handler_service = ".gw_benchmark",
-        transport = skynet.getenv("bench_transport") or "tcp",
-        port = 19131,
-        max_clients = 8192,
-        max_pending_handshakes = 128,
-        read_timeout_ticks = 360000,
-        idle_timeout_ticks = 360000,
-        max_requests_per_second = 200,
-        max_total_requests_per_second = 30000,
-    })
+    -- 从当前宿主配置取得 descriptor、Registry 和业务版本，避免基准维护第二份协议源。
+    local gateway_config = {} -- 当前基准独占的启动配置副本。
+    for key, value in pairs(gateway_base_config) do
+        gateway_config[key] = value
+    end
+    gateway_config.handler_service = ".gw_benchmark"
+    gateway_config.transport = skynet.getenv("bench_transport") or "tcp"
+    gateway_config.port = 19131
+    gateway_config.max_clients = 8192
+    gateway_config.read_timeout_ms = 3600000
+    gateway_config.idle_timeout_ms = 3600000
+    local start_result = skynet.call(gateway, "lua", "start", gateway_config)
     assert(start_result.ok, start_result.message)
     skynet.error("GATEWAY_BENCHMARK_READY")
     skynet.fork(function()

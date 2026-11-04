@@ -43,7 +43,7 @@ skynet.start(function()
     for index, transport in ipairs({ "tcp", "websocket" }) do
         local gateway = skynet.newservice("flywow_gateway")
         -- FlyWow Gateway 只使用宿主显式传入的完整配置；测试从第一课 profile 复制协议产物，
-        -- 再覆盖本测试的 handler、transport、端口和更小的资源上限，不维护第二份 descriptor/Registry。
+        -- 再覆盖本测试的 handler、transport、端口、读取/握手期限和连接配额，不维护第二份 descriptor/Registry。
         local gateway_config = {}
         for key, value in pairs(gateway_base_config) do
             gateway_config[key] = value
@@ -51,12 +51,10 @@ skynet.start(function()
         gateway_config.handler_service = ".gw_async_smoke"
         gateway_config.transport = transport
         gateway_config.port = 19020 + index
-        gateway_config.read_timeout_ticks = 100
-        gateway_config.idle_timeout_ticks = 200
+        gateway_config.read_timeout_ms = 1000
+        gateway_config.idle_timeout_ms = 2000
         gateway_config.max_clients = 8
-        gateway_config.write_warning_close_kb = 64
-        gateway_config.max_pending_handshakes = 2
-        gateway_config.handshake_timeout_ticks = 100
+        gateway_config.handshake_timeout_ms = 1000
         local start_result = skynet.call(gateway, "lua", "start", gateway_config)
         assert(start_result.ok, start_result.message)
     end
