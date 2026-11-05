@@ -83,12 +83,12 @@ int main(int argc, char **argv)
     };
     if (fs_load_profiles(units, 2, navigation, 1, skills, 3) != 1)
         return 2;
-    const auto meta = flywow_navigation::MapRegistry::Instance().Find(1001);
+    const auto meta = flywow_navigation::MapRegistry::instance().find(1001);
     if (!meta.ok() || !meta.value)
         return 3;
     const auto stable_map = meta.value;
     assert(fs_preload_map(argv[1], "./missing-frame-test.airnav") == 0);
-    const auto still_published = flywow_navigation::MapRegistry::Instance().Find(1001);
+    const auto still_published = flywow_navigation::MapRegistry::instance().find(1001);
     assert(still_published.ok() && still_published.value == stable_map);
     testAirNavigation(meta.value);
     lesson_frame::Engine first(meta.value), second(meta.value);

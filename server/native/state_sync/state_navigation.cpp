@@ -33,20 +33,20 @@ STATE_API void *ss_open(const char *path, int radius, int step, unsigned slope,
         {
             return nullptr;
         }
-        auto map = flywow_navigation::MapRegistry::Instance().Load(path);
+        auto map = flywow_navigation::MapRegistry::instance().load(path);
         if (!map.ok())
         {
             return nullptr;
         }
         auto value     = std::make_unique<Predictor>();
         value->context = std::make_unique<flywow_navigation::NavigationContext>(map.value);
-        value->profile = flywow_navigation::MakeDefaultNavigationProfile(1);
+        value->profile = flywow_navigation::makeDefaultNavigationProfile(1);
         value->profile.radius_mm          = radius;
         value->profile.max_step_mm        = step;
         value->profile.max_slope_permille = slope;
         std::copy_n(allow, 256, value->profile.area_allowed.begin());
         std::copy_n(cost, 256, value->profile.area_cost_permille.begin());
-        if (!flywow_navigation::ValidateNavigationProfile(value->profile).ok())
+        if (!flywow_navigation::validateNavigationProfile(value->profile).ok())
         {
             return nullptr;
         }
@@ -68,13 +68,13 @@ STATE_API int ss_reset(void *handle, const long long *pos, long long *out) noexc
         }
         auto                                  &value = *static_cast<Predictor *>(handle);
         const flywow_navigation::WorldPosition p{pos[0], pos[1], pos[2]};
-        const auto                             cell = value.context->map()->QueryWorld(p);
+        const auto                             cell = value.context->map()->queryWorld(p);
         if (!cell.ok())
         {
             return -2;
         }
-        const auto grid   = value.context->map()->WorldToGrid(p);
-        const auto placed = value.context->occupancy().Move({1001}, value.profile, grid.value);
+        const auto grid   = value.context->map()->worldToGrid(p);
+        const auto placed = value.context->occupancy().move({1001}, value.profile, grid.value);
         if (!placed.ok())
         {
             return -3;
@@ -114,13 +114,13 @@ STATE_API int ss_step(void *handle, unsigned seq, int x, int z, unsigned speed,
         auto target = value.position;
         target.x_mm += x * static_cast<std::int64_t>(distance);
         target.z_mm += z * static_cast<std::int64_t>(distance);
-        const auto cell  = value.context->map()->QueryWorld(target);
+        const auto cell  = value.context->map()->queryWorld(target);
         bool       moved = false;
         if (cell.ok())
         {
             target.y_mm = cell.value.height_mm;
             const flywow_navigation::NavigationAgent agent{{1001}, &value.profile};
-            const auto result = flywow_navigation::GridPathfinder::MoveUnit(
+            const auto result = flywow_navigation::GridPathfinder::moveUnit(
                 *value.context, agent, value.position, target, {});
             moved = result.ok() && result.value;
             if (moved)

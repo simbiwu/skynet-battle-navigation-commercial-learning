@@ -80,7 +80,7 @@ const UnitProfile &profileFor(const UnitProfileTable &profiles, std::uint32_t un
 bool blockOccupancy(void *, const flywow_navigation::DynamicNavigationQuery &query)
 {
     return query.agent && query.agent->profile && query.occupancy &&
-           !query.occupancy->IsFootprintBlocked(*query.agent->profile, query.target,
+           !query.occupancy->isFootprintBlocked(*query.agent->profile, query.target,
                                                 query.agent->handle);
 }
 flywow_navigation::DynamicNavigationPolicy policy()
@@ -143,12 +143,12 @@ Engine::Engine(std::shared_ptr<const flywow_navigation::GridMap> map)
 bool Engine::sampleGround(const Unit &unit, std::int64_t x, std::int64_t z, std::int64_t from_y,
                           std::int64_t &new_y) const
 {
-    const auto query = map_->QueryWorld({x, from_y, z});
-    if (!query.ok() || !query.value.IsWalkable())
+    const auto query = map_->queryWorld({x, from_y, z});
+    if (!query.ok() || !query.value.isWalkable())
         return false;
     const auto &profile = profileFor(profiles_->units, unit.unit_profile_id).navigation;
     const auto  required =
-        flywow_navigation::RequiredClearanceCells(profile, map_->metadata().cell_size_mm);
+        flywow_navigation::requiredClearanceCells(profile, map_->metadata().cell_size_mm);
     if (query.value.clearance_cells < required)
         return false;
     new_y = query.value.height_mm;
@@ -159,7 +159,7 @@ bool Engine::sampleAir(const Unit &unit, std::int64_t x, std::int64_t z, std::in
                        std::int64_t &new_y) const
 {
     const auto &profile = profileFor(profiles_->units, unit.unit_profile_id);
-    const auto  query   = map_->QueryWorld({x, 0, z});
+    const auto  query   = map_->queryWorld({x, 0, z});
     if (!query.ok() ||
         target_y <
             static_cast<std::int64_t>(query.value.height_mm) + profile.min_air_clearance_mm ||
@@ -191,7 +191,7 @@ Engine::buildContext(const State &candidate) const
             const flywow_navigation::NavigationAgentHandle handle{unit.instance_id};
             const auto placed = flywow_navigation::setAirObstacle(*next_context, handle, box);
             if (!placed.ok())
-                throw std::runtime_error(flywow_navigation::NavErrorName(placed.error));
+                throw std::runtime_error(flywow_navigation::navErrorName(placed.error));
             const auto spawn = flywow_navigation::sweepAir(
                 *next_context, center, center, profile.air_body, handle, {true, 0});
             if (!spawn.ok() || spawn.value.kind != flywow_navigation::AirHitKind::kClear)
@@ -202,11 +202,11 @@ Engine::buildContext(const State &candidate) const
             throw std::runtime_error("STATE_MOVE_MODE");
 
         const auto &navigation = profile.navigation;
-        const auto grid = map_->WorldToGrid(position(unit));
-        if (!grid.ok() || next_context->occupancy().IsFootprintBlocked(
+        const auto grid = map_->worldToGrid(position(unit));
+        if (!grid.ok() || next_context->occupancy().isFootprintBlocked(
                 navigation, grid.value, {unit.instance_id}))
             throw std::runtime_error("STATE_OCCUPANCY_CONFLICT");
-        const auto placed = next_context->occupancy().Move(
+        const auto placed = next_context->occupancy().move(
             {unit.instance_id}, navigation, grid.value);
         if (!placed.ok() || !placed.value)
             throw std::runtime_error("STATE_OCCUPANCY_COMMIT");
@@ -303,7 +303,7 @@ bool Engine::moveGround(Unit &unit, std::int32_t x, std::int32_t z)
         return false;
     const auto                              &navigation = unit_profile.navigation;
     const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
-    const auto                               result = flywow_navigation::GridPathfinder::MoveUnit(
+    const auto                               result = flywow_navigation::GridPathfinder::moveUnit(
         *context_, agent, position(unit), {target_x, target_y, target_z}, policy());
     if (!result.ok() || !result.value)
         return false;
@@ -352,7 +352,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
         const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation_profile};
         // 目标单位占位本身不能作为终点；找其附近允许站立的位置。
         // FindPathToRange沿用FlyWow的真实动态A*查询实现。
-        auto candidate = flywow_navigation::GridPathfinder::FindPathToRange(
+        auto candidate = flywow_navigation::GridPathfinder::findPathToRange(
             *context_, agent, position(unit), position(target), 800, policy(), true);
         route.repath_at        = state_.frame + kRepathDelay;
         route.planned_target_x = target.x;
@@ -376,7 +376,7 @@ void Engine::chaseGround(Unit &unit, const Unit &target)
     const auto                              &profile    = profileFor(profiles_->units, unit.unit_profile_id);
     const auto                              &navigation = profile.navigation;
     const flywow_navigation::NavigationAgent agent{{unit.instance_id}, &navigation};
-    const auto result = flywow_navigation::GridPathfinder::AdvancePath(
+    const auto result = flywow_navigation::GridPathfinder::advancePath(
         *context_, agent, path, cursor, position(unit), strideForAxes(profile.move_speed_mm_per_sec, 1, state_.frame - 1), policy());
     if (!result.ok())
         throw std::runtime_error("NAV_ADVANCE_FAILED");
@@ -420,12 +420,12 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
     {
         if (route.error == flywow_navigation::NavError::kNoPath)
             return;
-        throw std::runtime_error(flywow_navigation::NavErrorName(route.error));
+        throw std::runtime_error(flywow_navigation::navErrorName(route.error));
     }
     if (route.value.count() <= 1)
         return;
 
-    const auto &next = route.value.WorldPoint(1);
+    const auto &next = route.value.worldPoint(1);
     const auto x = sign(next.x_mm - unit.x);
     const auto z = sign(next.z_mm - unit.z);
     const auto axes = static_cast<std::uint32_t>((x != 0) + (z != 0) +
@@ -446,7 +446,7 @@ void Engine::chaseAir(Unit &unit, const Unit &target)
     {
         if (moved.error == flywow_navigation::NavError::kBlocked)
             return;
-        throw std::runtime_error(flywow_navigation::NavErrorName(moved.error));
+        throw std::runtime_error(flywow_navigation::navErrorName(moved.error));
     }
     unit.x = moved.value.x_mm;
     unit.y = moved.value.y_mm;
@@ -520,7 +520,7 @@ void Engine::finish(const std::vector<std::int32_t> &damage)
         unit.hp    = std::max(0, unit.hp - damage[i]);
         if (unit.hp == 0 && unit.movement_mode == 1)
         {
-            const auto released = context_->occupancy().Release({unit.instance_id});
+            const auto released = context_->occupancy().release({unit.instance_id});
             if (!released.ok())
                 throw std::runtime_error("NAV_RELEASE_FAILED");
         }
@@ -677,7 +677,7 @@ std::string Engine::save() const
         put(out, route.path.count(), 4);
         put(out, route.next_point, 4);
         put(out, route.progress_mm, 8);
-        put(out, route.path.length_mm(), 8);
+        put(out, route.path.lengthMm(), 8);
         put(out, std::string(route.path.status()) == "partial" ? 1 : 0, 4);
         for (const auto &point : route.path.points())
         {
@@ -814,7 +814,7 @@ void Engine::restore(const std::string &bytes)
             point.y_mm = signed64(get(bytes, offset, 8));
             point.z_mm = signed64(get(bytes, offset, 8));
             validatePoint(point);
-            if (!map_->WorldToGrid(point).ok())
+            if (!map_->worldToGrid(point).ok())
                 throw std::runtime_error("STATE_ROUTE_POINT");
             path_points.push_back(point);
         }
@@ -838,7 +838,7 @@ extern "C" LESSON_FRAME_API int fs_preload_map(const char *bmap_path, const char
         if (!bmap_path || !*bmap_path)
             return 0;
         const std::string air_path = airnav_path ? airnav_path : "";
-        const auto result = flywow_navigation::MapRegistry::Instance().Load(bmap_path, air_path);
+        const auto result = flywow_navigation::MapRegistry::instance().load(bmap_path, air_path);
         return result.ok() && static_cast<bool>(result.value) ? 1 : 0;
     }
     catch (...)
@@ -952,7 +952,7 @@ extern "C" LESSON_FRAME_API void *fs_open(std::uint32_t map_id)
 {
     try
     {
-        const auto result = flywow_navigation::MapRegistry::Instance().Find(map_id);
+        const auto result = flywow_navigation::MapRegistry::instance().find(map_id);
         if (!result.ok() || !result.value)
             return nullptr;
         return new lesson_frame::Engine(result.value);
