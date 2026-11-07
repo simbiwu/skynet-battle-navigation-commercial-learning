@@ -1,0 +1,21 @@
+{
+    "$schema": "https://raw.githubusercontent.com/LuaLS/vscode-lua/master/setting/schema.json",
+    "runtime": {
+        "version": "Lua 5.4"
+    },
+    "workspace": {
+        "library": [
+            "${workspaceFolder}/server/annotations/lua",
+            "${workspaceFolder}/server/third_party/skynet-flywow/common/lualib",
+            "${workspaceFolder}/server/third_party/skynet-flywow/gateway/lualib",
+            "${workspaceFolder}/server/third_party/skynet-flywow/gateway/service"
+        ],
+        "checkThirdParty": false
+    },
+    "diagnostics": {
+        "globals": ["skynet"]
+    },
+    "hint": {
+        "enable": true
+    }
+}
