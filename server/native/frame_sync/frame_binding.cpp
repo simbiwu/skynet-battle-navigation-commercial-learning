@@ -108,26 +108,36 @@ bool readNavigationProfiles(const LuaTable &rows, std::vector<FsNavigationProfil
             profile.area_allowed[area]       = 1;
             profile.area_cost_permille[area] = 1000;
         }
-        if (!row.isNil("area_cost_permille"))
+        if (!row.readOptionalTable("area_cost_permille", costs))
         {
-            if (!row.readTable("area_cost_permille", costs))
-                return false;
-            for (std::uint32_t area = 0; area < 256; ++area)
-                if (!costs.isNil(area) && !costs.readValue(area, profile.area_cost_permille[area]))
-                    return false;
+            return false;
         }
-        if (!row.isNil("area_allowed"))
+        if (costs.valid())
         {
-            if (!row.readTable("area_allowed", allowed))
-                return false;
             for (std::uint32_t area = 0; area < 256; ++area)
-                if (!allowed.isNil(area))
+            {
+                if (!costs.readOptionalValue(area, profile.area_cost_permille[area]))
                 {
-                    bool is_allowed = false;
-                    if (!allowed.readTruth(area, is_allowed))
-                        return false;
-                    profile.area_allowed[area] = is_allowed ? 1 : 0;
+                    return false;
                 }
+            }
+        }
+        if (!row.readOptionalTable("area_allowed", allowed))
+        {
+            return false;
+        }
+        if (allowed.valid())
+        {
+            for (std::uint32_t area = 0; area < 256; ++area)
+            {
+                // 未配置时保留该 Area 的默认通行策略。
+                bool is_allowed = profile.area_allowed[area] != 0;
+                if (!allowed.readOptionalTruth(area, is_allowed))
+                {
+                    return false;
+                }
+                profile.area_allowed[area] = is_allowed ? 1 : 0;
+            }
         }
         output.push_back(profile);
     }
